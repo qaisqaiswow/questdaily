@@ -12,31 +12,41 @@ function getClassifier() {
 }
 
 const QUEST_LABELS = {
-  q1:  { activity: ['person doing pushups on floor', 'pushup exercise', 'floor exercise plank position'],              label: 'doing pushups' },
-  q2:  { activity: ['person reading a book', 'open book with pages', 'reading pages of a book'],                      label: 'reading a book' },
-  q3:  { activity: ['person running outdoors', 'jogging on road or trail', 'running exercise outside'],               label: 'running' },
-  q4:  { activity: ['shower running water', 'bathroom shower head with water', 'wet shower tiles'],                   label: 'in the shower' },
-  q5:  { activity: ['person walking outside', 'outdoor street or park', 'person outside in nature or city'],          label: 'outside' },
-  q6:  { activity: ['person drinking water', 'water bottle being drunk', 'drinking from glass or bottle'],            label: 'drinking water' },
-  q7:  { activity: ['person meditating cross-legged', 'meditation sitting pose eyes closed', 'mindfulness exercise'], label: 'meditating' },
-  q8:  { activity: ['person stretching muscles', 'yoga stretch pose', 'flexibility exercise stretching'],             label: 'stretching' },
-  q9:  { activity: ['handwriting in notebook or journal', 'pen writing on paper', 'gratitude journal writing'],       label: 'writing in a journal' },
-  q10: { activity: ['clean tidy organized room', 'neatly arranged furniture bedroom', 'organized clean living space'],label: 'tidying up' },
+  q1:  { activity: ['person doing pushups on floor', 'pushup exercise', 'floor exercise plank position'],                      label: 'doing pushups' },
+  q2:  { activity: ['person doing squats exercise', 'squat workout legs bent', 'lower body exercise squat'],                   label: 'doing squats' },
+  q3:  { activity: ['person running outdoors', 'jogging on road or trail', 'running exercise outside'],                        label: 'running' },
+  q4:  { activity: ['person doing yoga pose', 'yoga mat exercise', 'yoga stretch or balance pose'],                            label: 'doing yoga' },
+  q5:  { activity: ['person walking outside', 'outdoor street or park', 'person outside in nature or city'],                   label: 'outside walking' },
+  q6:  { activity: ['person drinking water', 'water bottle being drunk', 'drinking from glass or bottle'],                     label: 'drinking water' },
+  q7:  { activity: ['person meditating cross-legged', 'meditation sitting pose eyes closed', 'mindfulness exercise'],          label: 'meditating' },
+  q8:  { activity: ['person stretching muscles', 'yoga stretch pose', 'flexibility exercise stretching'],                      label: 'stretching' },
+  q9:  { activity: ['healthy food meal salad vegetables fruits', 'nutritious meal on plate', 'fresh vegetables or fruit bowl'],label: 'eating healthy' },
+  q10: { activity: ['person sleeping in bed', 'person resting in bed eyes closed', 'bedroom with person lying down'],          label: 'getting good sleep' },
+  q11: { activity: ['person doing jumping jacks or burpees', 'cardio exercise arms raised', 'full body workout jumping'],      label: 'doing cardio' },
+  q12: { activity: ['person doing situps or crunches', 'abdominal exercise on floor', 'core workout crunches'],                label: 'doing situps' },
+  q13: { activity: ['handwriting in notebook or journal', 'pen writing on paper', 'gratitude journal writing'],                label: 'journaling' },
+  q14: { activity: ['person drinking green smoothie or juice', 'blender with green smoothie', 'healthy green drink'],         label: 'drinking a smoothie' },
+  q15: { activity: ['person doing plank exercise', 'plank position core exercise', 'forearm plank on floor'],                  label: 'holding a plank' },
 };
 const NEGATIVE_LABELS = ['person sitting doing nothing', 'phone or computer screen', 'random everyday object'];
 
 // ─── QUEST POOL ───────────────────────────────────────────────────────────────
 const QUEST_POOL = [
   { id: 'q1',  text: 'Do 20 pushups',                            xp: 50 },
-  { id: 'q2',  text: 'Read 10 pages of a book',                  xp: 40 },
+  { id: 'q2',  text: 'Do 30 squats',                             xp: 45 },
   { id: 'q3',  text: 'Go for a 15-minute run',                   xp: 75 },
-  { id: 'q4',  text: 'Take a cold shower',                       xp: 60 },
-  { id: 'q5',  text: 'Go outside for a walk',                    xp: 30 },
-  { id: 'q6',  text: 'Drink 2 liters of water',                  xp: 25 },
+  { id: 'q4',  text: 'Do a 20-minute yoga session',              xp: 60 },
+  { id: 'q5',  text: 'Walk outside for 20 minutes',              xp: 35 },
+  { id: 'q6',  text: 'Drink 2 liters of water today',            xp: 25 },
   { id: 'q7',  text: 'Meditate for 10 minutes',                  xp: 45 },
   { id: 'q8',  text: 'Stretch for 10 minutes',                   xp: 35 },
-  { id: 'q9',  text: 'Write 3 things you\'re grateful for',      xp: 20 },
-  { id: 'q10', text: 'Tidy your room for 10 minutes',            xp: 40 },
+  { id: 'q9',  text: 'Eat a healthy meal',                       xp: 40 },
+  { id: 'q10', text: 'Get 8 hours of sleep',                     xp: 55 },
+  { id: 'q11', text: 'Do 3 minutes of jumping jacks',            xp: 30 },
+  { id: 'q12', text: 'Do 20 situps',                             xp: 40 },
+  { id: 'q13', text: 'Write in your journal',                    xp: 20 },
+  { id: 'q14', text: 'Drink a green smoothie',                   xp: 30 },
+  { id: 'q15', text: 'Hold a plank for 60 seconds',              xp: 50 },
 ];
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
