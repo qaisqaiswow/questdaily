@@ -1,3 +1,37 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  --sat: env(safe-area-inset-top);
+  --sar: env(safe-area-inset-right);
+  --sab: env(safe-area-inset-bottom);
+  --sal: env(safe-area-inset-left);
+}
+
+html, body, #root {
+  height: 100%;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.safe-top    { padding-top:    max(var(--sat), 16px); }
+.safe-bottom { padding-bottom: max(var(--sab), 24px); }
+.safe-left   { padding-left:   max(var(--sal), 16px); }
+.safe-right  { padding-right:  max(var(--sar), 16px); }
+
+/* iOS-style smooth scrolling */
+.scroll-ios {
+  -webkit-overflow-scrolling: touch;
+  overflow-y: auto;
+}
+
+/* Grouped list separators */
+.list-separator > * + * {
+  border-top: 1px solid;
+}
