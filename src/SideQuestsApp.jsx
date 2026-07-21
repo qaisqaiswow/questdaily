@@ -22,60 +22,83 @@ function CameraModal({ quest, onConfirm, onCancel }) {
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
 
-  const [phase, setPhase] = useState('camera'); // 'camera' | 'preview' | 'upload'
+  const [phase, setPhase] = useState('starting'); // 'starting' | 'live' | 'preview' | 'error'
   const [capturedImage, setCapturedImage] = useState(null);
   const [camError, setCamError] = useState(null);
   const [facingMode, setFacingMode] = useState('environment');
 
+  // Try progressively looser constraints until one works
   const startCamera = useCallback(async (mode) => {
-    // Stop any existing stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 720 } },
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+
+    const attempts = [
+      { video: { facingMode: { ideal: mode }, width: { ideal: 1280 }, height: { ideal: 720 } } },
+      { video: { facingMode: { ideal: mode } } },
+      { video: true },
+    ];
+
+    for (const constraints of attempts) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        streamRef.current = stream;
+        // Wait for the video ref to be in the DOM
+        await new Promise(resolve => setTimeout(resolve, 50));
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
+        setPhase('live');
+        setCamError(null);
+        return;
+      } catch (err) {
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          // No point retrying — permission is blocked
+          setCamError('permission');
+          setPhase('error');
+          return;
+        }
+        // Otherwise try next constraint set
       }
-      setCamError(null);
-    } catch (err) {
-      setCamError(err.name === 'NotAllowedError'
-        ? 'Camera access denied. Please allow camera access and try again.'
-        : 'Could not access camera. You can upload a photo instead.');
     }
+    // All attempts failed
+    setCamError('unavailable');
+    setPhase('error');
   }, []);
 
   useEffect(() => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCamError('unsupported');
+      setPhase('error');
+      return;
+    }
     startCamera(facingMode);
     return () => {
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     };
-  }, [facingMode, startCamera]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facingMode]);
 
   const snap = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
     canvas.getContext('2d').drawImage(video, 0, 0);
-    setCapturedImage(canvas.toDataURL('image/jpeg', 0.8));
-    // Stop stream
+    setCapturedImage(canvas.toDataURL('image/jpeg', 0.82));
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     setPhase('preview');
   };
 
   const retake = () => {
     setCapturedImage(null);
-    setPhase('camera');
+    setPhase('starting');
     startCamera(facingMode);
   };
 
   const flipCamera = () => {
-    setFacingMode(m => m === 'environment' ? 'user' : 'environment');
+    setPhase('starting');
+    setFacingMode(m => (m === 'environment' ? 'user' : 'environment'));
   };
 
   const handleFileUpload = (e) => {
@@ -83,18 +106,37 @@ function CameraModal({ quest, onConfirm, onCancel }) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
-      setCapturedImage(ev.target.result);
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      setCapturedImage(ev.target.result);
       setPhase('preview');
     };
     reader.readAsDataURL(file);
   };
 
+  const errorMessages = {
+    permission: {
+      icon: '🚫',
+      title: 'Camera access blocked',
+      body: 'Your browser denied camera permission. Open the app in a new tab (not the embedded preview), then allow camera access when prompted.',
+    },
+    unavailable: {
+      icon: '📷',
+      title: 'No camera found',
+      body: 'Could not access a camera on this device. Upload a photo instead.',
+    },
+    unsupported: {
+      icon: '⚠️',
+      title: 'Camera not supported',
+      body: 'This browser does not support camera access. Try opening the app in Chrome or Safari, or upload a photo.',
+    },
+  };
+  const errInfo = errorMessages[camError] || errorMessages.unavailable;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
       <div className="w-full max-w-md bg-gray-900 border border-indigo-800/50 rounded-2xl overflow-hidden shadow-2xl">
 
-        {/* Modal Header */}
+        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
           <div>
             <p className="text-xs uppercase tracking-widest text-gray-500 font-semibold mb-0.5">Photo Proof Required</p>
@@ -103,75 +145,89 @@ function CameraModal({ quest, onConfirm, onCancel }) {
           <button onClick={onCancel} className="text-gray-500 hover:text-gray-300 text-xl leading-none">✕</button>
         </div>
 
-        {/* Camera / Preview area */}
-        <div className="relative bg-black aspect-video flex items-center justify-center">
-          {phase === 'camera' && (
-            <>
-              {camError ? (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
-                  <span className="text-3xl">📷</span>
-                  <p className="text-gray-400 text-sm">{camError}</p>
-                  <label className="cursor-pointer bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors">
-                    Upload Photo
-                    <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
-                  </label>
-                </div>
-              ) : (
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover"
-                />
-              )}
-            </>
+        {/* Viewfinder */}
+        <div className="relative bg-black aspect-video flex items-center justify-center overflow-hidden">
+          {/* Video — always mounted so ref is stable; hidden when not needed */}
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className={`w-full h-full object-cover ${(phase === 'live') ? 'block' : 'hidden'}`}
+          />
+
+          {/* Spinner while starting */}
+          {phase === 'starting' && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+              <div className="w-8 h-8 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+              <p className="text-gray-400 text-xs">Starting camera…</p>
+            </div>
           )}
+
+          {/* Captured preview */}
           {phase === 'preview' && capturedImage && (
-            <img src={capturedImage} alt="proof" className="w-full h-full object-cover" />
+            <img src={capturedImage} alt="proof" className="absolute inset-0 w-full h-full object-cover" />
           )}
+
+          {/* Error state */}
+          {phase === 'error' && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
+              <span className="text-4xl">{errInfo.icon}</span>
+              <p className="text-white font-semibold text-sm">{errInfo.title}</p>
+              <p className="text-gray-400 text-xs leading-relaxed">{errInfo.body}</p>
+              {camError === 'permission' && (
+                <a
+                  href={window.location.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors"
+                >
+                  Open in new tab ↗
+                </a>
+              )}
+            </div>
+          )}
+
           <canvas ref={canvasRef} className="hidden" />
         </div>
 
         {/* Controls */}
-        <div className="p-4 border-t border-gray-800">
-          {phase === 'camera' && !camError && (
+        <div className="p-4 border-t border-gray-800 space-y-3">
+          {phase === 'live' && (
             <div className="flex items-center gap-3">
               <button
                 onClick={flipCamera}
                 className="flex-shrink-0 w-10 h-10 rounded-full bg-gray-800 hover:bg-gray-700 flex items-center justify-center text-lg transition-colors"
                 title="Flip camera"
-              >
-                🔄
-              </button>
+              >🔄</button>
               <button
                 onClick={snap}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl transition-colors text-sm"
-              >
-                📸 Take Photo
-              </button>
+              >📸 Take Photo</button>
               <label className="flex-shrink-0 cursor-pointer w-10 h-10 rounded-full bg-gray-800 hover:bg-gray-700 flex items-center justify-center text-lg transition-colors" title="Upload instead">
                 🖼
-                <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileUpload} />
               </label>
             </div>
           )}
 
           {phase === 'preview' && (
             <div className="flex gap-3">
-              <button
-                onClick={retake}
-                className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold py-2.5 rounded-xl transition-colors text-sm"
-              >
+              <button onClick={retake} className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold py-2.5 rounded-xl transition-colors text-sm">
                 Retake
               </button>
-              <button
-                onClick={() => onConfirm(capturedImage)}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl transition-colors text-sm"
-              >
+              <button onClick={() => onConfirm(capturedImage)} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl transition-colors text-sm">
                 ✓ Confirm &amp; Complete
               </button>
             </div>
+          )}
+
+          {/* Upload always available as escape hatch */}
+          {(phase === 'error' || phase === 'starting') && (
+            <label className="flex items-center justify-center gap-2 cursor-pointer w-full bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold py-2.5 rounded-xl transition-colors text-sm">
+              🖼 Upload a Photo Instead
+              <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+            </label>
           )}
         </div>
       </div>
