@@ -1,4 +1,30 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { pipeline, env } from '@huggingface/transformers';
+
+// Cache model across modal opens — only loads once per session
+env.allowLocalModels = false;
+let classifierPromise = null;
+function getClassifier() {
+  if (!classifierPromise) {
+    classifierPromise = pipeline(
+      'zero-shot-image-classification',
+      'Xenova/clip-vit-base-patch32',
+    );
+  }
+  return classifierPromise;
+}
+
+// Per-quest labels: what the photo should (and shouldn't) show
+const QUEST_LABELS = {
+  q1:  { activity: ['person doing pushups', 'pushup exercise on floor', 'person doing floor exercise'], label: 'doing pushups' },
+  q3:  { activity: ['person running outdoors', 'jogging exercise', 'runner on road or trail'], label: 'running' },
+  q4:  { activity: ['shower running water', 'bathroom shower', 'wet shower head'], label: 'in the shower' },
+  q5:  { activity: ['person walking outside', 'outdoor walk in street or park', 'person outside'], label: 'outside' },
+  q7:  { activity: ['person meditating', 'meditation sitting pose', 'person sitting cross-legged with eyes closed'], label: 'meditating' },
+  q8:  { activity: ['person stretching muscles', 'stretching exercise', 'yoga or flexibility exercise'], label: 'stretching' },
+  q10: { activity: ['clean tidy organized room', 'neatly arranged bedroom or living room', 'organized clean space'], label: 'tidying up' },
+};
+const NEGATIVE_LABELS = ['random object', 'person sitting doing nothing', 'empty room doing nothing', 'phone or screen'];
 
 // --- QUEST POOL ---
 const QUEST_POOL = [
@@ -22,10 +48,12 @@ function CameraModal({ quest, onConfirm, onCancel }) {
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
 
-  const [phase, setPhase] = useState('starting'); // 'starting' | 'live' | 'preview' | 'error'
+  const [phase, setPhase] = useState('starting'); // 'starting'|'live'|'preview'|'analyzing'|'result'|'error'
   const [capturedImage, setCapturedImage] = useState(null);
   const [camError, setCamError] = useState(null);
   const [facingMode, setFacingMode] = useState('environment');
+  const [modelProgress, setModelProgress] = useState(null); // null | 0-100
+  const [aiResult, setAiResult] = useState(null); // { passed, confidence, message }
 
   // Try progressively looser constraints until one works
   const startCamera = useCallback(async (mode) => {
@@ -78,6 +106,58 @@ function CameraModal({ quest, onConfirm, onCancel }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facingMode]);
 
+  const analyzeImage = async (dataUrl) => {
+    setPhase('analyzing');
+    setModelProgress(0);
+    try {
+      const classifier = await getClassifier(
+        // Track download progress for first-time load
+        (progressEvent) => {
+          if (progressEvent.status === 'progress' && progressEvent.total) {
+            setModelProgress(Math.round((progressEvent.loaded / progressEvent.total) * 100));
+          }
+        }
+      );
+      setModelProgress(null);
+
+      const questLabels = QUEST_LABELS[quest.id];
+      if (!questLabels) {
+        // No labels defined — just pass it
+        setAiResult({ passed: true, confidence: 100, message: "Looks good — quest complete!" });
+        setPhase('result');
+        return;
+      }
+
+      const allLabels = [...questLabels.activity, ...NEGATIVE_LABELS];
+      const results = await classifier(dataUrl, allLabels);
+
+      // Sum scores for activity labels vs negative labels
+      const activityScore = results
+        .filter(r => questLabels.activity.includes(r.label))
+        .reduce((sum, r) => sum + r.score, 0);
+      const negativeScore = results
+        .filter(r => NEGATIVE_LABELS.includes(r.label))
+        .reduce((sum, r) => sum + r.score, 0);
+
+      const passed = activityScore > negativeScore && activityScore > 0.25;
+      const pct = Math.round(activityScore * 100);
+
+      setAiResult({
+        passed,
+        confidence: pct,
+        message: passed
+          ? `Verified! Looks like you're ${questLabels.label}. (${pct}% confident)`
+          : `Can't confirm you're ${questLabels.label}. Make sure you're clearly in frame and try again.`,
+      });
+      setPhase('result');
+    } catch (err) {
+      console.error('AI verification error:', err);
+      // On model error, let the user through — don't block on AI failure
+      setAiResult({ passed: true, confidence: 0, message: 'AI check unavailable — photo accepted on good faith.' });
+      setPhase('result');
+    }
+  };
+
   const snap = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -85,13 +165,16 @@ function CameraModal({ quest, onConfirm, onCancel }) {
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
     canvas.getContext('2d').drawImage(video, 0, 0);
-    setCapturedImage(canvas.toDataURL('image/jpeg', 0.82));
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+    setCapturedImage(dataUrl);
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-    setPhase('preview');
+    analyzeImage(dataUrl);
   };
 
   const retake = () => {
     setCapturedImage(null);
+    setAiResult(null);
+    setModelProgress(null);
     setPhase('starting');
     startCamera(facingMode);
   };
@@ -107,8 +190,9 @@ function CameraModal({ quest, onConfirm, onCancel }) {
     const reader = new FileReader();
     reader.onload = (ev) => {
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-      setCapturedImage(ev.target.result);
-      setPhase('preview');
+      const dataUrl = ev.target.result;
+      setCapturedImage(dataUrl);
+      analyzeImage(dataUrl);
     };
     reader.readAsDataURL(file);
   };
@@ -147,16 +231,21 @@ function CameraModal({ quest, onConfirm, onCancel }) {
 
         {/* Viewfinder */}
         <div className="relative bg-black aspect-video flex items-center justify-center overflow-hidden">
-          {/* Video — always mounted so ref is stable; hidden when not needed */}
+          {/* Video — always mounted so ref is stable */}
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
-            className={`w-full h-full object-cover ${(phase === 'live') ? 'block' : 'hidden'}`}
+            className={`w-full h-full object-cover ${phase === 'live' ? 'block' : 'hidden'}`}
           />
 
-          {/* Spinner while starting */}
+          {/* Photo underneath analyzing/result overlays */}
+          {(phase === 'analyzing' || phase === 'result') && capturedImage && (
+            <img src={capturedImage} alt="proof" className="absolute inset-0 w-full h-full object-cover" />
+          )}
+
+          {/* Camera starting spinner */}
           {phase === 'starting' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
               <div className="w-8 h-8 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
@@ -164,12 +253,36 @@ function CameraModal({ quest, onConfirm, onCancel }) {
             </div>
           )}
 
-          {/* Captured preview */}
-          {phase === 'preview' && capturedImage && (
-            <img src={capturedImage} alt="proof" className="absolute inset-0 w-full h-full object-cover" />
+          {/* AI analyzing overlay */}
+          {phase === 'analyzing' && (
+            <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-3 p-6">
+              <div className="w-10 h-10 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+              <p className="text-amber-300 font-bold text-sm">AI is checking your photo…</p>
+              {modelProgress !== null && modelProgress < 100 && (
+                <div className="w-48 text-center">
+                  <p className="text-gray-400 text-xs mb-1">Downloading model ({modelProgress}%)</p>
+                  <div className="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-amber-400 transition-all duration-300"
+                      style={{ width: `${modelProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
-          {/* Error state */}
+          {/* AI result overlay */}
+          {phase === 'result' && aiResult && (
+            <div className={`absolute inset-x-0 bottom-0 p-4 ${aiResult.passed ? 'bg-emerald-900/90' : 'bg-red-900/90'}`}>
+              <div className="flex items-start gap-3">
+                <span className="text-2xl flex-shrink-0">{aiResult.passed ? '✅' : '❌'}</span>
+                <p className="text-sm font-medium leading-snug text-white">{aiResult.message}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Camera error state */}
           {phase === 'error' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
               <span className="text-4xl">{errInfo.icon}</span>
@@ -193,17 +306,16 @@ function CameraModal({ quest, onConfirm, onCancel }) {
 
         {/* Controls */}
         <div className="p-4 border-t border-gray-800 space-y-3">
+
+          {/* Live camera controls */}
           {phase === 'live' && (
             <div className="flex items-center gap-3">
-              <button
-                onClick={flipCamera}
-                className="flex-shrink-0 w-10 h-10 rounded-full bg-gray-800 hover:bg-gray-700 flex items-center justify-center text-lg transition-colors"
-                title="Flip camera"
-              >🔄</button>
-              <button
-                onClick={snap}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl transition-colors text-sm"
-              >📸 Take Photo</button>
+              <button onClick={flipCamera} className="flex-shrink-0 w-10 h-10 rounded-full bg-gray-800 hover:bg-gray-700 flex items-center justify-center text-lg transition-colors" title="Flip camera">
+                🔄
+              </button>
+              <button onClick={snap} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-xl transition-colors text-sm">
+                📸 Take Photo
+              </button>
               <label className="flex-shrink-0 cursor-pointer w-10 h-10 rounded-full bg-gray-800 hover:bg-gray-700 flex items-center justify-center text-lg transition-colors" title="Upload instead">
                 🖼
                 <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileUpload} />
@@ -211,18 +323,30 @@ function CameraModal({ quest, onConfirm, onCancel }) {
             </div>
           )}
 
-          {phase === 'preview' && (
+          {/* Analyzing — no controls, just wait */}
+          {phase === 'analyzing' && (
+            <p className="text-center text-gray-500 text-xs py-1">Hang tight while the AI checks your photo…</p>
+          )}
+
+          {/* Result controls */}
+          {phase === 'result' && aiResult && (
             <div className="flex gap-3">
               <button onClick={retake} className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold py-2.5 rounded-xl transition-colors text-sm">
                 Retake
               </button>
-              <button onClick={() => onConfirm(capturedImage)} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl transition-colors text-sm">
-                ✓ Confirm &amp; Complete
-              </button>
+              {aiResult.passed ? (
+                <button onClick={() => onConfirm(capturedImage)} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl transition-colors text-sm">
+                  ✓ Complete Quest
+                </button>
+              ) : (
+                <button onClick={() => onConfirm(capturedImage)} className="flex-1 bg-gray-700 hover:bg-gray-600 text-gray-300 font-semibold py-2.5 rounded-xl transition-colors text-xs">
+                  Submit anyway
+                </button>
+              )}
             </div>
           )}
 
-          {/* Upload always available as escape hatch */}
+          {/* Upload escape hatch when camera unavailable */}
           {(phase === 'error' || phase === 'starting') && (
             <label className="flex items-center justify-center gap-2 cursor-pointer w-full bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold py-2.5 rounded-xl transition-colors text-sm">
               🖼 Upload a Photo Instead
