@@ -42,20 +42,20 @@ const NEGATIVE_LABELS = ['person sitting doing nothing', 'phone or computer scre
 
 // ─── QUEST POOL ───────────────────────────────────────────────────────────────
 const QUEST_POOL = [
-  { id: 'q1',  text: 'Do 20 pushups',                            xp: 50 },
-  { id: 'q2',  text: 'Do 30 squats',                             xp: 45 },
+  { id: 'q1',  text: 'Do 20 pushups',                            xp: 50, reps: 20 },
+  { id: 'q2',  text: 'Do 30 squats',                             xp: 45, reps: 30 },
   { id: 'q3',  text: 'Go for a 15-minute run',                   xp: 75 },
-  { id: 'q4',  text: 'Do 10 pullups',                            xp: 60 },
-  { id: 'q16', text: 'Do 15 minutes of cycling',                xp: 55 },
-  { id: 'q17', text: 'Do 50 jumping rope reps',                 xp: 40 },
-  { id: 'q18', text: 'Take a cold shower',                      xp: 50 },
-  { id: 'q19', text: 'Eat no sugar today',                      xp: 65 },
-  { id: 'q20', text: 'Cook a meal from scratch',                xp: 45 },
-  { id: 'q21', text: 'Do 10 minutes of deep breathing',         xp: 30 },
-  { id: 'q22', text: 'Take 10,000 steps',                       xp: 70 },
-  { id: 'q23', text: 'Do 3 sets of lunges',                     xp: 40 },
-  { id: 'q24', text: 'Go to bed before 11pm',                   xp: 35 },
-  { id: 'q25', text: 'Do a 5-minute ice bath or cold plunge',   xp: 80 },
+  { id: 'q4',  text: 'Do 10 pullups',                            xp: 60, reps: 10 },
+  { id: 'q16', text: 'Do 15 minutes of cycling',                 xp: 55 },
+  { id: 'q17', text: 'Do 50 jumping rope reps',                  xp: 40, reps: 50 },
+  { id: 'q18', text: 'Take a cold shower',                       xp: 50 },
+  { id: 'q19', text: 'Eat no sugar today',                       xp: 65 },
+  { id: 'q20', text: 'Cook a meal from scratch',                 xp: 45 },
+  { id: 'q21', text: 'Do 10 minutes of deep breathing',          xp: 30 },
+  { id: 'q22', text: 'Take 10,000 steps',                        xp: 70 },
+  { id: 'q23', text: 'Do 3 sets of lunges',                      xp: 40, reps: 30 },
+  { id: 'q24', text: 'Go to bed before 11pm',                    xp: 35 },
+  { id: 'q25', text: 'Do a 5-minute ice bath or cold plunge',    xp: 80 },
   { id: 'q5',  text: 'Walk outside for 20 minutes',              xp: 35 },
   { id: 'q6',  text: 'Drink 2 liters of water today',            xp: 25 },
   { id: 'q7',  text: 'Meditate for 10 minutes',                  xp: 45 },
@@ -63,7 +63,7 @@ const QUEST_POOL = [
   { id: 'q9',  text: 'Eat a healthy meal',                       xp: 40 },
   { id: 'q10', text: 'Get 8 hours of sleep',                     xp: 55 },
   { id: 'q11', text: 'Do 3 minutes of jumping jacks',            xp: 30 },
-  { id: 'q12', text: 'Do 20 situps',                             xp: 40 },
+  { id: 'q12', text: 'Do 20 situps',                             xp: 40, reps: 20 },
   { id: 'q13', text: 'Write in your journal',                    xp: 20 },
   { id: 'q14', text: 'Drink a green smoothie',                   xp: 30 },
   { id: 'q15', text: 'Hold a plank for 60 seconds',              xp: 50 },
@@ -72,6 +72,8 @@ const QUEST_POOL = [
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_PASSES = 2;
 const PASS_THRESHOLD  = 0.28;
+const REP_THRESHOLD   = 0.22;
+const RESET_THRESHOLD = 0.12;
 
 // ─── ICONS (inline SVG, no deps) ─────────────────────────────────────────────
 const LogoIcon = ({ size = 34, dark }) => (
@@ -94,11 +96,6 @@ const CheckIcon = () => (
     <polyline points="20 6 9 17 4 12"/>
   </svg>
 );
-const ChevronIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="9 18 15 12 9 6"/>
-  </svg>
-);
 
 // ─── CAMERA / AI MODAL ────────────────────────────────────────────────────────
 function CameraModal({ quest, onConfirm, onCancel, dark }) {
@@ -106,6 +103,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const canvasRef    = useRef(null);
   const streamRef    = useRef(null);
   const scanTimerRef = useRef(null);
+  const isScanningRef = useRef(false); // Prevents thread collisions
 
   const [phase,         setPhase]         = useState('starting');
   const [camError,      setCamError]      = useState(null);
@@ -115,6 +113,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const [scanning,      setScanning]      = useState(false);
   const [liveScore,     setLiveScore]     = useState(0);
   const [passStreak,    setPassStreak]    = useState(0);
+  const [repsDone,      setRepsDone]      = useState(0);
   const [confirmed,     setConfirmed]     = useState(false);
   const [lastLabel,     setLastLabel]     = useState('');
 
@@ -164,43 +163,98 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             setModelProgress(Math.round((evt.loaded / evt.total) * 100));
         });
         if (!cancelled) { setModelReady(true); setModelProgress(null); }
-      } catch { if (!cancelled) setModelReady(true); }
+      } catch (err) { 
+        console.error("Model load error:", err);
+        if (!cancelled) setModelReady(true); 
+      }
     })();
     return () => { cancelled = true; };
   }, []);
 
   const passStreakRef = useRef(0);
+  const repsRef = useRef(0);
+  const activeRepRef = useRef(false);
 
   useEffect(() => {
     if (phase !== 'live' || !modelReady || confirmed || !labels) return;
-    const grabAndScan = async () => {
+
+    const scanLoop = async () => {
       const video = videoRef.current, canvas = canvasRef.current;
-      if (!video || !canvas || video.readyState < 2) return;
+      
+      // Ensure video is actively playing and has dimensions before grabbing
+      if (!video || !canvas || video.readyState < 2 || video.videoWidth === 0) {
+        scanTimerRef.current = setTimeout(scanLoop, 500);
+        return;
+      }
+
+      if (isScanningRef.current) {
+         scanTimerRef.current = setTimeout(scanLoop, 200);
+         return;
+      }
+
+      isScanningRef.current = true;
       setScanning(true);
-      canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
-      canvas.getContext('2d').drawImage(video, 0, 0);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+
+      // Downscale specifically for CLIP inference (224x224) to prevent freezing
+      canvas.width = 224; 
+      canvas.height = 224;
+      const size = Math.min(video.videoWidth, video.videoHeight);
+      const startX = (video.videoWidth - size) / 2;
+      const startY = (video.videoHeight - size) / 2;
+      
+      canvas.getContext('2d').drawImage(video, startX, startY, size, size, 0, 0, 224, 224);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+
       try {
         const classifier = await getClassifier();
         const results = await classifier(dataUrl, allLabels);
         const actScore = results.filter(r => labels.activity.includes(r.label)).reduce((s, r) => s + r.score, 0);
         const negScore = results.filter(r => NEGATIVE_LABELS.includes(r.label)).reduce((s, r) => s + r.score, 0);
-        const pct = Math.round(actScore * 100);
-        const passed = actScore > negScore && actScore >= PASS_THRESHOLD;
-        setLiveScore(pct); setLastLabel(results[0]?.label ?? '');
-        if (passed) { passStreakRef.current += 1; } else { passStreakRef.current = 0; }
-        setPassStreak(passStreakRef.current);
-        if (passStreakRef.current >= REQUIRED_PASSES) setConfirmed(true);
-      } catch { /* ignore */ } finally { setScanning(false); }
+        
+        setLiveScore(Math.round(actScore * 100)); 
+        setLastLabel(results[0]?.label ?? '');
+
+        if (quest.reps) {
+          // Stateful rep counting
+          if (actScore > REP_THRESHOLD && actScore > negScore) {
+            if (!activeRepRef.current) {
+              activeRepRef.current = true;
+              repsRef.current += 1;
+              setRepsDone(repsRef.current);
+            }
+          } else if (actScore < RESET_THRESHOLD) {
+            activeRepRef.current = false; // Reset to allow next rep to be counted
+          }
+          if (repsRef.current >= quest.reps) setConfirmed(true);
+        } else {
+          // Single action verification
+          const passed = actScore > negScore && actScore >= PASS_THRESHOLD;
+          if (passed) { passStreakRef.current += 1; } else { passStreakRef.current = 0; }
+          setPassStreak(passStreakRef.current);
+          if (passStreakRef.current >= REQUIRED_PASSES) setConfirmed(true);
+        }
+      } catch (err) { 
+        console.error("AI Inference Error:", err);
+      } finally { 
+        setScanning(false); 
+        isScanningRef.current = false;
+        
+        // Loop slightly faster for physical reps to catch quick movements
+        if (!confirmed) {
+            scanTimerRef.current = setTimeout(scanLoop, quest.reps ? 500 : 1500);
+        }
+      }
     };
-    grabAndScan();
-    scanTimerRef.current = setInterval(grabAndScan, 2500);
-    return () => clearInterval(scanTimerRef.current);
-  }, [phase, modelReady, confirmed, labels, allLabels]);
+
+    scanLoop();
+    return () => clearTimeout(scanTimerRef.current);
+  }, [phase, modelReady, confirmed, labels, allLabels, quest.reps]);
 
   const flipCamera = () => {
-    clearInterval(scanTimerRef.current);
-    setPhase('starting'); setLiveScore(0); setPassStreak(0); passStreakRef.current = 0; setConfirmed(false);
+    clearTimeout(scanTimerRef.current);
+    setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(0);
+    passStreakRef.current = 0; repsRef.current = 0; activeRepRef.current = false; 
+    setConfirmed(false);
     setFacingMode(m => m === 'environment' ? 'user' : 'environment');
   };
 
@@ -209,7 +263,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     const reader = new FileReader();
     reader.onload = async (ev) => {
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-      clearInterval(scanTimerRef.current);
+      clearTimeout(scanTimerRef.current);
       const dataUrl = ev.target.result;
       if (!labels) { onConfirm(dataUrl); return; }
       setPhase('live'); setScanning(true);
@@ -219,10 +273,22 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const actScore = results.filter(r => labels.activity.includes(r.label)).reduce((s, r) => s + r.score, 0);
         const negScore = results.filter(r => NEGATIVE_LABELS.includes(r.label)).reduce((s, r) => s + r.score, 0);
         setLiveScore(Math.round(actScore * 100)); setLastLabel(results[0]?.label ?? '');
+        
         if (actScore > negScore && actScore >= PASS_THRESHOLD) {
-          passStreakRef.current = REQUIRED_PASSES; setPassStreak(REQUIRED_PASSES); setConfirmed(true);
-        } else { passStreakRef.current = 0; setPassStreak(0); }
-      } catch { /* ignore */ } finally { setScanning(false); }
+          if (quest.reps) {
+              setRepsDone(quest.reps); // Auto pass if picture proves it
+          } else {
+              setPassStreak(REQUIRED_PASSES);
+          }
+          setConfirmed(true);
+        } else { 
+          setPassStreak(0); 
+        }
+      } catch (err) { 
+        console.error("File upload AI error:", err);
+      } finally { 
+        setScanning(false); 
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -235,7 +301,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     onConfirm(canvas.toDataURL('image/jpeg', 0.82));
   };
 
-  const meterColor = liveScore >= PASS_THRESHOLD * 100 ? 'bg-green-500' : liveScore >= PASS_THRESHOLD * 50 ? 'bg-yellow-400' : 'bg-red-500';
+  const meterColor = liveScore >= (quest.reps ? REP_THRESHOLD : PASS_THRESHOLD) * 100 ? 'bg-green-500' : liveScore >= 15 ? 'bg-yellow-400' : 'bg-red-500';
 
   const bg     = dark ? 'bg-zinc-900'  : 'bg-white';
   const border = dark ? 'border-zinc-700' : 'border-gray-200';
@@ -308,18 +374,33 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
               ) : (
                 <>
                   <div className="flex items-center justify-between mb-1.5">
-                    <p className="text-white/80 text-xs">
+                    <p className="text-white/80 text-xs font-medium">
                       {scanning ? 'Scanning…' : `${liveScore}% confidence`}
                     </p>
-                    <div className="flex gap-1">
-                      {Array.from({ length: REQUIRED_PASSES }).map((_, i) => (
-                        <div key={i} className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${i < passStreak ? 'bg-green-400' : 'bg-white/30'}`} />
-                      ))}
+                    
+                    {/* Progress tracking: Reps vs Standard */}
+                    <div className="flex items-center gap-1.5">
+                      {quest.reps ? (
+                        <p className="text-white text-xs font-bold tracking-wide">
+                            {repsDone} / {quest.reps} REPS
+                        </p>
+                      ) : (
+                        Array.from({ length: REQUIRED_PASSES }).map((_, i) => (
+                            <div key={i} className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${i < passStreak ? 'bg-green-400' : 'bg-white/30'}`} />
+                        ))
+                      )}
                     </div>
                   </div>
+                  
+                  {/* Progress Bar (switches mode based on quest type) */}
                   <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
-                    <div className={`h-full ${meterColor} transition-all duration-700 ease-out rounded-full`}
-                      style={{ width: `${liveScore}%` }} />
+                    {quest.reps ? (
+                        <div className={`h-full bg-green-400 transition-all duration-300 ease-out rounded-full`}
+                          style={{ width: `${Math.min(100, (repsDone / quest.reps) * 100)}%` }} />
+                    ) : (
+                        <div className={`h-full ${meterColor} transition-all duration-700 ease-out rounded-full`}
+                          style={{ width: `${liveScore}%` }} />
+                    )}
                   </div>
                   {lastLabel && <p className="text-white/40 text-[10px] mt-1 truncate">{lastLabel}</p>}
                 </>
@@ -404,7 +485,6 @@ export default function SideQuestsApp() {
     const anyDone   = saved.some(q => q.completed);
     const lastReset = parseInt(localStorage.getItem('sq_lastReset')) || 0;
     const expired   = Date.now() - lastReset >= ONE_DAY_MS;
-    // use saved if valid, otherwise generate fresh immediately
     if (!expired && saved.length >= 5) return saved;
     if (!expired && anyDone)            return saved;
     const n = Math.floor(Math.random() * 3) + 5;
@@ -424,14 +504,12 @@ export default function SideQuestsApp() {
 
   const xpRequired = level * 100;
 
-  // Quest generation
   const generateNewQuests = useCallback((ts) => {
     const n = Math.floor(Math.random() * 3) + 5;
     const selected = [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(q => ({ ...q, completed: false }));
     setQuests(selected); setLastReset(ts); setProofImages({});
   }, []);
 
-  // Timer
   useEffect(() => {
     const id = setInterval(() => {
       const now = Date.now(), remaining = ONE_DAY_MS - (now - lastReset);
@@ -444,7 +522,6 @@ export default function SideQuestsApp() {
     return () => clearInterval(id);
   }, [lastReset, quests.length, generateNewQuests]);
 
-  // Persistence
   useEffect(() => {
     localStorage.setItem('sq_level',     level);
     localStorage.setItem('sq_xp',        xp);
@@ -453,7 +530,6 @@ export default function SideQuestsApp() {
   }, [level, xp, quests, lastReset]);
   useEffect(() => { localStorage.setItem('sq_proofs', JSON.stringify(proofImages)); }, [proofImages]);
 
-  // XP
   const applyXpChange = useCallback((amount) => {
     let newXp = xpRef.current + amount, newLevel = levelRef.current;
     while (newXp >= newLevel * 100)    { newXp -= newLevel * 100; newLevel++; }
@@ -483,7 +559,6 @@ export default function SideQuestsApp() {
   const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
   const allDone = quests.length > 0 && quests.every(q => q.completed);
 
-  // Theme tokens
   const bg       = dark ? 'bg-black'      : 'bg-[#F2F2F7]';
   const cardBg   = dark ? 'bg-zinc-900'   : 'bg-white';
   const txt      = dark ? 'text-white'    : 'text-gray-900';
