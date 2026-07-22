@@ -76,7 +76,7 @@ const PASS_THRESHOLD  = 0.28;
 // ─── ICONS (inline SVG, no deps) ─────────────────────────────────────────────
 const LogoIcon = ({ size = 34, dark }) => (
   <img src="/logo-transparent.png" alt="Side Quests" width={size} height={size}
-    style={{ filter: dark ? 'invert(0)' : 'invert(1)', opacity: 0.9 }} />
+    style={{ filter: dark ? 'none' : 'brightness(0) opacity(0.85)' }} />
 );
 
 const SunIcon = () => (
