@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { pipeline, env } from '@huggingface/transformers';
 
 // ─── AI SETUP ────────────────────────────────────────────────────────────────
@@ -138,8 +138,17 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
   const labels = QUEST_LABELS[quest.id];
   const questType = labels?.type || 'action';
-  const activeNegatives = getNegativeLabels(questType);
-  const allLabels = labels ? [...labels.activity, ...activeNegatives] : [];
+  // Memoized so identity stays stable across re-renders of the same quest —
+  // otherwise every setState in the scan loop (setLiveScore, setScanning, etc.)
+  // creates new array refs here, which re-triggers the scan effect below and
+  // bypasses its setTimeout throttle, hammering the classifier with rapid-fire
+  // frames and making a single noisy read (e.g. while standing still) far more
+  // likely to transiently cross REP_THRESHOLD.
+  const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
+  const allLabels = useMemo(
+    () => (labels ? [...labels.activity, ...activeNegatives] : []),
+    [labels, activeNegatives]
+  );
 
   // Dynamic UI Instructions based on Quest Type
   let instructionText = `Show the camera you're ${labels?.label ?? 'doing it'}…`;
