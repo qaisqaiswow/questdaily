@@ -394,7 +394,18 @@ export default function SideQuestsApp() {
   // State
   const [level,     setLevel]     = useState(() => parseInt(localStorage.getItem('sq_level'))    || 1);
   const [xp,        setXp]        = useState(() => parseInt(localStorage.getItem('sq_xp'))       || 0);
-  const [quests,    setQuests]    = useState(() => JSON.parse(localStorage.getItem('sq_quests')) || []);
+  const [quests,    setQuests]    = useState(() => {
+    const saved     = JSON.parse(localStorage.getItem('sq_quests')) || [];
+    const anyDone   = saved.some(q => q.completed);
+    const lastReset = parseInt(localStorage.getItem('sq_lastReset')) || 0;
+    const expired   = Date.now() - lastReset >= ONE_DAY_MS;
+    // use saved if valid, otherwise generate fresh immediately
+    if (!expired && saved.length >= 5) return saved;
+    if (!expired && anyDone)            return saved;
+    const n = Math.floor(Math.random() * 3) + 5;
+    return [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n)
+      .map(q => ({ ...q, completed: false }));
+  });
   const [lastReset, setLastReset] = useState(() => parseInt(localStorage.getItem('sq_lastReset')) || 0);
   const [timeLeft,  setTimeLeft]  = useState('--:--:--');
   const [proofModal,   setProofModal]   = useState(null);
@@ -410,7 +421,7 @@ export default function SideQuestsApp() {
 
   // Quest generation
   const generateNewQuests = useCallback((ts) => {
-    const n = Math.floor(Math.random() * 3) + 3;
+    const n = Math.floor(Math.random() * 3) + 5;
     const selected = [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(q => ({ ...q, completed: false }));
     setQuests(selected); setLastReset(ts); setProofImages({});
   }, []);
@@ -476,7 +487,8 @@ export default function SideQuestsApp() {
   const secLabel = dark ? 'text-zinc-500' : 'text-gray-400';
 
   return (
-    <div className={`${bg} min-h-screen flex flex-col transition-colors duration-200`}>
+    <div className={`${bg} min-h-screen flex flex-col items-center transition-colors duration-200`}>
+      <div className="w-full max-w-[430px] flex flex-col min-h-screen">
 
       {/* Camera modal */}
       {proofModal && (
@@ -495,64 +507,56 @@ export default function SideQuestsApp() {
       )}
 
       {/* Header */}
-      <div className={`${cardBg} safe-top px-5 pb-4 border-b ${sep} transition-colors duration-200`}>
-        <div className="flex items-center justify-between mb-1 pt-3">
-          {/* Theme toggle */}
-          <button onClick={() => setDark(d => !d)}
-            className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
-            {dark ? <SunIcon /> : <MoonIcon />}
-          </button>
+      <div className={`${cardBg} safe-top px-4 pb-3 border-b ${sep} transition-colors duration-200`}>
+        <div className="flex items-center justify-between pt-2">
+          {/* Title */}
+          <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>Side Quests</h1>
 
-          {/* Timer pill */}
-          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full ${dark ? 'bg-zinc-800' : 'bg-gray-100'}`}>
-            <span className="text-xs">⏱</span>
-            <span className={`text-xs font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
+          <div className="flex items-center gap-2">
+            {/* Timer pill */}
+            <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${dark ? 'bg-zinc-800' : 'bg-gray-100'}`}>
+              <span className="text-[10px]">⏱</span>
+              <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
+            </div>
+            {/* Theme toggle */}
+            <button onClick={() => setDark(d => !d)}
+              className={`w-8 h-8 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
+              {dark ? <SunIcon /> : <MoonIcon />}
+            </button>
           </div>
         </div>
 
-        {/* Title */}
-        <h1 className={`text-[34px] font-bold tracking-tight ${txt} mt-2`}>Side Quests</h1>
-        <p className={`text-sm ${sub} mt-0.5`}>Daily habit tracker</p>
-
-        {/* XP Section */}
-        <div className="mt-5">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <span className="bg-[#007AFF] text-white text-xs font-bold px-2.5 py-1 rounded-full">
-                Lv {level}
-              </span>
-              <span className={`text-xs font-medium ${sub}`}>Novice Adventurer</span>
+        {/* XP row */}
+        <div className="mt-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <span className="bg-[#007AFF] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Lv {level}</span>
+              <span className={`text-[11px] ${sub}`}>Novice Adventurer</span>
             </div>
-            <span className={`text-xs font-medium ${dark ? 'text-zinc-400' : 'text-gray-400'}`}>
-              {xp} <span className={dark ? 'text-zinc-600' : 'text-gray-300'}>/</span> {xpRequired} XP
-            </span>
+            <span className={`text-[11px] ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{xp} / {xpRequired} XP</span>
           </div>
-          {/* Progress bar */}
-          <div className={`w-full h-1.5 rounded-full overflow-hidden ${dark ? 'bg-zinc-800' : 'bg-gray-200'}`}>
-            <div
-              className="h-full bg-[#007AFF] rounded-full transition-all duration-700 ease-out"
-              style={{ width: `${xpPct}%` }}
-            />
+          <div className={`w-full h-1 rounded-full overflow-hidden ${dark ? 'bg-zinc-800' : 'bg-gray-200'}`}>
+            <div className="h-full bg-[#007AFF] rounded-full transition-all duration-700 ease-out" style={{ width: `${xpPct}%` }} />
           </div>
         </div>
       </div>
 
       {/* Quest List */}
-      <div className="flex-1 scroll-ios px-4 pt-6 pb-8 space-y-8">
+      <div className="flex-1 scroll-ios px-4 pt-4 pb-6 space-y-5">
 
         {/* Section */}
         <div>
-          <p className={`text-xs font-semibold uppercase tracking-widest ${secLabel} mb-2 px-1`}>
+          <p className={`text-[11px] font-semibold uppercase tracking-widest ${secLabel} mb-1.5 px-1`}>
             Today's Objectives
           </p>
 
-          <div className={`${cardBg} rounded-[16px] overflow-hidden transition-colors duration-200`}>
+          <div className={`${dark ? 'bg-zinc-900' : 'bg-[#F2F2F7]'} rounded-[14px] overflow-hidden`}>
             {quests.map((quest, i) => (
               <div key={quest.id}>
-                {i > 0 && <div className={`border-t ${sep} ml-16`} />}
+                {i > 0 && <div className={`border-t ${sep} ml-14`} />}
                 <button
                   onClick={() => handleQuestClick(quest)}
-                  className={`w-full flex items-center gap-3 px-4 py-3.5 text-left active:opacity-60 transition-opacity`}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 text-left active:opacity-60 transition-opacity`}
                 >
                   {/* Check circle */}
                   <div className={`w-[26px] h-[26px] rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-200 ${
@@ -630,6 +634,7 @@ export default function SideQuestsApp() {
 
       {/* Safe area bottom spacer */}
       <div className="safe-bottom" />
+      </div>
     </div>
   );
 }
