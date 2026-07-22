@@ -49,7 +49,9 @@ const QUEST_LABELS = {
 
 // Dynamically generate negative labels so the AI knows exactly what to reject
 const getNegativeLabels = (type) => {
-  const base = ['person sitting doing nothing', 'random everyday object'];
+  // Added "person standing still straight" so the AI actively rejects just standing around
+  const base = ['person sitting doing nothing', 'person standing still straight', 'random everyday object'];
+  
   if (type === 'map') return [...base, 'sweaty selfie face', 'picture of running shoes', 'treadmill machine indoors', 'person running outside'];
   if (type === 'food') return [...base, 'empty plate or bowl', 'restaurant paper menu', 'store product barcode', 'person eating face'];
   return [...base, 'phone or computer screen'];
@@ -86,9 +88,11 @@ const QUEST_POOL = [
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_PASSES = 2;
-const PASS_THRESHOLD  = 0.28;
-const REP_THRESHOLD   = 0.22;
-const RESET_THRESHOLD = 0.12;
+
+// Increased these thresholds so it requires a clearer visual match
+const PASS_THRESHOLD  = 0.35; 
+const REP_THRESHOLD   = 0.28;
+const RESET_THRESHOLD = 0.15;
 
 // ─── ICONS (inline SVG, no deps) ─────────────────────────────────────────────
 const LogoIcon = ({ size = 34, dark }) => (
