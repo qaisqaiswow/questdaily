@@ -75,21 +75,8 @@ const PASS_THRESHOLD  = 0.28;
 
 // ─── ICONS (inline SVG, no deps) ─────────────────────────────────────────────
 const LogoIcon = ({ size = 34, dark }) => (
-  <div
-    aria-label="Side Quests"
-    style={{
-      width: size,
-      height: size,
-      WebkitMaskImage: 'url(/logo-icon.png)',
-      maskImage: 'url(/logo-icon.png)',
-      WebkitMaskSize: 'contain',
-      maskSize: 'contain',
-      WebkitMaskRepeat: 'no-repeat',
-      maskRepeat: 'no-repeat',
-      backgroundColor: dark ? '#FFFFFF' : '#000000',
-      opacity: 0.9,
-    }}
-  />
+  <img src="/logo-transparent.png" alt="Side Quests" width={size} height={size}
+    style={{ filter: dark ? 'invert(0)' : 'invert(1)', opacity: 0.9 }} />
 );
 
 const SunIcon = () => (
