@@ -74,24 +74,9 @@ const REQUIRED_PASSES = 2;
 const PASS_THRESHOLD  = 0.28;
 
 // ─── ICONS (inline SVG, no deps) ─────────────────────────────────────────────
-const LogoIcon = ({ size = 32, dark }) => (
-  <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
-    {/* Shield body */}
-    <path d="M20 3L5 9v10c0 8.5 6.4 16.4 15 18.9C29.6 35.4 36 27.5 36 19V9L20 3z"
-      fill="#007AFF" />
-    {/* Inner shield highlight */}
-    <path d="M20 7L9 12v7c0 6.2 4.7 12 11 13.9C26.3 31 31 25.2 31 19v-7L20 7z"
-      fill="url(#shieldGrad)" />
-    {/* Exclamation mark */}
-    <rect x="18.5" y="13" width="3" height="10" rx="1.5" fill="white"/>
-    <circle cx="20" cy="27" r="1.8" fill="white"/>
-    <defs>
-      <linearGradient id="shieldGrad" x1="20" y1="7" x2="20" y2="34" gradientUnits="userSpaceOnUse">
-        <stop offset="0%" stopColor="white" stopOpacity="0.25"/>
-        <stop offset="100%" stopColor="white" stopOpacity="0.05"/>
-      </linearGradient>
-    </defs>
-  </svg>
+const LogoIcon = ({ size = 34, dark }) => (
+  <img src="/logo-transparent.png" alt="Side Quests" width={size} height={size}
+    style={{ filter: dark ? 'invert(0)' : 'invert(1)', opacity: 0.9 }} />
 );
 
 const SunIcon = () => (
