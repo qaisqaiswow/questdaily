@@ -74,6 +74,26 @@ const REQUIRED_PASSES = 2;
 const PASS_THRESHOLD  = 0.28;
 
 // ─── ICONS (inline SVG, no deps) ─────────────────────────────────────────────
+const LogoIcon = ({ size = 32, dark }) => (
+  <svg width={size} height={size} viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    {/* Shield body */}
+    <path d="M20 3L5 9v10c0 8.5 6.4 16.4 15 18.9C29.6 35.4 36 27.5 36 19V9L20 3z"
+      fill="#007AFF" />
+    {/* Inner shield highlight */}
+    <path d="M20 7L9 12v7c0 6.2 4.7 12 11 13.9C26.3 31 31 25.2 31 19v-7L20 7z"
+      fill="url(#shieldGrad)" />
+    {/* Exclamation mark */}
+    <rect x="18.5" y="13" width="3" height="10" rx="1.5" fill="white"/>
+    <circle cx="20" cy="27" r="1.8" fill="white"/>
+    <defs>
+      <linearGradient id="shieldGrad" x1="20" y1="7" x2="20" y2="34" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stopColor="white" stopOpacity="0.25"/>
+        <stop offset="100%" stopColor="white" stopOpacity="0.05"/>
+      </linearGradient>
+    </defs>
+  </svg>
+);
+
 const SunIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
@@ -509,8 +529,11 @@ export default function SideQuestsApp() {
       {/* Header */}
       <div className={`${cardBg} safe-top px-4 pb-3 border-b ${sep} transition-colors duration-200`}>
         <div className="flex items-center justify-between pt-2">
-          {/* Title */}
-          <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>Side Quests</h1>
+          {/* Logo + Title */}
+          <div className="flex items-center gap-2.5">
+            <LogoIcon size={34} dark={dark} />
+            <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>Side Quests</h1>
+          </div>
 
           <div className="flex items-center gap-2">
             {/* Timer pill */}
