@@ -253,8 +253,14 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       try {
         const classifier = await getClassifier();
         const results = await classifier(dataUrl, allLabels);
-        const actScore = results.filter(r => labels.activity.includes(r.label)).reduce((s, r) => s + r.score, 0);
-        const negScore = results.filter(r => activeNegatives.includes(r.label)).reduce((s, r) => s + r.score, 0);
+        // Use the single best-matching phrase per group rather than summing all
+        // phrase scores together. Summing biased the comparison against activity
+        // whenever a quest had fewer activity phrasings than negative phrasings
+        // (e.g. 2 activity phrases vs 4 negative phrases) — the negative side
+        // would out-score genuine reps just by having more candidate strings
+        // sharing the same softmax distribution, so reps never registered.
+        const actScore = Math.max(0, ...results.filter(r => labels.activity.includes(r.label)).map(r => r.score));
+        const negScore = Math.max(0, ...results.filter(r => activeNegatives.includes(r.label)).map(r => r.score));
         
         setLiveScore(Math.round(actScore * 100)); 
         setLastLabel(results[0]?.label ?? '');
@@ -315,8 +321,8 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       try {
         const classifier = await getClassifier();
         const results = await classifier(dataUrl, allLabels);
-        const actScore = results.filter(r => labels.activity.includes(r.label)).reduce((s, r) => s + r.score, 0);
-        const negScore = results.filter(r => activeNegatives.includes(r.label)).reduce((s, r) => s + r.score, 0);
+        const actScore = Math.max(0, ...results.filter(r => labels.activity.includes(r.label)).map(r => r.score));
+        const negScore = Math.max(0, ...results.filter(r => activeNegatives.includes(r.label)).map(r => r.score));
         setLiveScore(Math.round(actScore * 100)); setLastLabel(results[0]?.label ?? '');
         
         // Slightly lower threshold for uploaded screenshots to ensure maps/photos pass easily if valid
