@@ -11,34 +11,49 @@ function getClassifier() {
   return classifierPromise;
 }
 
+// Added 'type' and highly tuned strict visual labels for the AI
 const QUEST_LABELS = {
-  q1:  { activity: ['person doing pushups on floor', 'pushup exercise', 'floor exercise plank position'],                      label: 'doing pushups' },
-  q2:  { activity: ['person doing squats exercise', 'squat workout legs bent', 'lower body exercise squat'],                   label: 'doing squats' },
-  q3:  { activity: ['person running outdoors', 'jogging on road or trail', 'running exercise outside'],                        label: 'running' },
-  q4:  { activity: ['person doing pullups on bar', 'pullup bar exercise arms raised', 'hanging from bar doing pullups'],        label: 'doing pullups' },
-  q5:  { activity: ['person walking outside', 'outdoor street or park', 'person outside in nature or city'],                   label: 'outside walking' },
-  q6:  { activity: ['person drinking water', 'water bottle being drunk', 'drinking from glass or bottle'],                     label: 'drinking water' },
-  q7:  { activity: ['person meditating cross-legged', 'meditation sitting pose eyes closed', 'mindfulness exercise'],          label: 'meditating' },
-  q8:  { activity: ['person stretching muscles', 'yoga stretch pose', 'flexibility exercise stretching'],                      label: 'stretching' },
-  q9:  { activity: ['healthy food meal salad vegetables fruits', 'nutritious meal on plate', 'fresh vegetables or fruit bowl'],label: 'eating healthy' },
-  q10: { activity: ['person sleeping in bed', 'person resting in bed eyes closed', 'bedroom with person lying down'],          label: 'getting good sleep' },
-  q11: { activity: ['person doing jumping jacks or burpees', 'cardio exercise arms raised', 'full body workout jumping'],      label: 'doing cardio' },
-  q12: { activity: ['person doing situps or crunches', 'abdominal exercise on floor', 'core workout crunches'],                label: 'doing situps' },
-  q13: { activity: ['handwriting in notebook or journal', 'pen writing on paper', 'gratitude journal writing'],                label: 'journaling' },
-  q14: { activity: ['person drinking green smoothie or juice', 'blender with green smoothie', 'healthy green drink'],         label: 'drinking a smoothie' },
-  q15: { activity: ['person doing plank exercise', 'plank position core exercise', 'forearm plank on floor'],                  label: 'holding a plank' },
-  q16: { activity: ['person cycling on bike', 'riding bicycle outdoors or stationary bike', 'cycling exercise'],               label: 'cycling' },
-  q17: { activity: ['person jumping rope', 'skipping rope exercise', 'jump rope workout'],                                     label: 'jumping rope' },
-  q18: { activity: ['shower running water', 'bathroom shower head with water', 'wet shower tiles'],                            label: 'in the shower' },
-  q19: { activity: ['healthy food no sugar', 'fruits vegetables whole foods', 'clean healthy meal on plate'],                  label: 'eating clean' },
-  q20: { activity: ['person cooking in kitchen', 'food being cooked on stove', 'homemade meal preparation'],                  label: 'cooking' },
-  q21: { activity: ['person breathing deeply eyes closed', 'relaxed breathing exercise', 'calm seated breathing practice'],   label: 'deep breathing' },
-  q22: { activity: ['person walking outdoors on path', 'person walking in park or street', 'outdoor walking trail'],          label: 'walking' },
-  q23: { activity: ['person doing lunges exercise', 'lunge workout legs split stance', 'leg exercise lunge position'],        label: 'doing lunges' },
-  q24: { activity: ['person sleeping in bed at night', 'person in bed eyes closed lights off', 'sleeping in dark bedroom'],   label: 'sleeping early' },
-  q25: { activity: ['person in ice bath tub', 'cold plunge tub with ice', 'ice water bath cold immersion'],                   label: 'in a cold plunge' },
+  // REPS: Kept for live camera counting
+  q1:  { type: 'reps', activity: ['person doing pushups on floor', 'pushup exercise'], label: 'doing pushups' },
+  q2:  { type: 'reps', activity: ['person doing squats exercise', 'squat workout legs bent'], label: 'doing squats' },
+  q4:  { type: 'reps', activity: ['person doing pullups on bar', 'pullup bar exercise'], label: 'doing pullups' },
+  q12: { type: 'reps', activity: ['person doing situps or crunches', 'abdominal exercise on floor'], label: 'doing situps' },
+  q17: { type: 'reps', activity: ['person jumping rope', 'skipping rope exercise'], label: 'jumping rope' },
+  q23: { type: 'reps', activity: ['person doing lunges exercise', 'lunge workout legs split stance'], label: 'doing lunges' },
+
+  // MAPS: Strict rules to look for GPS app screenshots (Strava, Apple Fitness, etc.)
+  q3:  { type: 'map', activity: ['gps tracking map route screenshot', 'fitness tracker map running route'], label: 'running map screenshot' },
+  q16: { type: 'map', activity: ['gps tracking map route screenshot', 'cycling route map on phone screen'], label: 'cycling map screenshot' },
+  q5:  { type: 'map', activity: ['gps tracking map route screenshot', 'walking route map tracker'], label: 'walking map screenshot' },
+  q22: { type: 'map', activity: ['gps tracking map route screenshot', 'step counter fitness app screenshot'], label: 'step tracking map' },
+
+  // FOOD: Strict rules to look for actual food on plates/bowls
+  q9:  { type: 'food', activity: ['healthy food meal salad vegetables on a plate', 'nutritious meal in a bowl'], label: 'plate of healthy food' },
+  q19: { type: 'food', activity: ['clean healthy meal on plate', 'plate of vegetables and whole foods'], label: 'plate of clean food' },
+  q20: { type: 'food', activity: ['cooked food on a plate', 'homemade meal in a bowl or plate'], label: 'cooked meal' },
+  q14: { type: 'food', activity: ['glass of green smoothie', 'blended green juice drink'], label: 'green smoothie' },
+  q6:  { type: 'food', activity: ['glass of water', 'reusable water bottle filled'], label: 'water bottle' },
+
+  // STANDARD ACTIONS
+  q7:  { type: 'action', activity: ['person meditating cross-legged', 'mindfulness exercise'], label: 'meditating' },
+  q8:  { type: 'action', activity: ['person stretching muscles', 'yoga stretch pose'], label: 'stretching' },
+  q10: { type: 'action', activity: ['person sleeping in bed', 'person resting in bed eyes closed'], label: 'getting good sleep' },
+  q11: { type: 'action', activity: ['person doing jumping jacks or burpees'], label: 'doing cardio' },
+  q13: { type: 'action', activity: ['handwriting in notebook or journal'], label: 'journaling' },
+  q15: { type: 'action', activity: ['person doing plank exercise', 'plank position core exercise'], label: 'holding a plank' },
+  q18: { type: 'action', activity: ['shower running water', 'bathroom shower head with water'], label: 'in the shower' },
+  q21: { type: 'action', activity: ['person breathing deeply eyes closed'], label: 'deep breathing' },
+  q24: { type: 'action', activity: ['person sleeping in bed at night', 'sleeping in dark bedroom'], label: 'sleeping early' },
+  q25: { type: 'action', activity: ['person in ice bath tub', 'cold plunge tub with ice'], label: 'in a cold plunge' },
 };
-const NEGATIVE_LABELS = ['person sitting doing nothing', 'phone or computer screen', 'random everyday object'];
+
+// Dynamically generate negative labels so the AI knows exactly what to reject
+const getNegativeLabels = (type) => {
+  const base = ['person sitting doing nothing', 'random everyday object'];
+  if (type === 'map') return [...base, 'sweaty selfie face', 'picture of running shoes', 'treadmill machine indoors', 'person running outside'];
+  if (type === 'food') return [...base, 'empty plate or bowl', 'restaurant paper menu', 'store product barcode', 'person eating face'];
+  return [...base, 'phone or computer screen'];
+};
 
 // ─── QUEST POOL ───────────────────────────────────────────────────────────────
 const QUEST_POOL = [
@@ -103,7 +118,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const canvasRef    = useRef(null);
   const streamRef    = useRef(null);
   const scanTimerRef = useRef(null);
-  const isScanningRef = useRef(false); // Prevents thread collisions
+  const isScanningRef = useRef(false);
 
   const [phase,         setPhase]         = useState('starting');
   const [camError,      setCamError]      = useState(null);
@@ -117,8 +132,25 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const [confirmed,     setConfirmed]     = useState(false);
   const [lastLabel,     setLastLabel]     = useState('');
 
-  const labels    = QUEST_LABELS[quest.id];
-  const allLabels = labels ? [...labels.activity, ...NEGATIVE_LABELS] : [];
+  const labels = QUEST_LABELS[quest.id];
+  const questType = labels?.type || 'action';
+  const activeNegatives = getNegativeLabels(questType);
+  const allLabels = labels ? [...labels.activity, ...activeNegatives] : [];
+
+  // Dynamic UI Instructions based on Quest Type
+  let instructionText = `Show the camera you're ${labels?.label ?? 'doing it'}…`;
+  let uiSubtext = quest.text;
+
+  if (questType === 'map') {
+      instructionText = "Please upload a screenshot of your GPS/map route.";
+      uiSubtext = "Requires a screenshot from a tracking app (e.g. Strava) showing time & distance.";
+  } else if (questType === 'food') {
+      instructionText = "Take a clear picture of the food on your plate.";
+      uiSubtext = "Must be a real photo of a prepared meal or plate.";
+  } else if (questType === 'reps') {
+      instructionText = `Show the camera your full body to count ${quest.reps} reps.`;
+      uiSubtext = "Keep your entire body in the frame while moving.";
+  }
 
   const startCamera = useCallback(async (mode) => {
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
@@ -209,7 +241,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const classifier = await getClassifier();
         const results = await classifier(dataUrl, allLabels);
         const actScore = results.filter(r => labels.activity.includes(r.label)).reduce((s, r) => s + r.score, 0);
-        const negScore = results.filter(r => NEGATIVE_LABELS.includes(r.label)).reduce((s, r) => s + r.score, 0);
+        const negScore = results.filter(r => activeNegatives.includes(r.label)).reduce((s, r) => s + r.score, 0);
         
         setLiveScore(Math.round(actScore * 100)); 
         setLastLabel(results[0]?.label ?? '');
@@ -248,7 +280,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
     scanLoop();
     return () => clearTimeout(scanTimerRef.current);
-  }, [phase, modelReady, confirmed, labels, allLabels, quest.reps]);
+  }, [phase, modelReady, confirmed, labels, allLabels, quest.reps, activeNegatives]);
 
   const flipCamera = () => {
     clearTimeout(scanTimerRef.current);
@@ -271,10 +303,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const classifier = await getClassifier();
         const results = await classifier(dataUrl, allLabels);
         const actScore = results.filter(r => labels.activity.includes(r.label)).reduce((s, r) => s + r.score, 0);
-        const negScore = results.filter(r => NEGATIVE_LABELS.includes(r.label)).reduce((s, r) => s + r.score, 0);
+        const negScore = results.filter(r => activeNegatives.includes(r.label)).reduce((s, r) => s + r.score, 0);
         setLiveScore(Math.round(actScore * 100)); setLastLabel(results[0]?.label ?? '');
         
-        if (actScore > negScore && actScore >= PASS_THRESHOLD) {
+        // Slightly lower threshold for uploaded screenshots to ensure maps/photos pass easily if valid
+        if (actScore > negScore && actScore >= (PASS_THRESHOLD - 0.05)) {
           if (quest.reps) {
               setRepsDone(quest.reps); // Auto pass if picture proves it
           } else {
@@ -323,7 +356,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           <button onClick={onCancel} className="text-[#007AFF] text-sm font-medium">Cancel</button>
           <div className="text-center">
             <p className={`text-sm font-semibold ${txt}`}>AI Verification</p>
-            <p className={`text-xs ${sub} mt-0.5 max-w-[200px] truncate`}>{quest.text}</p>
+            <p className={`text-xs ${sub} mt-0.5 max-w-[240px] truncate`}>{uiSubtext}</p>
           </div>
           <div className="w-14" />
         </div>
@@ -392,7 +425,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                     </div>
                   </div>
                   
-                  {/* Progress Bar (switches mode based on quest type) */}
+                  {/* Progress Bar */}
                   <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
                     {quest.reps ? (
                         <div className={`h-full bg-green-400 transition-all duration-300 ease-out rounded-full`}
@@ -435,7 +468,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                     : `${pill} ${sub} cursor-not-allowed`
                 }`}
               >
-                {confirmed ? 'Complete Quest' : `Show the camera you're ${labels?.label ?? 'doing it'}…`}
+                {confirmed ? 'Complete Quest' : instructionText}
               </button>
 
               <div className="flex gap-2">
@@ -443,7 +476,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   className={`flex-1 py-3 rounded-[14px] text-sm font-medium ${pill} ${sub} active:opacity-70`}>
                   Flip Camera
                 </button>
-                <label className={`flex-1 py-3 rounded-[14px] text-sm font-medium ${pill} ${sub} text-center cursor-pointer active:opacity-70`}>
+                <label className={`flex-1 py-3 rounded-[14px] text-sm font-medium ${pill} ${sub} text-center cursor-pointer active:opacity-70 ${questType === 'map' ? 'ring-2 ring-[#007AFF]' : ''}`}>
                   Upload Photo
                   <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
                 </label>
