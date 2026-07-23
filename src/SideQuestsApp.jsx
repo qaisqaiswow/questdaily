@@ -1,3 +1,8 @@
+"use client"; // <-- ADD THIS AS THE VERY FIRST LINE
+
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { pipeline, env } from '@huggingface/transformers';
+// ... rest of the code
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { pipeline, env } from '@huggingface/transformers';
 
