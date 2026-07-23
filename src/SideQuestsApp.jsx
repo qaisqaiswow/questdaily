@@ -13,8 +13,6 @@ function getClassifier(onProgress) {
       'Xenova/clip-vit-base-patch32',
       onProgress ? { progress_callback: onProgress } : undefined
     ).catch(error => {
-      // Do not cache a rejected model load forever. A later modal can retry
-      // after a transient network or browser-cache failure.
       classifierPromise = null;
       throw error;
     });
@@ -22,7 +20,6 @@ function getClassifier(onProgress) {
   return classifierPromise;
 }
 
-// Highly descriptive labels improve CLIP zero-shot accuracy drastically
 const QUEST_LABELS = {
   q1:  { type: 'reps', activity: ['person doing pushups on floor', 'pushup exercise'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
   q2:  { type: 'reps', activity: ['person doing squats exercise', 'squat workout legs bent'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
@@ -1290,7 +1287,6 @@ export default function SideQuestsApp() {
     setCompletionQuest(quest || null);
   };
 
-  const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
   const allDone = quests.length > 0 && quests.every(q => q.completed);
 
   const bg       = dark ? 'bg-black'      : 'bg-[#F2F2F7]';
