@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { pipeline, env } from '@huggingface/transformers';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 
 // ─── AI SETUP ────────────────────────────────────────────────────────────────
 env.allowLocalModels = false;
@@ -1465,6 +1466,7 @@ export default function SideQuestsApp() {
 
       <div className="safe-bottom" />
       </div>
+      <SpeedInsights />
     </div>
   );
 }
