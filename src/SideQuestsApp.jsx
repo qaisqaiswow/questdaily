@@ -371,6 +371,35 @@ const QUEST_QUOTES = [
   "You didn't come this far to only come this far.",
 ];
 
+// A specific, on-theme quote for each quest — shown on its completion screen.
+const QUEST_QUOTE = {
+  q1:  "Strength grows one rep at a time.",
+  q2:  "Every squat builds a stronger foundation.",
+  q3:  "Miles don't lie — you earned this one.",
+  q4:  "Small steps every day lead to big changes.",
+  q5:  "One step at a time is still progress.",
+  q6:  "Small steps every day lead to big changes.",
+  q7:  "A quiet mind carries the loudest strength.",
+  q8:  "Flexibility today, resilience tomorrow.",
+  q9:  "You fueled the body that carries you.",
+  q10: "Rest is where the real gains happen.",
+  q11: "Energy in motion stays in motion.",
+  q12: "A strong core holds everything else together.",
+  q13: "The pen remembers what the mind forgets.",
+  q14: "Good fuel, good day.",
+  q15: "Stillness can be the hardest work of all.",
+  q16: "Every mile ridden is a mile earned.",
+  q17: "Rhythm builds more than just your legs.",
+  q18: "Discomfort today, discipline for life.",
+  q19: "Progress, not perfection.",
+  q20: "What you cook is what you become.",
+  q21: "Breathe in control, breathe out doubt.",
+  q22: "One step at a time is still progress.",
+  q23: "Balance is built one side at a time.",
+  q24: "Tonight's rest is tomorrow's edge.",
+  q25: "You didn't come this far to only come this far.",
+};
+
 const QuestIconBadge = ({ questId, size = 96, dark, floating = false }) => {
   const theme = QUEST_THEME[questId] || { icon: 'target', grad: 'from-indigo-500 to-purple-600' };
   const Icon = QuestSvg[theme.icon] || QuestSvg.target;
@@ -428,7 +457,7 @@ function QuestDetailScreen({ quest, dark, timeLeft, onBack, onMarkComplete }) {
 
   return (
     <div className="sq-anim-pop relative z-10">
-      <div className="flex items-center justify-between px-4 pt-2 pb-3">
+      <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
         <button onClick={onBack}
           className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70`}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
@@ -487,11 +516,14 @@ function CompletionScreen({ quest, dark, timeLeft, onBack }) {
   const sub = dark ? 'text-zinc-400' : 'text-gray-500';
   const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
   const cardBg = dark ? 'bg-zinc-900/70' : 'bg-white';
-  const quote = useMemo(() => QUEST_QUOTES[Math.floor(Math.random() * QUEST_QUOTES.length)], [quest?.id]);
+  const quote = useMemo(
+    () => QUEST_QUOTE[quest?.id] || QUEST_QUOTES[Math.floor(Math.random() * QUEST_QUOTES.length)],
+    [quest?.id]
+  );
 
   return (
     <div className="sq-anim-pop relative z-10">
-      <div className="flex items-center justify-between px-4 pt-2 pb-3">
+      <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
         <button onClick={onBack}
           className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70`}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
@@ -1312,7 +1344,7 @@ export default function SideQuestsApp() {
       ) : (
       <>
       {/* Header */}
-      <div className={`relative z-10 safe-top px-4 pb-3 transition-colors duration-200`}>
+      <div className={`relative z-10 safe-top px-3 pb-3 transition-colors duration-200`}>
         <div className="flex items-center justify-between pt-2">
           <div className="flex items-center gap-2.5">
             <LogoIcon size={34} dark={dark} />
@@ -1339,10 +1371,10 @@ export default function SideQuestsApp() {
       </div>
 
       {/* Quest List Containers */}
-      <div className="relative z-10 flex-1 scroll-ios px-4 pt-1 pb-6 space-y-5">
+      <div className="relative z-10 flex-1 scroll-ios px-3 pt-1 pb-6 space-y-5">
 
         {/* Daily Progress card */}
-        <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100'} rounded-[16px] px-4 py-3.5 flex items-center justify-between sq-anim-pop`}>
+        <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100'} rounded-[16px] px-4 py-4 flex items-center justify-between sq-anim-pop`}>
           <div>
             <p className={`text-[14px] font-semibold ${txt}`}>Daily Progress</p>
             <p className={`text-[12px] mt-0.5 ${sub}`}>{completedCount} / {quests.length} completed</p>
@@ -1358,18 +1390,18 @@ export default function SideQuestsApp() {
           <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-[#F2F2F7]'} rounded-[14px] overflow-hidden`}>
             {quests.map((quest, i) => (
               <div key={quest.id}>
-                {i > 0 && <div className={`border-t ${sep} ml-14`} />}
+                {i > 0 && <div className={`border-t ${sep} ml-[58px]`} />}
                 <button
                   onClick={() => handleQuestClick(quest)}
-                  className={`w-full flex items-center gap-3 px-3.5 py-3 text-left active:opacity-60 transition-opacity`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-3.5 text-left active:opacity-60 transition-opacity`}
                 >
-                  <div className={`w-[26px] h-[26px] rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-200 ${
+                  <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-200 ${
                     quest.completed
                       ? 'bg-[#34C759] border-[#34C759]'
                       : dark ? 'border-zinc-600' : 'border-gray-300'
                   }`}>
                     {quest.completed && (
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="20 6 9 17 4 12"/>
                       </svg>
                     )}
