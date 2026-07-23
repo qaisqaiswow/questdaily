@@ -324,7 +324,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         rAnkle:   { x: w * 0.59,                    y: h * 0.90 }
       };
 
-      const lockedColor = repPhase === 'seek-reset' ? '#34c759' : '#00f0ff';
+      const lockedColor = '#ffffff'; // Force the skeleton to always be pure white
       
       ctx.lineWidth = 4;
       ctx.strokeStyle = lockedColor;
@@ -730,26 +730,26 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           )}
 
           {phase === 'live' && !uploadedProof && labels?.bodyParts && (
-            <div className="absolute inset-0 pointer-events-none border-[3px] border-dashed border-cyan-500/30 m-4 rounded-xl animate-pulse z-10">
-              <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-cyan-500/40 text-[10px] font-mono tracking-wider text-cyan-400">
+            <div className="absolute inset-0 pointer-events-none border-[3px] border-dashed border-white/30 m-4 rounded-xl animate-pulse z-10">
+              <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-white/40 text-[10px] font-mono tracking-wider text-white">
                 <div className="flex items-center gap-1.5 mb-1 text-white uppercase font-bold text-[11px]">
-                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block" />
+                  <span className="w-2 h-2 rounded-full bg-white animate-ping inline-block" />
                   Biometric Engine Active
                 </div>
                 <div className="text-white/60 text-[9px] mb-0.5">Tracking Matrix Focus Points:</div>
                 <div className="flex flex-wrap gap-1 max-w-[180px] mt-1">
                   {labels.bodyParts.map((part) => (
-                    <span key={part} className="bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-800/60 font-semibold">
+                    <span key={part} className="bg-white/10 text-white px-1.5 py-0.5 rounded border border-white/30 font-semibold">
                       {part}
                     </span>
                   ))}
                 </div>
               </div>
               
-              <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-cyan-400" />
-              <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-cyan-400" />
-              <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-cyan-400" />
-              <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-cyan-400" />
+              <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-white" />
+              <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-white" />
+              <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-white" />
+              <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-white" />
             </div>
           )}
 
