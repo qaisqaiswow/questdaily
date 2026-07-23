@@ -4,37 +4,41 @@ import { pipeline, env } from '@huggingface/transformers';
 // ─── AI SETUP ────────────────────────────────────────────────────────────────
 env.allowLocalModels = false;
 let classifierPromise = null;
-function getClassifier() {
+function getClassifier(onProgress) {
   if (!classifierPromise) {
-    classifierPromise = pipeline('zero-shot-image-classification', 'Xenova/clip-vit-base-patch32');
+    classifierPromise = pipeline(
+      'zero-shot-image-classification',
+      'Xenova/clip-vit-base-patch32',
+      onProgress ? { progress_callback: onProgress } : undefined
+    ).catch(error => {
+      classifierPromise = null;
+      throw error;
+    });
   }
   return classifierPromise;
 }
 
-// Added 'type' and highly tuned strict visual labels for the AI
+// Stricter labels for metrics-focused verification
 const QUEST_LABELS = {
-  // REPS: Kept for live camera counting
-  q1:  { type: 'reps', activity: ['person doing pushups on floor', 'pushup exercise'], label: 'doing pushups' },
-  q2:  { type: 'reps', activity: ['person doing squats exercise', 'squat workout legs bent'], label: 'doing squats' },
-  q4:  { type: 'reps', activity: ['person doing pullups on bar', 'pullup bar exercise'], label: 'doing pullups' },
-  q12: { type: 'reps', activity: ['person doing situps or crunches', 'abdominal exercise on floor'], label: 'doing situps' },
-  q17: { type: 'reps', activity: ['person jumping rope', 'skipping rope exercise'], label: 'jumping rope' },
-  q23: { type: 'reps', activity: ['person doing lunges exercise', 'lunge workout legs split stance'], label: 'doing lunges' },
+  q1:  { type: 'reps', activity: ['person doing pushups on floor', 'pushup exercise'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
+  q2:  { type: 'reps', activity: ['person doing squats exercise', 'squat workout legs bent'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
+  q4:  { type: 'reps', activity: ['person doing pullups on bar', 'pullup bar exercise'], label: 'doing pullups', bodyParts: ['Lats', 'Upper Back', 'Biceps', 'Forearms'] },
+  q12: { type: 'reps', activity: ['person doing situps or crunches', 'abdominal exercise on floor'], label: 'doing situps', bodyParts: ['Abs', 'Obliques', 'Hip Flexors'] },
+  q17: { type: 'reps', activity: ['person jumping rope', 'skipping rope exercise'], label: 'jumping rope', bodyParts: ['Calves', 'Quads', 'Shoulders', 'Cardio'] },
+  q23: { type: 'reps', activity: ['person doing lunges exercise', 'lunge workout legs split stance'], label: 'doing lunges', bodyParts: ['Quads', 'Glutes', 'Hamstrings'] },
 
-  // MAPS: Strict rules to look for GPS app screenshots (Strava, Apple Fitness, etc.)
-  q3:  { type: 'map', activity: ['gps tracking map route screenshot', 'fitness tracker map running route'], label: 'running map screenshot' },
-  q16: { type: 'map', activity: ['gps tracking map route screenshot', 'cycling route map on phone screen'], label: 'cycling map screenshot' },
+  // Stricter telemetry dashboard text verification for workouts
+  q3:  { type: 'map', activity: ['strava running workout map dashboard with duration and speed metrics', 'running pace distance tracking workout summary screen'], label: 'running metrics map' },
+  q16: { type: 'map', activity: ['cycling route ride summary dashboard with speed and time logs', 'bicycle fitness tracking dashboard workout summary'], label: 'cycling metrics map' },
   q5:  { type: 'map', activity: ['gps tracking map route screenshot', 'walking route map tracker'], label: 'walking map screenshot' },
   q22: { type: 'map', activity: ['gps tracking map route screenshot', 'step counter fitness app screenshot'], label: 'step tracking map' },
 
-  // FOOD: Strict rules to look for actual food on plates/bowls
   q9:  { type: 'food', activity: ['healthy food meal salad vegetables on a plate', 'nutritious meal in a bowl'], label: 'plate of healthy food' },
   q19: { type: 'food', activity: ['clean healthy meal on plate', 'plate of vegetables and whole foods'], label: 'plate of clean food' },
   q20: { type: 'food', activity: ['cooked food on a plate', 'homemade meal in a bowl or plate'], label: 'cooked meal' },
   q14: { type: 'food', activity: ['glass of green smoothie', 'blended green juice drink'], label: 'green smoothie' },
   q6:  { type: 'food', activity: ['glass of water', 'reusable water bottle filled'], label: 'water bottle' },
 
-  // STANDARD ACTIONS
   q7:  { type: 'action', activity: ['person meditating cross-legged', 'mindfulness exercise'], label: 'meditating' },
   q8:  { type: 'action', activity: ['person stretching muscles', 'yoga stretch pose'], label: 'stretching' },
   q10: { type: 'action', activity: ['person sleeping in bed', 'person resting in bed eyes closed'], label: 'getting good sleep' },
@@ -47,54 +51,138 @@ const QUEST_LABELS = {
   q25: { type: 'action', activity: ['person in ice bath tub', 'cold plunge tub with ice'], label: 'in a cold plunge' },
 };
 
-// Dynamically generate negative labels so the AI knows exactly what to reject
 const getNegativeLabels = (type) => {
-  // Added "person standing still straight" so the AI actively rejects just standing around
   const base = ['person sitting doing nothing', 'person standing still straight', 'random everyday object'];
-  
-  if (type === 'map') return [...base, 'sweaty selfie face', 'picture of running shoes', 'treadmill machine indoors', 'person running outside'];
+  if (type === 'map') return [...base, 'google maps navigation screen', 'empty city street map with no data', 'world map atlas website', 'sweaty selfie face', 'picture of running shoes', 'treadmill machine indoors'];
   if (type === 'food') return [...base, 'empty plate or bowl', 'restaurant paper menu', 'store product barcode', 'person eating face'];
   return [...base, 'phone or computer screen'];
 };
 
-// ─── QUEST POOL ───────────────────────────────────────────────────────────────
+// ─── QUEST POOL WITH TIMERS ───────────────────────────────────────────────────
 const QUEST_POOL = [
   { id: 'q1',  text: 'Do 20 pushups',                            xp: 50, reps: 20 },
   { id: 'q2',  text: 'Do 30 squats',                             xp: 45, reps: 30 },
-  { id: 'q3',  text: 'Go for a 15-minute run',                   xp: 75 },
+  { id: 'q3',  text: 'Go for a 15-minute run',                   xp: 75, duration: 900 },
   { id: 'q4',  text: 'Do 10 pullups',                            xp: 60, reps: 10 },
-  { id: 'q16', text: 'Do 15 minutes of cycling',                 xp: 55 },
+  { id: 'q16', text: 'Do 15 minutes of cycling',                 xp: 55, duration: 900 },
   { id: 'q17', text: 'Do 50 jumping rope reps',                  xp: 40, reps: 50 },
   { id: 'q18', text: 'Take a cold shower',                       xp: 50 },
   { id: 'q19', text: 'Eat no sugar today',                       xp: 65 },
   { id: 'q20', text: 'Cook a meal from scratch',                 xp: 45 },
-  { id: 'q21', text: 'Do 10 minutes of deep breathing',          xp: 30 },
+  { id: 'q21', text: 'Do 10 minutes of deep breathing',          xp: 30, duration: 600 },
   { id: 'q22', text: 'Take 10,000 steps',                        xp: 70 },
   { id: 'q23', text: 'Do 3 sets of lunges',                      xp: 40, reps: 30 },
   { id: 'q24', text: 'Go to bed before 11pm',                    xp: 35 },
-  { id: 'q25', text: 'Do a 5-minute ice bath or cold plunge',    xp: 80 },
-  { id: 'q5',  text: 'Walk outside for 20 minutes',              xp: 35 },
+  { id: 'q25', text: 'Do a 5-minute ice bath or cold plunge',    xp: 80, duration: 300 },
+  { id: 'q5',  text: 'Walk outside for 20 minutes',              xp: 35, duration: 1200 },
   { id: 'q6',  text: 'Drink 2 liters of water today',            xp: 25 },
-  { id: 'q7',  text: 'Meditate for 10 minutes',                  xp: 45 },
-  { id: 'q8',  text: 'Stretch for 10 minutes',                   xp: 35 },
+  { id: 'q7',  text: 'Meditate for 10 minutes',                  xp: 45, duration: 600 },
+  { id: 'q8',  text: 'Stretch for 10 minutes',                   xp: 35, duration: 600 },
   { id: 'q9',  text: 'Eat a healthy meal',                       xp: 40 },
   { id: 'q10', text: 'Get 8 hours of sleep',                     xp: 55 },
-  { id: 'q11', text: 'Do 3 minutes of jumping jacks',            xp: 30 },
+  { id: 'q11', text: 'Do 3 minutes of jumping jacks',            xp: 30, duration: 180 },
   { id: 'q12', text: 'Do 20 situps',                             xp: 40, reps: 20 },
   { id: 'q13', text: 'Write in your journal',                    xp: 20 },
   { id: 'q14', text: 'Drink a green smoothie',                   xp: 30 },
-  { id: 'q15', text: 'Hold a plank for 60 seconds',              xp: 50 },
+  { id: 'q15', text: 'Hold a plank for 60 seconds',              xp: 50, duration: 60 },
 ];
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_PASSES = 2;
-
-// Increased these thresholds so it requires a clearer visual match
 const PASS_THRESHOLD  = 0.35; 
-const REP_THRESHOLD   = 0.28;
-const RESET_THRESHOLD = 0.15;
+const REP_SCAN_INTERVAL_MS = 200; 
+const REP_MIN_DURATION_MS = 500;
+const REP_FORM_CONFIDENCE = 0.18;
 
-// ─── ICONS (inline SVG, no deps) ─────────────────────────────────────────────
+const REP_PROFILES = {
+  q1: {
+    target: ['person at the bottom of a pushup with elbows bent', 'person lowering chest close to floor in a pushup'],
+    reset: ['person at the top of a pushup with arms straight', 'person holding a straight-arm plank after a pushup'],
+    cue: 'Lower your chest down, then push completely back up.',
+  },
+  q2: {
+    target: ['person at the bottom of a deep squat with knees bent', 'person squatting with thighs near parallel to floor'],
+    reset: ['person standing tall after a squat with legs straight', 'person at the top of a squat standing upright'],
+    cue: 'Drop into a deep squat, then return to a full upright stand.',
+  },
+  q4: {
+    target: ['person at the top of a pullup with chin near bar', 'person pulling body up on a pullup bar'],
+    reset: ['person hanging from a pullup bar with arms straight', 'person at the bottom of a pullup with arms extended'],
+    cue: 'Pull up clear to the bar, then drop back to straight arms.',
+  },
+  q12: {
+    target: ['person at the top of a situp with torso raised', 'person crunching with shoulders lifted from floor'],
+    reset: ['person lying back down after a situp', 'person on back with torso extended on floor'],
+    cue: 'Crunch your torso all the way up, then lie completely flat.',
+  },
+  q17: {
+    target: ['person jumping in the air while skipping rope', 'person airborne during a jump rope exercise'],
+    reset: ['person landing with both feet while jumping rope', 'person standing on the ground with a jump rope'],
+    cue: 'Keep continuous active jumps inside the camera frame.',
+  },
+  q23: {
+    target: ['person at the bottom of a lunge with knees bent', 'person in a deep split-stance lunge'],
+    reset: ['person standing upright after a lunge', 'person at the top of a lunge with legs straight'],
+    cue: 'Step deep down into the lunge stance, then rise all the way up.',
+  },
+};
+
+function getMaxLabelScore(results, candidates) {
+  if (!candidates?.length) return 0;
+  return results.reduce(
+    (best, result) => (candidates.includes(result.label) ? Math.max(best, result.score) : best),
+    0
+  );
+}
+
+function createRepTracker() {
+  return {
+    phase: 'seek-target',
+    reps: 0,
+    smoothedTarget: 0,
+    smoothedReset: 0,
+    lastSampleAt: 0,
+    lastRepAt: 0,
+  };
+}
+
+// Fixed core state machine to prevent sticking loops
+function advanceRepTracker(tracker, { targetScore, resetScore, now }) {
+  const alpha = 0.6; // High responsiveness factor
+  tracker.lastSampleAt = now;
+  tracker.smoothedTarget = tracker.smoothedTarget * (1 - alpha) + targetScore * alpha;
+  tracker.smoothedReset = tracker.smoothedReset * (1 - alpha) + resetScore * alpha;
+
+  const formScore = Math.max(tracker.smoothedTarget, tracker.smoothedReset);
+  let counted = false;
+  let phaseChanged = false;
+
+  if (tracker.phase === 'seek-target') {
+    if (tracker.smoothedTarget >= REP_FORM_CONFIDENCE && tracker.smoothedTarget > tracker.smoothedReset + 0.02) {
+      tracker.phase = 'seek-reset';
+      phaseChanged = true;
+    }
+  } else if (tracker.phase === 'seek-reset') {
+    if (tracker.smoothedReset >= REP_FORM_CONFIDENCE && tracker.smoothedReset > tracker.smoothedTarget + 0.02) {
+      const isNewRep = now - tracker.lastRepAt >= REP_MIN_DURATION_MS;
+      if (isNewRep) {
+        tracker.reps += 1;
+        tracker.lastRepAt = now;
+        tracker.phase = 'seek-target';
+        counted = true;
+        phaseChanged = true;
+      }
+    }
+  }
+
+  return {
+    counted,
+    phaseChanged,
+    phase: tracker.phase,
+    confidence: formScore,
+  };
+}
+
 const LogoIcon = ({ size = 34, dark }) => (
   <img src="/logo-transparent.png" alt="Side Quests" width={size} height={size}
     style={{ filter: dark ? 'invert(0)' : 'invert(1)', opacity: 0.9 }} />
@@ -123,85 +211,184 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const streamRef    = useRef(null);
   const scanTimerRef = useRef(null);
   const isScanningRef = useRef(false);
+  const scanRunRef = useRef(0);
+  const cameraSessionRef = useRef(0);
+  const lastVideoTimeRef = useRef(-1);
+  const confirmedRef = useRef(false);
+  const passStreakRef = useRef(0);
+  const repTrackerRef = useRef(createRepTracker());
 
   const [phase,         setPhase]         = useState('starting');
   const [camError,      setCamError]      = useState(null);
   const [facingMode,    setFacingMode]    = useState('environment');
+  const [cameraVersion, setCameraVersion] = useState(0);
   const [modelReady,    setModelReady]    = useState(false);
   const [modelProgress, setModelProgress] = useState(null);
+  const [modelError,    setModelError]    = useState(null);
+  const [modelVersion,  setModelVersion]  = useState(0);
+  const [notice,        setNotice]        = useState(null);
   const [scanning,      setScanning]      = useState(false);
+  const [uploading,     setUploading]     = useState(false);
   const [liveScore,     setLiveScore]     = useState(0);
   const [passStreak,    setPassStreak]    = useState(0);
   const [repsDone,      setRepsDone]      = useState(0);
+  const [repPhase,      setRepPhase]      = useState('seek-target');
   const [confirmed,     setConfirmed]     = useState(false);
   const [lastLabel,     setLastLabel]     = useState('');
+  const [uploadedProof, setUploadedProof] = useState(null);
+
+  // Active Objective Session Timer states
+  const [secondsLeft, setSecondsLeft] = useState(quest.duration || 0);
+  const [timerRunning, setTimerRunning] = useState(false);
 
   const labels = QUEST_LABELS[quest.id];
   const questType = labels?.type || 'action';
-  // Memoized so identity stays stable across re-renders of the same quest —
-  // otherwise every setState in the scan loop (setLiveScore, setScanning, etc.)
-  // creates new array refs here, which re-triggers the scan effect below and
-  // bypasses its setTimeout throttle, hammering the classifier with rapid-fire
-  // frames and making a single noisy read (e.g. while standing still) far more
-  // likely to transiently cross REP_THRESHOLD.
+  const repProfile = questType === 'reps' ? REP_PROFILES[quest.id] : null;
+
   const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
-  const allLabels = useMemo(
-    () => (labels ? [...labels.activity, ...activeNegatives] : []),
-    [labels, activeNegatives]
+  const classifierLabels = useMemo(
+    () => [...new Set([
+      ...(labels?.activity ?? []),
+      ...(repProfile?.target ?? []),
+      ...(repProfile?.reset ?? []),
+      ...activeNegatives,
+    ])],
+    [labels, repProfile, activeNegatives]
   );
 
-  // Dynamic UI Instructions based on Quest Type
+  // Quest Subtext Details
   let instructionText = `Show the camera you're ${labels?.label ?? 'doing it'}…`;
   let uiSubtext = quest.text;
 
   if (questType === 'map') {
-      instructionText = "Please upload a screenshot of your GPS/map route.";
-      uiSubtext = "Requires a screenshot from a tracking app (e.g. Strava) showing time & distance.";
+      instructionText = "Upload a metric summary screenshot (Strava, Nike, Garmin etc.)";
+      uiSubtext = "Must clearly state distance metrics & active time duration summary logs.";
   } else if (questType === 'food') {
       instructionText = "Take a clear picture of the food on your plate.";
       uiSubtext = "Must be a real photo of a prepared meal or plate.";
   } else if (questType === 'reps') {
-      instructionText = `Show the camera your full body to count ${quest.reps} reps.`;
-      uiSubtext = "Keep your entire body in the frame while moving.";
+      instructionText = `Position the camera for full-body tracking: ${quest.reps} reps.`;
+      uiSubtext = "Keep your entire working frame visible to log movements.";
   }
 
+  // Active Modal Task Timer Logic
+  useEffect(() => {
+    let intervalId = null;
+    if (timerRunning && secondsLeft > 0) {
+      intervalId = setInterval(() => {
+        setSecondsLeft(prev => {
+          if (prev <= 1) {
+            setTimerRunning(false);
+            // If it's a duration timer task without camera verification requirement, mark verified
+            if (!quest.reps && questType === 'action') {
+              setConfirmed(true);
+              confirmedRef.current = true;
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(intervalId);
+  }, [timerRunning, secondsLeft, questType, quest.reps]);
+
+  const formatTimerString = (secs) => {
+    const mins = Math.floor(secs / 60);
+    const remainingSecs = secs % 60;
+    return `${String(mins).padStart(2, '0')}:${String(remainingSecs).padStart(2, '0')}`;
+  };
+
+  const stopCamera = useCallback(() => {
+    const stream = streamRef.current;
+    streamRef.current = null;
+    stream?.getTracks().forEach(track => track.stop());
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
+
   const startCamera = useCallback(async (mode) => {
-    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    const session = ++cameraSessionRef.current;
+    stopCamera();
+    setCamError(null);
+    setNotice(null);
+    setUploadedProof(null);
+    setPhase('starting');
+
     const attempts = [
-      { video: { facingMode: { ideal: mode }, width: { ideal: 1280 }, height: { ideal: 720 } } },
-      { video: { facingMode: { ideal: mode } } },
-      { video: true },
+      { video: { facingMode: { ideal: mode }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+      { video: { facingMode: { ideal: mode } }, audio: false },
+      { video: true, audio: false },
     ];
-    for (const c of attempts) {
+
+    for (const constraints of attempts) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia(c);
-        streamRef.current = stream;
-        await new Promise(r => setTimeout(r, 60));
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(() => {});
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (session !== cameraSessionRef.current) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
         }
-        setPhase('live'); setCamError(null); return;
+
+        streamRef.current = stream;
+        const video = videoRef.current;
+        if (!video) {
+          stopCamera();
+          return;
+        }
+
+        video.srcObject = stream;
+        await video.play();
+        if (session !== cameraSessionRef.current) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+
+        stream.getVideoTracks().forEach(track => {
+          track.addEventListener('ended', () => {
+            if (session === cameraSessionRef.current) {
+              setCamError('unavailable');
+              setPhase('error');
+            }
+          });
+        });
+
+        setPhase('live');
+        return;
       } catch (err) {
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          setCamError('permission'); setPhase('error'); return;
+        if (session !== cameraSessionRef.current) return;
+        stopCamera();
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError' || err.name === 'SecurityError') {
+          setCamError('permission');
+          setPhase('error');
+          return;
         }
       }
     }
-    setCamError('unavailable'); setPhase('error');
-  }, []);
+
+    if (session === cameraSessionRef.current) {
+      setCamError('unavailable');
+      setPhase('error');
+    }
+  }, [stopCamera]);
 
   useEffect(() => {
-    if (!navigator.mediaDevices?.getUserMedia) { setCamError('unsupported'); setPhase('error'); return; }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCamError('unsupported');
+      setPhase('error');
+      return undefined;
+    }
+
     startCamera(facingMode);
-    return () => { if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop()); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [facingMode]);
+    return () => {
+      cameraSessionRef.current += 1;
+      stopCamera();
+    };
+  }, [facingMode, cameraVersion, startCamera, stopCamera]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
+        setModelError(null);
         await getClassifier(evt => {
           if (cancelled) return;
           if (evt.status === 'progress' && evt.total)
@@ -210,136 +397,208 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         if (!cancelled) { setModelReady(true); setModelProgress(null); }
       } catch (err) { 
         console.error("Model load error:", err);
-        if (!cancelled) setModelReady(true); 
+        if (!cancelled) {
+          setModelError('The AI model could not be loaded. Check your connection and try again.');
+          setModelProgress(null);
+        }
       }
     })();
     return () => { cancelled = true; };
+  }, [modelVersion]);
+
+  const resetRepTracking = useCallback(() => {
+    repTrackerRef.current = createRepTracker();
+    setRepsDone(0);
+    setRepPhase('seek-target');
   }, []);
 
-  const passStreakRef = useRef(0);
-  const repsRef = useRef(0);
-  const activeRepRef = useRef(false);
-
   useEffect(() => {
-    if (phase !== 'live' || !modelReady || confirmed || !labels) return;
+    if (phase !== 'live' || !modelReady || confirmed || uploading || !labels || !classifierLabels.length) return undefined;
+
+    const runId = ++scanRunRef.current;
+    let disposed = false;
+    let consecutiveErrors = 0;
+    const isCurrentRun = () => !disposed && runId === scanRunRef.current && !confirmedRef.current;
+    const scheduleNext = (delay) => {
+      if (!isCurrentRun()) return;
+      clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = window.setTimeout(scanLoop, delay);
+    };
 
     const scanLoop = async () => {
       const video = videoRef.current, canvas = canvasRef.current;
       
-      // Ensure video is actively playing and has dimensions before grabbing
-      if (!video || !canvas || video.readyState < 2 || video.videoWidth === 0) {
-        scanTimerRef.current = setTimeout(scanLoop, 500);
+      if (!isCurrentRun()) return;
+      if (document.visibilityState === 'hidden') {
+        scheduleNext(1000);
         return;
       }
-
-      if (isScanningRef.current) {
-         scanTimerRef.current = setTimeout(scanLoop, 200);
-         return;
+      if (!video || !canvas || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) {
+        scheduleNext(250);
+        return;
       }
-
+      if (video.currentTime === lastVideoTimeRef.current || isScanningRef.current) {
+        scheduleNext(80);
+        return;
+      }
+      lastVideoTimeRef.current = video.currentTime;
       isScanningRef.current = true;
       setScanning(true);
 
-      // Downscale specifically for CLIP inference (224x224) to prevent freezing
-      canvas.width = 224; 
-      canvas.height = 224;
-      const size = Math.min(video.videoWidth, video.videoHeight);
-      const startX = (video.videoWidth - size) / 2;
-      const startY = (video.videoHeight - size) / 2;
-      
-      canvas.getContext('2d').drawImage(video, startX, startY, size, size, 0, 0, 224, 224);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-
       try {
+        if (canvas.width !== 224 || canvas.height !== 224) {
+          canvas.width = 224;
+          canvas.height = 224;
+        }
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Canvas 2D context unavailable');
+        const scale = Math.min(224 / video.videoWidth, 224 / video.videoHeight);
+        const width = video.videoWidth * scale;
+        const height = video.videoHeight * scale;
+        context.fillStyle = '#000';
+        context.fillRect(0, 0, 224, 224);
+        context.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, (224 - width) / 2, (224 - height) / 2, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.55);
+
         const classifier = await getClassifier();
-        const results = await classifier(dataUrl, allLabels);
-        const actScore = results.filter(r => labels.activity.includes(r.label)).reduce((s, r) => s + r.score, 0);
-        const negScore = results.filter(r => activeNegatives.includes(r.label)).reduce((s, r) => s + r.score, 0);
-        
-        setLiveScore(Math.round(actScore * 100)); 
+        const results = await classifier(dataUrl, classifierLabels);
+        if (!isCurrentRun()) return;
+        consecutiveErrors = 0;
+
+        const actScore = getMaxLabelScore(results, labels.activity);
+        const negScore = getMaxLabelScore(results, activeNegatives);
+
         setLastLabel(results[0]?.label ?? '');
 
-        if (quest.reps) {
-          // Stateful rep counting
-          if (actScore > REP_THRESHOLD && actScore > negScore) {
-            if (!activeRepRef.current) {
-              activeRepRef.current = true;
-              repsRef.current += 1;
-              setRepsDone(repsRef.current);
+        if (quest.reps && repProfile) {
+          const update = advanceRepTracker(repTrackerRef.current, {
+            targetScore: getMaxLabelScore(results, repProfile.target),
+            resetScore: getMaxLabelScore(results, repProfile.reset),
+            now: performance.now(),
+          });
+          setLiveScore(Math.round(update.confidence * 100));
+          if (update.phaseChanged) setRepPhase(update.phase);
+          if (update.counted) {
+            setRepsDone(repTrackerRef.current.reps);
+            if (repTrackerRef.current.reps >= quest.reps) {
+              confirmedRef.current = true;
+              setConfirmed(true);
             }
-          } else if (actScore < RESET_THRESHOLD) {
-            activeRepRef.current = false; // Reset to allow next rep to be counted
           }
-          if (repsRef.current >= quest.reps) setConfirmed(true);
         } else {
-          // Single action verification
+          setLiveScore(Math.round(actScore * 100));
           const passed = actScore > negScore && actScore >= PASS_THRESHOLD;
-          if (passed) { passStreakRef.current += 1; } else { passStreakRef.current = 0; }
+          passStreakRef.current = passed ? passStreakRef.current + 1 : 0;
           setPassStreak(passStreakRef.current);
-          if (passStreakRef.current >= REQUIRED_PASSES) setConfirmed(true);
+          if (passStreakRef.current >= REQUIRED_PASSES) {
+            confirmedRef.current = true;
+            setConfirmed(true);
+          }
         }
       } catch (err) { 
         console.error("AI Inference Error:", err);
+        consecutiveErrors += 1;
+        if (consecutiveErrors >= 3 && isCurrentRun()) {
+          setModelError('AI analysis is temporarily unavailable. Try closing and reopening the camera.');
+        }
       } finally { 
-        setScanning(false); 
         isScanningRef.current = false;
-        
-        // Loop slightly faster for physical reps to catch quick movements
-        if (!confirmed) {
-            scanTimerRef.current = setTimeout(scanLoop, quest.reps ? 500 : 1500);
+        if (isCurrentRun()) {
+          setScanning(false);
+          scheduleNext(consecutiveErrors ? 1000 : (quest.reps ? REP_SCAN_INTERVAL_MS : 1200));
         }
       }
     };
 
     scanLoop();
-    return () => clearTimeout(scanTimerRef.current);
-  }, [phase, modelReady, confirmed, labels, allLabels, quest.reps, activeNegatives]);
+    return () => {
+      disposed = true;
+      scanRunRef.current += 1;
+      clearTimeout(scanTimerRef.current);
+    };
+  }, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, repProfile, activeNegatives]);
+
+  const retryCamera = () => {
+    scanRunRef.current += 1;
+    lastVideoTimeRef.current = -1;
+    setCamError(null);
+    setPhase('starting');
+    setCameraVersion(version => version + 1);
+  };
+
+  const retryModel = () => {
+    setModelReady(false);
+    setModelProgress(null);
+    setModelError(null);
+    setModelVersion(version => version + 1);
+  };
 
   const flipCamera = () => {
     clearTimeout(scanTimerRef.current);
+    scanRunRef.current += 1;
     setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(0);
-    passStreakRef.current = 0; repsRef.current = 0; activeRepRef.current = false; 
+    passStreakRef.current = 0;
+    confirmedRef.current = false;
+    lastVideoTimeRef.current = -1;
+    resetRepTracking();
     setConfirmed(false);
     setFacingMode(m => m === 'environment' ? 'user' : 'environment');
   };
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0]; if (!file) return;
+    if (quest.reps) {
+      setNotice('Rep quests need live camera tracking; a single photo cannot verify a full set.');
+      e.target.value = '';
+      return;
+    }
     const reader = new FileReader();
     reader.onload = async (ev) => {
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      let accepted = false;
+      scanRunRef.current += 1;
+      setUploading(true);
+      stopCamera();
       clearTimeout(scanTimerRef.current);
       const dataUrl = ev.target.result;
+      setUploadedProof(dataUrl);
       if (!labels) { onConfirm(dataUrl); return; }
       setPhase('live'); setScanning(true);
       try {
         const classifier = await getClassifier();
-        const results = await classifier(dataUrl, allLabels);
-        const actScore = results.filter(r => labels.activity.includes(r.label)).reduce((s, r) => s + r.score, 0);
-        const negScore = results.filter(r => activeNegatives.includes(r.label)).reduce((s, r) => s + r.score, 0);
+        const results = await classifier(dataUrl, classifierLabels);
+        const actScore = getMaxLabelScore(results, labels.activity);
+        const negScore = getMaxLabelScore(results, activeNegatives);
         setLiveScore(Math.round(actScore * 100)); setLastLabel(results[0]?.label ?? '');
         
-        // Slightly lower threshold for uploaded screenshots to ensure maps/photos pass easily if valid
-        if (actScore > negScore && actScore >= (PASS_THRESHOLD - 0.05)) {
-          if (quest.reps) {
-              setRepsDone(quest.reps); // Auto pass if picture proves it
-          } else {
-              setPassStreak(REQUIRED_PASSES);
-          }
+        // Strict mapping check logic
+        if (actScore > negScore && actScore >= PASS_THRESHOLD) {
+          setPassStreak(REQUIRED_PASSES);
+          confirmedRef.current = true;
+          accepted = true;
           setConfirmed(true);
         } else { 
           setPassStreak(0); 
+          setNotice("Verification failed. Please make sure you upload a clear activity summary log showing distance and elapsed time metrics.");
         }
       } catch (err) { 
         console.error("File upload AI error:", err);
       } finally { 
         setScanning(false); 
+        setUploading(false);
+        if (!accepted) {
+          setUploadedProof(null);
+          retryCamera();
+        }
       }
     };
     reader.readAsDataURL(file);
   };
 
   const captureAndConfirm = () => {
+    if (uploadedProof) {
+      onConfirm(uploadedProof);
+      return;
+    }
     const video = videoRef.current, canvas = canvasRef.current;
     if (!video || !canvas) return;
     canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
@@ -347,7 +606,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     onConfirm(canvas.toDataURL('image/jpeg', 0.82));
   };
 
-  const meterColor = liveScore >= (quest.reps ? REP_THRESHOLD : PASS_THRESHOLD) * 100 ? 'bg-green-500' : liveScore >= 15 ? 'bg-yellow-400' : 'bg-red-500';
+  const meterColor = liveScore >= (quest.reps ? REP_FORM_CONFIDENCE : PASS_THRESHOLD) * 100 ? 'bg-green-500' : liveScore >= 15 ? 'bg-yellow-400' : 'bg-red-500';
 
   const bg     = dark ? 'bg-zinc-900'  : 'bg-white';
   const border = dark ? 'border-zinc-700' : 'border-gray-200';
@@ -377,7 +636,38 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         {/* Viewfinder */}
         <div className="relative bg-black" style={{ aspectRatio: '4/3' }}>
           <video ref={videoRef} autoPlay playsInline muted
-            className={`w-full h-full object-cover ${phase === 'live' ? 'opacity-100' : 'opacity-0'}`} />
+             className={`w-full h-full object-cover ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
+          
+          {/* Real-time Body Tracking GUI Overlay */}
+          {phase === 'live' && !uploadedProof && labels?.bodyParts && (
+            <div className="absolute inset-0 pointer-events-none border-[3px] border-dashed border-cyan-500/30 m-4 rounded-xl animate-pulse">
+              {/* Target HUD Tracking Box */}
+              <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-cyan-500/40 text-[10px] font-mono tracking-wider text-cyan-400">
+                <div className="flex items-center gap-1.5 mb-1 text-white uppercase font-bold text-[11px]">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block" />
+                  Biometric Engine Active
+                </div>
+                <div className="text-white/60 text-[9px] mb-0.5">Tracking Matrix Focus Points:</div>
+                <div className="flex flex-wrap gap-1 max-w-[180px] mt-1">
+                  {labels.bodyParts.map((part) => (
+                    <span key={part} className="bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-800/60 font-semibold">
+                      {part}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Cyberpunk corner brackets */}
+              <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-cyan-400" />
+              <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-cyan-400" />
+              <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-cyan-400" />
+              <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-cyan-400" />
+            </div>
+          )}
+
+          {uploadedProof && (
+            <img src={uploadedProof} alt="Uploaded verification" className="absolute inset-0 w-full h-full object-cover" />
+          )}
 
           {phase === 'starting' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
@@ -394,21 +684,28 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
               <p className="text-white/60 text-xs leading-relaxed">
                 {camError === 'permission'
                   ? 'Open this app in a new tab and allow camera access when prompted.'
-                  : 'Upload a photo instead.'}
+                  : quest.reps
+                    ? 'This quest needs a live camera. Check your camera and try again.'
+                    : 'Upload a photo instead.'}
               </p>
-              {camError === 'permission' && (
-                <a href={window.location.href} target="_blank" rel="noreferrer"
-                  className="mt-1 bg-white/20 text-white text-xs font-medium px-4 py-2 rounded-full">
-                  Open in New Tab ↗
-                </a>
-              )}
+              <button onClick={retryCamera}
+                className="mt-1 bg-white/20 text-white text-xs font-medium px-4 py-2 rounded-full">
+                Try Camera Again
+              </button>
+            </div>
+          )}
+
+          {(modelError || notice) && (
+            <div className="absolute inset-x-3 top-3 rounded-xl bg-red-950/90 border border-red-700 px-3 py-2 text-center shadow-lg z-10">
+              <p className="text-xs leading-relaxed text-white">{modelError || notice}</p>
+              <button onClick={() => setNotice(null)} className="text-[10px] text-white/50 block w-full mt-1 underline">Dismiss</button>
             </div>
           )}
 
           {/* AI overlay */}
           {phase === 'live' && modelReady && (
             <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pt-8"
-              style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)' }}>
+              style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)' }}>
 
               {confirmed ? (
                 <div className="flex items-center gap-2">
@@ -424,10 +721,9 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                       {scanning ? 'Scanning…' : `${liveScore}% confidence`}
                     </p>
                     
-                    {/* Progress tracking: Reps vs Standard */}
                     <div className="flex items-center gap-1.5">
                       {quest.reps ? (
-                        <p className="text-white text-xs font-bold tracking-wide">
+                        <p className="text-white text-xs font-bold tracking-wide bg-green-600/80 px-2 py-0.5 rounded-md">
                             {repsDone} / {quest.reps} REPS
                         </p>
                       ) : (
@@ -438,7 +734,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                     </div>
                   </div>
                   
-                  {/* Progress Bar */}
                   <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
                     {quest.reps ? (
                         <div className={`h-full bg-green-400 transition-all duration-300 ease-out rounded-full`}
@@ -448,25 +743,55 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                           style={{ width: `${liveScore}%` }} />
                     )}
                   </div>
+                  {quest.reps && !confirmed && (
+                    <p className="text-white/80 font-medium text-[11px] mt-2 bg-black/40 p-1.5 rounded border border-white/10">
+                      {repPhase === 'seek-target'
+                        ? `Target: ${repProfile?.cue}`
+                        : 'Position Locked! Return to complete this rep.'}
+                    </p>
+                  )}
                   {lastLabel && <p className="text-white/40 text-[10px] mt-1 truncate">{lastLabel}</p>}
                 </>
               )}
             </div>
           )}
 
-          {phase === 'live' && !modelReady && modelProgress !== null && (
+          {phase === 'live' && !modelReady && !modelError && (
             <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pt-8"
               style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)' }}>
-              <p className="text-white/60 text-xs mb-1">Loading AI model… {modelProgress}%</p>
+              <p className="text-white/60 text-xs mb-1">Loading AI model… {modelProgress ?? 0}%</p>
               <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
                 <div className="h-full bg-[#007AFF] transition-all duration-300 rounded-full"
-                  style={{ width: `${modelProgress}%` }} />
+                  style={{ width: `${modelProgress ?? 0}%` }} />
               </div>
             </div>
           )}
 
           <canvas ref={canvasRef} className="hidden" />
         </div>
+
+        {/* Objective Session Timer Panel View Feature */}
+        {quest.duration && (
+          <div className={`px-4 py-3 mx-4 mt-3 rounded-xl border flex items-center justify-between ${dark ? 'bg-zinc-800/50 border-zinc-700' : 'bg-gray-50 border-gray-200'}`}>
+            <div className="flex flex-col">
+              <span className={`text-[11px] font-bold uppercase tracking-wider ${dark ? 'text-zinc-400' : 'text-gray-500'}`}>Objective Duration</span>
+              <span className={`text-xl font-mono font-bold ${txt}`}>{formatTimerString(secondsLeft)}</span>
+            </div>
+            <button
+              onClick={() => setTimerRunning(!timerRunning)}
+              disabled={secondsLeft === 0}
+              className={`px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
+                secondsLeft === 0 
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : timerRunning 
+                    ? 'bg-red-500 text-white active:bg-red-600' 
+                    : 'bg-green-500 text-white active:bg-green-600'
+              }`}
+            >
+              {secondsLeft === 0 ? 'Completed' : timerRunning ? 'Pause Activity' : 'Start Timer'}
+            </button>
+          </div>
+        )}
 
         {/* Controls */}
         <div className="px-4 pt-4 pb-2 space-y-3">
@@ -486,18 +811,20 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
               <div className="flex gap-2">
                 <button onClick={flipCamera}
-                  className={`flex-1 py-3 rounded-[14px] text-sm font-medium ${pill} ${sub} active:opacity-70`}>
+                  className={`${quest.reps ? 'w-full' : 'flex-1'} py-3 rounded-[14px] text-sm font-medium ${pill} ${sub} active:opacity-70`}>
                   Flip Camera
                 </button>
+                {!quest.reps && (
                 <label className={`flex-1 py-3 rounded-[14px] text-sm font-medium ${pill} ${sub} text-center cursor-pointer active:opacity-70 ${questType === 'map' ? 'ring-2 ring-[#007AFF]' : ''}`}>
                   Upload Photo
                   <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
                 </label>
+                )}
               </div>
             </>
           )}
 
-          {(phase === 'error' || phase === 'starting') && (
+          {(phase === 'error' || phase === 'starting') && !quest.reps && (
             <label className={`flex items-center justify-center w-full py-4 rounded-[14px] text-sm font-medium ${pill} ${sub} cursor-pointer`}>
               Upload a Photo
               <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
@@ -511,7 +838,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function SideQuestsApp() {
-  // Theme
   const [dark, setDark] = useState(() => {
     const saved = localStorage.getItem('sq_dark');
     if (saved !== null) return saved === 'true';
@@ -523,7 +849,6 @@ export default function SideQuestsApp() {
     localStorage.setItem('sq_dark', dark);
   }, [dark]);
 
-  // State
   const [level,     setLevel]     = useState(() => parseInt(localStorage.getItem('sq_level'))    || 1);
   const [xp,        setXp]        = useState(() => parseInt(localStorage.getItem('sq_xp'))       || 0);
   const [quests,    setQuests]    = useState(() => {
@@ -616,14 +941,12 @@ export default function SideQuestsApp() {
     <div className={`${bg} min-h-screen flex flex-col items-center transition-colors duration-200`}>
       <div className="w-full max-w-[430px] flex flex-col min-h-screen">
 
-      {/* Camera modal */}
       {proofModal && (
         <CameraModal quest={proofModal} dark={dark}
           onConfirm={img => handleProofConfirm(proofModal.id, img)}
           onCancel={() => setProofModal(null)} />
       )}
 
-      {/* Proof lightbox */}
       {viewingProof && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
@@ -635,19 +958,16 @@ export default function SideQuestsApp() {
       {/* Header */}
       <div className={`${cardBg} safe-top px-4 pb-3 border-b ${sep} transition-colors duration-200`}>
         <div className="flex items-center justify-between pt-2">
-          {/* Logo + Title */}
           <div className="flex items-center gap-2.5">
             <LogoIcon size={34} dark={dark} />
             <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>Side Quests</h1>
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Timer pill */}
             <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${dark ? 'bg-zinc-800' : 'bg-gray-100'}`}>
               <span className="text-[10px]">⏱</span>
               <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
             </div>
-            {/* Theme toggle */}
             <button onClick={() => setDark(d => !d)}
               className={`w-8 h-8 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
               {dark ? <SunIcon /> : <MoonIcon />}
@@ -655,7 +975,7 @@ export default function SideQuestsApp() {
           </div>
         </div>
 
-        {/* XP row */}
+        {/* XP Progress Bar */}
         <div className="mt-3">
           <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-1.5">
@@ -670,10 +990,8 @@ export default function SideQuestsApp() {
         </div>
       </div>
 
-      {/* Quest List */}
+      {/* Quest List Containers */}
       <div className="flex-1 scroll-ios px-4 pt-4 pb-6 space-y-5">
-
-        {/* Section */}
         <div>
           <p className={`text-[11px] font-semibold uppercase tracking-widest ${secLabel} mb-1.5 px-1`}>
             Today's Objectives
@@ -687,7 +1005,6 @@ export default function SideQuestsApp() {
                   onClick={() => handleQuestClick(quest)}
                   className={`w-full flex items-center gap-3 px-3.5 py-3 text-left active:opacity-60 transition-opacity`}
                 >
-                  {/* Check circle */}
                   <div className={`w-[26px] h-[26px] rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-200 ${
                     quest.completed
                       ? 'bg-[#34C759] border-[#34C759]'
@@ -700,16 +1017,13 @@ export default function SideQuestsApp() {
                     )}
                   </div>
 
-                  {/* Text */}
                   <span className={`flex-1 text-[15px] font-normal leading-snug transition-colors ${
                     quest.completed ? (dark ? 'text-zinc-600 line-through' : 'text-gray-400 line-through') : txt
                   }`}>
                     {quest.text}
                   </span>
 
-                  {/* Right side */}
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {/* Proof thumb */}
                     {quest.completed && proofImages[quest.id] && (
                       <button
                         onClick={e => { e.stopPropagation(); setViewingProof(proofImages[quest.id]); }}
@@ -718,7 +1032,6 @@ export default function SideQuestsApp() {
                       </button>
                     )}
 
-                    {/* XP */}
                     <span className={`text-xs font-semibold ${
                       quest.completed
                         ? 'text-[#34C759]'
@@ -727,7 +1040,6 @@ export default function SideQuestsApp() {
                       +{quest.xp}
                     </span>
 
-                    {/* Chevron or camera */}
                     {quest.completed ? (
                       <span className={`text-[10px] ${dark ? 'text-zinc-600' : 'text-gray-300'}`}>XP</span>
                     ) : (
@@ -744,7 +1056,6 @@ export default function SideQuestsApp() {
           </div>
         </div>
 
-        {/* All done */}
         {allDone && (
           <div className={`${cardBg} rounded-[16px] p-5 text-center`}>
             <p className="text-2xl mb-2">🏆</p>
@@ -753,7 +1064,6 @@ export default function SideQuestsApp() {
           </div>
         )}
 
-        {/* AI note */}
         {quests.length > 0 && (
           <p className={`text-xs text-center ${secLabel} px-4`}>
             All quests verified by on-device AI · no data leaves your phone
@@ -761,7 +1071,6 @@ export default function SideQuestsApp() {
         )}
       </div>
 
-      {/* Safe area bottom spacer */}
       <div className="safe-bottom" />
       </div>
     </div>
