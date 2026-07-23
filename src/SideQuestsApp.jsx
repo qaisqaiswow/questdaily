@@ -31,14 +31,14 @@ function getClassifier(onProgress) {
   return classifierPromise;
 }
 
-// ─── UPGRADED LABEL ENGINEERING (PROMPT ENSEMBLING) ──────────────────────────
+// ─── UPGRADED LABEL ENGINEERING (PROMPT ENSEMBLING + ORIGINAL GUI DATA) ───────
 const QUEST_LABELS = {
-  q1:  { type: 'reps', activity: ['a clear photo of a person exercising doing pushups on the floor', 'an athlete performing pushups in a room', 'action shot of pushup workout'], label: 'doing pushups' },
-  q2:  { type: 'reps', activity: ['a clear photo of a person exercising doing deep squats', 'an athlete performing leg squats workout', 'action shot of squat exercise'], label: 'doing squats' },
-  q4:  { type: 'reps', activity: ['a clear photo of a person doing pullups on a bar', 'an athlete pulling their chin over a pullup bar', 'upper body back workout pullups'], label: 'doing pullups' },
-  q12: { type: 'reps', activity: ['a clear photo of a person exercising doing situps or crunches', 'an athlete performing core abdominal situps on the floor'], label: 'doing situps' },
-  q17: { type: 'reps', activity: ['a clear photo of a person jumping rope fast', 'an athlete skipping rope in mid-air cardio workout'], label: 'jumping rope' },
-  q23: { type: 'reps', activity: ['a clear photo of a person doing walking lunges exercise', 'an athlete performing deep leg split lunges'], label: 'doing lunges' },
+  q1:  { type: 'reps', activity: ['a clear photo of a person exercising doing pushups on the floor', 'an athlete performing pushups in a room', 'action shot of pushup workout'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
+  q2:  { type: 'reps', activity: ['a clear photo of a person exercising doing deep squats', 'an athlete performing leg squats workout', 'action shot of squat exercise'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
+  q4:  { type: 'reps', activity: ['a clear photo of a person doing pullups on a bar', 'an athlete pulling their chin over a pullup bar', 'upper body back workout pullups'], label: 'doing pullups', bodyParts: ['Lats', 'Upper Back', 'Biceps', 'Forearms'] },
+  q12: { type: 'reps', activity: ['a clear photo of a person exercising doing situps or crunches', 'an athlete performing core abdominal situps on the floor'], label: 'doing situps', bodyParts: ['Abs', 'Obliques', 'Hip Flexors'] },
+  q17: { type: 'reps', activity: ['a clear photo of a person jumping rope fast', 'an athlete skipping rope in mid-air cardio workout'], label: 'jumping rope', bodyParts: ['Calves', 'Quads', 'Shoulders', 'Cardio'] },
+  q23: { type: 'reps', activity: ['a clear photo of a person doing walking lunges exercise', 'an athlete performing deep leg split lunges'], label: 'doing lunges', bodyParts: ['Quads', 'Glutes', 'Hamstrings'] },
 
   q3:  { type: 'map', activity: ['strava running workout map dashboard with duration and speed metrics', 'gps running pace distance tracking workout summary screen on phone'], label: 'running metrics map' },
   q16: { type: 'map', activity: ['cycling route ride summary dashboard with speed and time logs', 'bicycle fitness tracking gps map workout summary'], label: 'cycling metrics map' },
@@ -196,8 +196,6 @@ function advanceRepTracker(tracker, { targetScore, resetScore, now }) {
 const SunIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>);
 const MoonIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>);
 const CheckIcon = () => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>);
-const ShareIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>);
-const PlusSquareIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="4" ry="4"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>);
 const CameraIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>);
 const UploadIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>);
 
@@ -213,6 +211,7 @@ const AnimatedBackground = ({ dark }) => {
     <div className="pointer-events-none absolute inset-0 overflow-hidden z-0" style={vars}>
       <div className="sq-streak sq-streak-1" />
       <div className="sq-streak sq-streak-2" />
+      <div className="sq-streak sq-streak-3" />
       <div className="sq-glow sq-glow-1" />
       <div className="sq-glow sq-glow-2" />
       <style>{`
@@ -222,23 +221,38 @@ const AnimatedBackground = ({ dark }) => {
           transform-origin: center; filter: blur(0.5px); opacity: 0.7;
         }
         .sq-streak-1 { top: 14%; transform: rotate(-18deg); animation: sq-drift-a 9s ease-in-out infinite; }
-        .sq-streak-2 { top: 68%; transform: rotate(-22deg); animation: sq-drift-a 11s ease-in-out infinite reverse; opacity: 0.35; }
+        .sq-streak-2 { top: 42%; transform: rotate(-12deg); animation: sq-drift-b 13s ease-in-out infinite; opacity: 0.45; }
+        .sq-streak-3 { top: 68%; transform: rotate(-22deg); animation: sq-drift-a 11s ease-in-out infinite reverse; opacity: 0.35; }
         @keyframes sq-drift-a {
           0%   { transform: translateX(-6%) rotate(-18deg); opacity: 0.35; }
           50%  { transform: translateX(6%)  rotate(-16deg); opacity: 0.8; }
           100% { transform: translateX(-6%) rotate(-18deg); opacity: 0.35; }
         }
+        @keyframes sq-drift-b {
+          0%   { transform: translateX(5%)  rotate(-12deg); opacity: 0.25; }
+          50%  { transform: translateX(-5%) rotate(-10deg); opacity: 0.55; }
+          100% { transform: translateX(5%)  rotate(-12deg); opacity: 0.25; }
+        }
         .sq-glow {
           position: absolute; width: 260px; height: 260px; border-radius: 999px;
           filter: blur(70px); opacity: var(--sq-glow-o);
         }
-        .sq-glow-1 { top: -60px; left: -60px; background: var(--sq-glow-1); }
-        .sq-glow-2 { bottom: -80px; right: -60px; background: var(--sq-glow-2); }
+        .sq-glow-1 { top: -60px; left: -60px; background: var(--sq-glow-1); animation: sq-float 10s ease-in-out infinite; }
+        .sq-glow-2 { bottom: -80px; right: -60px; background: var(--sq-glow-2); animation: sq-float 12s ease-in-out infinite reverse; }
+        @keyframes sq-float {
+          0%, 100% { transform: translate(0,0) scale(1); }
+          50% { transform: translate(20px, -15px) scale(1.15); }
+        }
         @keyframes sq-pop-in {
-          0% { opacity: 0; transform: scale(0.95) translateY(6px); }
+          0% { opacity: 0; transform: scale(0.9) translateY(8px); }
           100% { opacity: 1; transform: scale(1) translateY(0); }
         }
-        .sq-anim-pop { animation: sq-pop-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+        @keyframes sq-icon-float {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-4px); }
+        }
+        .sq-anim-pop { animation: sq-pop-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+        .sq-anim-float { animation: sq-icon-float 3.2s ease-in-out infinite; }
       `}</style>
     </div>
   );
@@ -298,12 +312,68 @@ const QUEST_THEME = {
   q25:{ icon: 'snowflake',grad: 'from-cyan-300 to-blue-600' },
 };
 
-const QuestIconBadge = ({ questId, size = 96, dark }) => {
+const QUEST_ABOUT = {
+  q1: "Pushups build raw upper-body strength and core stability in one clean movement — no equipment required.",
+  q2: "Squats fire up your biggest muscle groups and reinforce the mechanics behind almost every athletic movement.",
+  q3: "A steady run gets your heart rate up, clears your head, and builds endurance over time.",
+  q4: "Pullups are one of the purest tests of back and grip strength — a few reps go a long way.",
+  q5: "A brisk walk outside boosts circulation, mood, and gives your eyes a break from the screen.",
+  q6: "Staying hydrated helps your body perform better and keeps your mind sharp.",
+  q7: "A short meditation resets your focus and lowers stress before it builds up.",
+  q8: "Stretching keeps your muscles loose and your joints moving through their full range.",
+  q9: "A balanced, whole-food meal fuels recovery and keeps your energy steady.",
+  q10: "Consistent, sufficient sleep is the single biggest lever for recovery and focus.",
+  q11: "A quick cardio burst spikes your heart rate and wakes up your whole body fast.",
+  q12: "Situps target your core and build the stability everything else is built on.",
+  q13: "Journaling for a few minutes helps you process the day and plan the next one.",
+  q14: "A green smoothie is an easy way to pack in nutrients when you're short on time.",
+  q15: "Holding a plank builds isometric core strength that carries over to everything else.",
+  q16: "Cycling is easy on the joints while still building serious cardio endurance.",
+  q17: "Jump rope sharpens coordination and torches calories in a small amount of time.",
+  q18: "A cold shower is a quick way to train discipline and wake up your nervous system.",
+  q19: "Cutting added sugar for a day gives your energy levels a noticeably steadier baseline.",
+  q20: "Cooking from scratch puts you in control of what goes into your body.",
+  q21: "A few minutes of deep breathing calms your nervous system and sharpens focus.",
+  q22: "Hitting your step count keeps your body moving steadily throughout the day.",
+  q23: "Lunges build single-leg strength and balance that squats alone don't cover.",
+  q24: "An earlier bedtime compounds — better sleep tonight means a better day tomorrow.",
+  q25: "Cold exposure trains resilience and gives your recovery a real boost.",
+};
+
+const QUEST_QUOTE = {
+  q1:  "Strength grows one rep at a time.",
+  q2:  "Every squat builds a stronger foundation.",
+  q3:  "Miles don't lie — you earned this one.",
+  q4:  "Small steps every day lead to big changes.",
+  q5:  "One step at a time is still progress.",
+  q6:  "Small steps every day lead to big changes.",
+  q7:  "A quiet mind carries the loudest strength.",
+  q8:  "Flexibility today, resilience tomorrow.",
+  q9:  "You fueled the body that carries you.",
+  q10: "Rest is where the real gains happen.",
+  q11: "Energy in motion stays in motion.",
+  q12: "A strong core holds everything else together.",
+  q13: "The pen remembers what the mind forgets.",
+  q14: "Good fuel, good day.",
+  q15: "Stillness can be the hardest work of all.",
+  q16: "Every mile ridden is a mile earned.",
+  q17: "Rhythm builds more than just your legs.",
+  q18: "Discomfort today, discipline for life.",
+  q19: "Progress, not perfection.",
+  q20: "What you cook is what you become.",
+  q21: "Breathe in control, breathe out doubt.",
+  q22: "One step at a time is still progress.",
+  q23: "Balance is built one side at a time.",
+  q24: "Tonight's rest is tomorrow's edge.",
+  q25: "You didn't come this far to only come this far.",
+};
+
+const QuestIconBadge = ({ questId, size = 96, floating = false, dark }) => {
   const theme = QUEST_THEME[questId] || { icon: 'target', grad: 'from-indigo-500 to-purple-600' };
   const Icon = QuestSvg[theme.icon] || QuestSvg.target;
   return (
     <div
-      className={`relative flex items-center justify-center rounded-full bg-gradient-to-br ${theme.grad}`}
+      className={`relative flex items-center justify-center rounded-full bg-gradient-to-br ${theme.grad} ${floating ? 'sq-anim-float' : ''}`}
       style={{
         width: size, height: size,
         boxShadow: `0 0 0 1px rgba(255,255,255,0.15) inset, 0 8px 30px -8px rgba(139,92,246,0.65)`,
@@ -337,48 +407,6 @@ const ProgressRing = ({ pct, size = 56, stroke = 5, dark }) => {
   );
 };
 
-// ─── FIRST-TIME IOS HOME SCREEN INSTALL MODAL ─────────────────────────────────
-function IOSInstallModal({ dark, onClose }) {
-  const cardBg = dark ? 'bg-[#181226]/95 border-white/10' : 'bg-white/95 border-gray-200';
-  const txt = dark ? 'text-white' : 'text-gray-900';
-  const sub = dark ? 'text-zinc-400' : 'text-gray-600';
-  const stepBg = dark ? 'bg-white/5 border-white/5' : 'bg-gray-50 border-gray-100';
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-md sq-anim-pop">
-      <div className={`w-full max-w-sm rounded-[32px] p-6 border shadow-2xl ${cardBg} flex flex-col items-center text-center relative overflow-hidden`}>
-        <AnimatedBackground dark={dark} />
-        <div className="relative z-10 flex flex-col items-center w-full">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-purple-500/30 mb-4">
-            <span className="text-2xl">⚡️</span>
-          </div>
-          <h3 className={`text-[20px] font-bold leading-tight ${txt}`}>Install Side Quests</h3>
-          <p className={`text-[13px] mt-1.5 px-2 leading-relaxed ${sub}`}>
-            Add this app to your iPhone Home Screen for a full-screen experience and daily AI verification.
-          </p>
-          <div className="w-full mt-6 space-y-3 text-left">
-            <div className={`flex items-center gap-3 p-3.5 rounded-2xl border ${stepBg}`}>
-              <div className="w-9 h-9 rounded-xl bg-blue-500/10 flex items-center justify-center shrink-0"><ShareIcon /></div>
-              <div><p className={`text-[13px] font-semibold ${txt}`}>1. Tap the Share Button</p><p className={`text-[11px] ${sub}`}>At the bottom navigation bar in Safari</p></div>
-            </div>
-            <div className={`flex items-center gap-3 p-3.5 rounded-2xl border ${stepBg}`}>
-              <div className="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center shrink-0 font-bold"><PlusSquareIcon /></div>
-              <div><p className={`text-[13px] font-semibold ${txt}`}>2. Add to Home Screen</p><p className={`text-[11px] ${sub}`}>Scroll down the action list and tap</p></div>
-            </div>
-            <div className={`flex items-center gap-3 p-3.5 rounded-2xl border ${stepBg}`}>
-              <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0 font-bold text-sm">Add</div>
-              <div><p className={`text-[13px] font-semibold ${txt}`}>3. Tap &quot;Add&quot; Top Right</p><p className={`text-[11px] ${sub}`}>Launch anytime directly from your screen</p></div>
-            </div>
-          </div>
-          <button onClick={onClose} className="w-full mt-6 py-3.5 rounded-2xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold text-[15px] shadow-lg shadow-indigo-500/25 active:scale-[0.98] transition-transform">
-            Got it, Let&apos;s Go!
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── ACTIVE QUEST EXECUTION SCREEN (LIVE AI CAM & UPLOADS) ────────────────────
 function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
   const [reps, setReps] = useState(0);
@@ -400,7 +428,6 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
   const isPhotoQuest = ['map', 'food'].includes((QUEST_LABELS[quest.id]?.type || 'action'));
   const isTimerQuest = !!quest.duration && !isRepQuest;
 
-  // Start/Stop Webcam
   const toggleCamera = async () => {
     if (cameraActive) {
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
@@ -421,7 +448,6 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
     }
   };
 
-  // Live AI Frame Analysis Loop
   useEffect(() => {
     if (!cameraActive || !videoRef.current) return;
     let isRunning = true;
@@ -468,7 +494,6 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
                 }
               }
             } else {
-              // Static activity verification
               setAiConfidence(Math.round(targetScore * 100));
               if (targetScore > PASS_THRESHOLD && targetScore > negScore) {
                 setFeedback("✅ AI Verified: Activity clearly detected!");
@@ -492,7 +517,6 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
     };
   }, [cameraActive, quest, isRepQuest, isTimerQuest, isTimerRunning, reps]);
 
-  // Timer Countdown
   useEffect(() => {
     if (isTimerRunning && timeLeft > 0) {
       timerRef.current = setInterval(() => {
@@ -509,7 +533,6 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
     return () => clearInterval(timerRef.current);
   }, [isTimerRunning, timeLeft]);
 
-  // Handle Photo Upload Verification
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -546,7 +569,6 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
 
   return (
     <div className="sq-anim-pop relative z-10 flex flex-col h-full min-h-screen p-4" style={{ paddingTop: 'max(env(safe-area-inset-top), 20px)' }}>
-      {/* Top Bar */}
       <div className="flex items-center justify-between pb-4">
         <button onClick={onBack} className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800 text-zinc-300' : 'bg-gray-200 text-gray-700'}`}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
@@ -555,12 +577,10 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
         <div className="w-9" />
       </div>
 
-      {/* Main Execution Card */}
       <div className={`flex-1 rounded-[28px] border p-5 flex flex-col items-center justify-between ${cardBg}`}>
         <div className="w-full flex flex-col items-center">
           <QuestIconBadge questId={quest.id} size={72} dark={dark} />
           
-          {/* AI Confidence Meter */}
           <div className="w-full max-w-xs mt-4">
             <div className="flex justify-between text-[11px] font-mono mb-1">
               <span className={dark ? 'text-zinc-400' : 'text-gray-500'}>AI Confidence</span>
@@ -572,7 +592,6 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
             <p className={`text-[12px] text-center mt-2.5 font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{feedback}</p>
           </div>
 
-          {/* Rep Counter / Timer Display */}
           {isRepQuest && (
             <div className="my-6 text-center">
               <span className={`text-6xl font-black font-mono ${txt}`}>{reps}</span>
@@ -594,7 +613,6 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
             </div>
           )}
 
-          {/* Camera Viewport */}
           {(!isPhotoQuest || cameraActive) && (
             <div className="relative w-full aspect-[4/3] max-w-sm rounded-2xl overflow-hidden bg-black mt-4 border border-white/10 flex items-center justify-center">
               <video ref={videoRef} playsInline muted className={`w-full h-full object-cover ${cameraActive ? 'block' : 'hidden'}`} />
@@ -608,7 +626,6 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
             </div>
           )}
 
-          {/* Photo Upload Viewport */}
           {isPhotoQuest && !cameraActive && (
             <div className="w-full max-w-sm mt-4">
               {uploadedImage ? (
@@ -627,7 +644,6 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
           )}
         </div>
 
-        {/* Action Buttons */}
         <div className="w-full space-y-2 mt-6">
           {!isPhotoQuest && (
             <button onClick={toggleCamera} className={`w-full py-3 rounded-xl border font-semibold text-sm transition-all ${cameraActive ? 'border-red-500/50 text-red-400 bg-red-500/10' : 'border-purple-500/50 text-purple-400 bg-purple-500/10'}`}>
@@ -655,47 +671,52 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
   );
 }
 
-// ─── QUEST DETAIL SCREEN (PRE-EXECUTION) ──────────────────────────────────────
-function QuestDetailScreen({ quest, dark, setDark, onBack, onStartQuest }) {
+// ─── QUEST DETAIL SCREEN (RESTORED FROM CODE 1) ───────────────────────────────
+function QuestDetailScreen({ quest, dark, timeLeft = "23:59:01", onBack, onStartQuest }) {
   const txt = dark ? 'text-white' : 'text-gray-900';
   const sub = dark ? 'text-zinc-400' : 'text-gray-500';
   const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
+  const about = QUEST_ABOUT[quest.id] || 'Stay consistent — every quest you complete adds up to real progress.';
+  const quote = QUEST_QUOTE[quest.id] || "Small steps every day lead to big changes.";
 
   return (
     <div className="sq-anim-pop relative z-10 flex flex-col h-full min-h-screen p-4" style={{ paddingTop: 'max(env(safe-area-inset-top), 20px)' }}>
+      {/* Top Bar restored perfectly from your preferred layout */}
       <div className="flex items-center justify-between pb-3">
-        <button onClick={onBack} className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'}`}>
+        <button onClick={onBack} className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70`}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
         <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${pill}`}>
           <span className="text-[10px]">⏱</span>
-          <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>23:59:01</span>
+          <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
         </div>
-        <button onClick={() => setDark(!dark)} className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'}`}>
-          {dark ? <SunIcon /> : <MoonIcon />}
-        </button>
+        <div className={`w-9 h-9 rounded-full flex items-center justify-center ${pill}`}>
+          <span className="text-[15px]">☀️</span>
+        </div>
       </div>
 
       <div className="flex-1 flex flex-col justify-between pb-6">
         <div>
-          <div className={`relative overflow-hidden rounded-[26px] px-6 pt-10 pb-8 flex flex-col items-center text-center border ${dark ? 'bg-[#1c1530]/80 border-white/10' : 'bg-indigo-50/80 border-gray-100'}`}>
+          <div className={`relative overflow-hidden rounded-[26px] px-6 pt-10 pb-8 flex flex-col items-center text-center bg-gradient-to-b ${dark ? 'from-[#1c1530] to-[#0d0a17]' : 'from-indigo-50 to-white'} border ${dark ? 'border-white/10' : 'border-gray-100'}`}>
             <AnimatedBackground dark={dark} />
-            <div className="relative z-10 flex flex-col items-center">
-              <QuestIconBadge questId={quest.id} size={92} dark={dark} />
-              <h2 className={`mt-5 text-[22px] font-bold leading-tight max-w-xs ${txt}`}>{quest.text}</h2>
-              <div className="mt-3.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-semibold text-[12px]">
-                <span>+{quest.xp} XP</span>
-              </div>
+            <div className="relative z-10 flex flex-col items-center w-full">
+              <QuestIconBadge questId={quest.id} size={96} dark={dark} floating={true} />
+              <h2 className={`mt-5 text-[24px] font-bold leading-tight ${txt}`}>{quest.text}</h2>
+              <p className={`mt-3 text-[14px] leading-relaxed ${sub}`}>{about}</p>
+              
+              {/* Restored Body Parts chips */}
+              {QUEST_LABELS[quest.id]?.bodyParts && (
+                <div className="flex flex-wrap justify-center gap-2 mt-5">
+                  {QUEST_LABELS[quest.id].bodyParts.map(bp => (
+                    <span key={bp} className={`px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border ${dark ? 'bg-white/5 border-white/10 text-zinc-300' : 'bg-black/5 border-black/10 text-gray-600'}`}>{bp}</span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-
-          <div className="mt-6">
-            <h3 className={`text-[11px] font-bold tracking-wider uppercase ${sub} px-1`}>AI Verification Mode</h3>
-            <div className={`mt-2 p-4 rounded-2xl border ${dark ? 'bg-white/[0.03] border-white/5 text-zinc-300' : 'bg-gray-50 border-gray-100 text-gray-600'} text-[13px] leading-relaxed`}>
-              {quest.reps ? `Uses live AI WebCam vision to count your ${quest.reps} reps automatically via form tracking.` :
-               quest.duration ? `Tracks your activity time while AI ensures continuous presence and focus.` :
-               `Requires a quick photo upload or camera scan for AI zero-shot image verification.`}
-            </div>
+          
+          <div className="mt-8 text-center px-4">
+             <p className={`italic text-[16px] font-medium leading-relaxed ${dark ? 'text-zinc-400' : 'text-gray-600'}`}>"{quote}"</p>
           </div>
         </div>
 
@@ -717,20 +738,6 @@ export default function App() {
   const [activeQuestId, setActiveQuestId] = useState(null);
   const [executingQuestId, setExecutingQuestId] = useState(null);
   const [completedQuests, setCompletedQuests] = useState(['q6']);
-  const [showA2HS, setShowA2HS] = useState(false);
-
-  useEffect(() => {
-    const hasSeenA2HS = localStorage.getItem('sq_has_seen_a2hs_v1');
-    if (!hasSeenA2HS) {
-      const timer = setTimeout(() => setShowA2HS(true), 800);
-      return () => clearTimeout(timer);
-    }
-  }, []);
-
-  const handleCloseA2HS = () => {
-    localStorage.setItem('sq_has_seen_a2hs_v1', 'true');
-    setShowA2HS(false);
-  };
 
   const handleMarkComplete = (id) => {
     if (!completedQuests.includes(id)) setCompletedQuests([...completedQuests, id]);
@@ -751,7 +758,6 @@ export default function App() {
   return (
     <div className={`min-h-screen w-full relative selection:bg-purple-500 selection:text-white font-sans ${bgClass}`}>
       <AnimatedBackground dark={dark} />
-      {showA2HS && <IOSInstallModal dark={dark} onClose={handleCloseA2HS} />}
 
       <div className="max-w-md mx-auto relative z-10 min-h-screen flex flex-col">
         {executingQuest ? (
@@ -765,7 +771,6 @@ export default function App() {
           <QuestDetailScreen
             quest={activeQuest}
             dark={dark}
-            setDark={setDark}
             onBack={() => setActiveQuestId(null)}
             onStartQuest={() => setExecutingQuestId(activeQuest.id)}
           />
@@ -788,7 +793,7 @@ export default function App() {
             <div className={`mt-2 p-5 rounded-[24px] border flex items-center justify-between ${dark ? 'bg-white/[0.03] border-white/10 shadow-2xl' : 'bg-white border-gray-100 shadow-sm'}`}>
               <div>
                 <span className={`text-[11px] font-bold uppercase tracking-wider ${dark ? 'text-zinc-400' : 'text-gray-400'}`}>Daily Progress</span>
-                <h2 className="text-[18px] font-bold mt-0.5">You&apos;re crushing it today!</h2>
+                <h2 className="text-[18px] font-bold mt-0.5">You're crushing it today!</h2>
                 <p className={`text-[12px] mt-1 ${dark ? 'text-zinc-400' : 'text-gray-500'}`}>{completedQuests.length} of 5 daily goals met</p>
               </div>
               <ProgressRing pct={progressPct} dark={dark} />
@@ -815,8 +820,8 @@ export default function App() {
                           <span className={`text-[11px] font-semibold ${dark ? 'text-purple-400' : 'text-purple-600'}`}>+{q.xp} XP {q.reps ? `• ${q.reps} Reps` : q.duration ? `• ${q.duration / 60} Mins` : ''}</span>
                         </div>
                       </div>
-                      <div className={`w-7 h-7 rounded-full flex items-center justify-center border transition-colors ${isDone ? 'bg-emerald-500 border-emerald-500 text-white' : dark ? 'border-white/20 group-hover:border-white/40 text-transparent' : 'border-gray-300 group-hover:border-gray-400 text-transparent'}`}>
-                        <CheckIcon />
+                      <div className={`w-7 h-7 rounded-full flex items-center justify-center border transition-colors ${isDone ? 'bg-emerald-500 border-emerald-500 text-white' : dark ? 'border-white/20 group-hover:border-white/40 text-transparent' : 'border-gray-300 text-transparent'}`}>
+                        {isDone && <CheckIcon />}
                       </div>
                     </div>
                   );
