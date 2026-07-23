@@ -1393,7 +1393,7 @@ export default function SideQuestsApp() {
                 {i > 0 && <div className={`border-t ${sep} ml-[58px]`} />}
                 <button
                   onClick={() => handleQuestClick(quest)}
-                  className={`w-full flex items-center gap-3.5 px-4 py-3.5 text-left active:opacity-60 transition-opacity`}
+                  className={`w-full flex items-center gap-3.5 px-4 py-[18px] text-left active:opacity-60 transition-opacity`}
                 >
                   <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-200 ${
                     quest.completed
