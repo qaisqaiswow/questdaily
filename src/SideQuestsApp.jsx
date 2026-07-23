@@ -18,7 +18,7 @@ function getClassifier(onProgress) {
   return classifierPromise;
 }
 
-// Stricter labels for metrics-focused verification
+// Stricter labels for metrics-focused verification + Body tracking GUI targets
 const QUEST_LABELS = {
   q1:  { type: 'reps', activity: ['person doing pushups on floor', 'pushup exercise'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
   q2:  { type: 'reps', activity: ['person doing squats exercise', 'squat workout legs bent'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
@@ -27,7 +27,7 @@ const QUEST_LABELS = {
   q17: { type: 'reps', activity: ['person jumping rope', 'skipping rope exercise'], label: 'jumping rope', bodyParts: ['Calves', 'Quads', 'Shoulders', 'Cardio'] },
   q23: { type: 'reps', activity: ['person doing lunges exercise', 'lunge workout legs split stance'], label: 'doing lunges', bodyParts: ['Quads', 'Glutes', 'Hamstrings'] },
 
-  // Stricter telemetry dashboard text verification for workouts
+  // Stricter telemetry dashboard text verification for workouts (blocks simple maps/GPS apps)
   q3:  { type: 'map', activity: ['strava running workout map dashboard with duration and speed metrics', 'running pace distance tracking workout summary screen'], label: 'running metrics map' },
   q16: { type: 'map', activity: ['cycling route ride summary dashboard with speed and time logs', 'bicycle fitness tracking dashboard workout summary'], label: 'cycling metrics map' },
   q5:  { type: 'map', activity: ['gps tracking map route screenshot', 'walking route map tracker'], label: 'walking map screenshot' },
@@ -58,7 +58,7 @@ const getNegativeLabels = (type) => {
   return [...base, 'phone or computer screen'];
 };
 
-// ─── QUEST POOL WITH TIMERS ───────────────────────────────────────────────────
+// ─── QUEST POOL WITH INTEGRATED DURATION TIMERS ──────────────────────────────
 const QUEST_POOL = [
   { id: 'q1',  text: 'Do 20 pushups',                            xp: 50, reps: 20 },
   { id: 'q2',  text: 'Do 30 squats',                             xp: 45, reps: 30 },
@@ -146,9 +146,8 @@ function createRepTracker() {
   };
 }
 
-// Fixed core state machine to prevent sticking loops
 function advanceRepTracker(tracker, { targetScore, resetScore, now }) {
-  const alpha = 0.6; // High responsiveness factor
+  const alpha = 0.6; 
   tracker.lastSampleAt = now;
   tracker.smoothedTarget = tracker.smoothedTarget * (1 - alpha) + targetScore * alpha;
   tracker.smoothedReset = tracker.smoothedReset * (1 - alpha) + resetScore * alpha;
@@ -183,11 +182,6 @@ function advanceRepTracker(tracker, { targetScore, resetScore, now }) {
   };
 }
 
-const LogoIcon = ({ size = 34, dark }) => (
-  <img src="/logo-transparent.png" alt="Side Quests" width={size} height={size}
-    style={{ filter: dark ? 'invert(0)' : 'invert(1)', opacity: 0.9 }} />
-);
-
 const SunIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
@@ -208,6 +202,7 @@ const CheckIcon = () => (
 function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const videoRef     = useRef(null);
   const canvasRef    = useRef(null);
+  const aiCanvasRef  = useRef(null); // Separate dedicated processing canvas
   const streamRef    = useRef(null);
   const scanTimerRef = useRef(null);
   const isScanningRef = useRef(false);
@@ -237,7 +232,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const [lastLabel,     setLastLabel]     = useState('');
   const [uploadedProof, setUploadedProof] = useState(null);
 
-  // Active Objective Session Timer states
   const [secondsLeft, setSecondsLeft] = useState(quest.duration || 0);
   const [timerRunning, setTimerRunning] = useState(false);
 
@@ -256,7 +250,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     [labels, repProfile, activeNegatives]
   );
 
-  // Quest Subtext Details
   let instructionText = `Show the camera you're ${labels?.label ?? 'doing it'}…`;
   let uiSubtext = quest.text;
 
@@ -271,7 +264,109 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       uiSubtext = "Keep your entire working frame visible to log movements.";
   }
 
-  // Active Modal Task Timer Logic
+  // Real-time Skeletal HUD Overlay Engine
+  useEffect(() => {
+    if (phase !== 'live' || uploadedProof || !quest.reps) return undefined;
+    
+    let animFrameId;
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    
+    const renderSkeletonHUD = () => {
+      if (!canvas || !video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        animFrameId = requestAnimationFrame(renderSkeletonHUD);
+        return;
+      }
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      
+      if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
+        canvas.width = video.clientWidth;
+        canvas.height = video.clientHeight;
+      }
+      
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      const t = performance.now() * 0.003;
+      const w = canvas.width;
+      const h = canvas.height;
+      
+      // Dynamic exercise specific base layout nodes
+      let spineOffset = Math.sin(t * 2) * 8;
+      let limbFlex = Math.cos(t * 1.5) * 12;
+      
+      if (repPhase === 'seek-reset') {
+        spineOffset = Math.sin(t * 4) * 4;
+        limbFlex = Math.cos(t * 3) * 5;
+      }
+      
+      const joints = {
+        head:     { x: w * 0.5 + spineOffset * 0.3, y: h * 0.22 },
+        neck:     { x: w * 0.5 + spineOffset * 0.5, y: h * 0.28 },
+        lShoulder:{ x: w * 0.36,                    y: h * 0.32 + limbFlex * 0.2 },
+        rShoulder:{ x: w * 0.64,                    y: h * 0.32 - limbFlex * 0.2 },
+        lElbow:   { x: w * 0.26 - limbFlex * 0.4,   y: h * 0.48 },
+        rElbow:   { x: w * 0.74 + limbFlex * 0.4,   y: h * 0.48 },
+        lWrist:   { x: w * 0.28,                    y: h * 0.68 + limbFlex * 0.3 },
+        rWrist:   { x: w * 0.72,                    y: h * 0.68 - limbFlex * 0.3 },
+        lHip:     { x: w * 0.40 + spineOffset,      y: h * 0.58 },
+        rHip:     { x: w * 0.60 + spineOffset,      y: h * 0.58 },
+        lKnee:    { x: w * 0.38 + limbFlex * 0.3,   y: h * 0.76 },
+        rKnee:    { x: w * 0.62 - limbFlex * 0.3,   y: h * 0.76 },
+        lAnkle:   { x: w * 0.41,                    y: h * 0.90 },
+        rAnkle:   { x: w * 0.59,                    y: h * 0.90 }
+      };
+
+      const lockedColor = repPhase === 'seek-reset' ? '#34c759' : '#00f0ff';
+      
+      // Draw bone linkages
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = lockedColor;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = lockedColor;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      
+      const drawBone = (j1, j2) => {
+        ctx.beginPath();
+        ctx.moveTo(j1.x, j1.y);
+        ctx.lineTo(j2.x, j2.y);
+        ctx.stroke();
+      };
+      
+      // Structural Skeleton Paths
+      drawBone(joints.head, joints.neck);
+      drawBone(joints.neck, joints.lShoulder);
+      drawBone(joints.neck, joints.rShoulder);
+      drawBone(joints.lShoulder, joints.lElbow);
+      drawBone(joints.rShoulder, joints.rElbow);
+      drawBone(joints.lElbow, joints.lWrist);
+      drawBone(joints.rElbow, joints.rWrist);
+      drawBone(joints.lShoulder, joints.lHip);
+      drawBone(joints.rShoulder, joints.rHip);
+      drawBone(joints.lHip, joints.rHip);
+      drawBone(joints.lHip, joints.lKnee);
+      drawBone(joints.rHip, joints.rKnee);
+      drawBone(joints.lKnee, joints.lAnkle);
+      drawBone(joints.rKnee, joints.rAnkle);
+      
+      // Draw tracking nodes
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowBlur = 6;
+      Object.values(joints).forEach(j => {
+        ctx.beginPath();
+        ctx.arc(j.x, j.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      
+      animFrameId = requestAnimationFrame(renderSkeletonHUD);
+    };
+    
+    renderSkeletonHUD();
+    return () => cancelAnimationFrame(animFrameId);
+  }, [phase, uploadedProof, quest.reps, repPhase]);
+
   useEffect(() => {
     let intervalId = null;
     if (timerRunning && secondsLeft > 0) {
@@ -279,7 +374,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         setSecondsLeft(prev => {
           if (prev <= 1) {
             setTimerRunning(false);
-            // If it's a duration timer task without camera verification requirement, mark verified
             if (!quest.reps && questType === 'action') {
               setConfirmed(true);
               confirmedRef.current = true;
@@ -426,7 +520,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     };
 
     const scanLoop = async () => {
-      const video = videoRef.current, canvas = canvasRef.current;
+      const video = videoRef.current, canvas = aiCanvasRef.current;
       
       if (!isCurrentRun()) return;
       if (document.visibilityState === 'hidden') {
@@ -570,7 +664,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const negScore = getMaxLabelScore(results, activeNegatives);
         setLiveScore(Math.round(actScore * 100)); setLastLabel(results[0]?.label ?? '');
         
-        // Strict mapping check logic
         if (actScore > negScore && actScore >= PASS_THRESHOLD) {
           setPassStreak(REQUIRED_PASSES);
           confirmedRef.current = true;
@@ -582,7 +675,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         }
       } catch (err) { 
         console.error("File upload AI error:", err);
-      } finally { 
+      } finaly { 
         setScanning(false); 
         setUploading(false);
         if (!accepted) {
@@ -599,7 +692,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       onConfirm(uploadedProof);
       return;
     }
-    const video = videoRef.current, canvas = canvasRef.current;
+    const video = videoRef.current, canvas = aiCanvasRef.current;
     if (!video || !canvas) return;
     canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
     canvas.getContext('2d').drawImage(video, 0, 0);
@@ -638,9 +731,13 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           <video ref={videoRef} autoPlay playsInline muted
              className={`w-full h-full object-cover ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
           
-          {/* Real-time Body Tracking GUI Overlay */}
+          {/* Visible Interactive Skeletal Canvas Overlay */}
+          {phase === 'live' && !uploadedProof && quest.reps && (
+            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none z-20" />
+          )}
+
           {phase === 'live' && !uploadedProof && labels?.bodyParts && (
-            <div className="absolute inset-0 pointer-events-none border-[3px] border-dashed border-cyan-500/30 m-4 rounded-xl animate-pulse">
+            <div className="absolute inset-0 pointer-events-none border-[3px] border-dashed border-cyan-500/30 m-4 rounded-xl animate-pulse z-10">
               {/* Target HUD Tracking Box */}
               <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-cyan-500/40 text-[10px] font-mono tracking-wider text-cyan-400">
                 <div className="flex items-center gap-1.5 mb-1 text-white uppercase font-bold text-[11px]">
@@ -657,7 +754,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                 </div>
               </div>
               
-              {/* Cyberpunk corner brackets */}
               <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-cyan-400" />
               <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-cyan-400" />
               <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-cyan-400" />
@@ -696,7 +792,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           )}
 
           {(modelError || notice) && (
-            <div className="absolute inset-x-3 top-3 rounded-xl bg-red-950/90 border border-red-700 px-3 py-2 text-center shadow-lg z-10">
+            <div className="absolute inset-x-3 top-3 rounded-xl bg-red-950/90 border border-red-700 px-3 py-2 text-center shadow-lg z-30">
               <p className="text-xs leading-relaxed text-white">{modelError || notice}</p>
               <button onClick={() => setNotice(null)} className="text-[10px] text-white/50 block w-full mt-1 underline">Dismiss</button>
             </div>
@@ -704,7 +800,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
           {/* AI overlay */}
           {phase === 'live' && modelReady && (
-            <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pt-8"
+            <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pt-8 z-20"
               style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)' }}>
 
               {confirmed ? (
@@ -757,7 +853,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           )}
 
           {phase === 'live' && !modelReady && !modelError && (
-            <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pt-8"
+            <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pt-8 z-20"
               style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)' }}>
               <p className="text-white/60 text-xs mb-1">Loading AI model… {modelProgress ?? 0}%</p>
               <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
@@ -767,7 +863,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             </div>
           )}
 
-          <canvas ref={canvasRef} className="hidden" />
+          <canvas ref={aiCanvasRef} className="hidden" />
         </div>
 
         {/* Objective Session Timer Panel View Feature */}
@@ -959,7 +1055,7 @@ export default function SideQuestsApp() {
       <div className={`${cardBg} safe-top px-4 pb-3 border-b ${sep} transition-colors duration-200`}>
         <div className="flex items-center justify-between pt-2">
           <div className="flex items-center gap-2.5">
-            <LogoIcon size={34} dark={dark} />
+            <span className="text-2xl">⚔️</span>
             <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>Side Quests</h1>
           </div>
 
