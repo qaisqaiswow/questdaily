@@ -182,6 +182,11 @@ function advanceRepTracker(tracker, { targetScore, resetScore, now }) {
   };
 }
 
+const LogoIcon = ({ size = 34, dark }) => (
+  <img src="/logo-transparent.png" alt="Side Quests" width={size} height={size}
+    style={{ filter: dark ? 'invert(0)' : 'invert(1)', opacity: 0.9 }} />
+);
+
 const SunIcon = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
@@ -202,7 +207,7 @@ const CheckIcon = () => (
 function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const videoRef     = useRef(null);
   const canvasRef    = useRef(null);
-  const aiCanvasRef  = useRef(null); // Separate dedicated processing canvas
+  const aiCanvasRef  = useRef(null); 
   const streamRef    = useRef(null);
   const scanTimerRef = useRef(null);
   const isScanningRef = useRef(false);
@@ -292,7 +297,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       const w = canvas.width;
       const h = canvas.height;
       
-      // Dynamic exercise specific base layout nodes
       let spineOffset = Math.sin(t * 2) * 8;
       let limbFlex = Math.cos(t * 1.5) * 12;
       
@@ -320,7 +324,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
       const lockedColor = repPhase === 'seek-reset' ? '#34c759' : '#00f0ff';
       
-      // Draw bone linkages
       ctx.lineWidth = 4;
       ctx.strokeStyle = lockedColor;
       ctx.shadowBlur = 10;
@@ -335,7 +338,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         ctx.stroke();
       };
       
-      // Structural Skeleton Paths
       drawBone(joints.head, joints.neck);
       drawBone(joints.neck, joints.lShoulder);
       drawBone(joints.neck, joints.rShoulder);
@@ -351,7 +353,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       drawBone(joints.lKnee, joints.lAnkle);
       drawBone(joints.rKnee, joints.rAnkle);
       
-      // Draw tracking nodes
       ctx.fillStyle = '#ffffff';
       ctx.shadowBlur = 6;
       Object.values(joints).forEach(j => {
@@ -675,7 +676,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         }
       } catch (err) { 
         console.error("File upload AI error:", err);
-      } finaly { 
+      } finally { 
         setScanning(false); 
         setUploading(false);
         if (!accepted) {
@@ -1055,7 +1056,7 @@ export default function SideQuestsApp() {
       <div className={`${cardBg} safe-top px-4 pb-3 border-b ${sep} transition-colors duration-200`}>
         <div className="flex items-center justify-between pt-2">
           <div className="flex items-center gap-2.5">
-            <span className="text-2xl">⚔️</span>
+            <LogoIcon size={34} dark={dark} />
             <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>Side Quests</h1>
           </div>
 
