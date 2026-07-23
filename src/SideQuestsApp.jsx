@@ -198,6 +198,350 @@ const CheckIcon = () => (
   </svg>
 );
 
+// ─── AMBIENT ANIMATED BACKGROUND ───────────────────────────────────────────────
+// Soft diagonal light streaks that drift slowly behind the whole app, like the
+// reference design. Pure CSS keyframes, no canvas — cheap to run.
+const AnimatedBackground = ({ dark }) => {
+  if (!dark) return null;
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden z-0">
+      <div className="sq-streak sq-streak-1" />
+      <div className="sq-streak sq-streak-2" />
+      <div className="sq-streak sq-streak-3" />
+      <div className="sq-glow sq-glow-1" />
+      <div className="sq-glow sq-glow-2" />
+      <style>{`
+        .sq-streak {
+          position: absolute;
+          width: 180%;
+          height: 1.5px;
+          left: -40%;
+          background: linear-gradient(90deg, transparent, rgba(139,92,246,0.55), rgba(99,102,241,0.35), transparent);
+          transform-origin: center;
+          filter: blur(0.5px);
+          opacity: 0.7;
+        }
+        .sq-streak-1 { top: 14%;  transform: rotate(-18deg); animation: sq-drift-a 9s ease-in-out infinite; }
+        .sq-streak-2 { top: 42%;  transform: rotate(-12deg); animation: sq-drift-b 13s ease-in-out infinite; opacity: 0.45; }
+        .sq-streak-3 { top: 68%;  transform: rotate(-22deg); animation: sq-drift-a 11s ease-in-out infinite reverse; opacity: 0.35; }
+        @keyframes sq-drift-a {
+          0%   { transform: translateX(-6%) rotate(-18deg); opacity: 0.35; }
+          50%  { transform: translateX(6%)  rotate(-16deg); opacity: 0.8; }
+          100% { transform: translateX(-6%) rotate(-18deg); opacity: 0.35; }
+        }
+        @keyframes sq-drift-b {
+          0%   { transform: translateX(5%)  rotate(-12deg); opacity: 0.25; }
+          50%  { transform: translateX(-5%) rotate(-10deg); opacity: 0.55; }
+          100% { transform: translateX(5%)  rotate(-12deg); opacity: 0.25; }
+        }
+        .sq-glow {
+          position: absolute;
+          width: 260px; height: 260px;
+          border-radius: 999px;
+          filter: blur(70px);
+          opacity: 0.28;
+        }
+        .sq-glow-1 { top: -60px; left: -60px; background: #7c3aed; animation: sq-float 10s ease-in-out infinite; }
+        .sq-glow-2 { bottom: -80px; right: -60px; background: #4f46e5; animation: sq-float 12s ease-in-out infinite reverse; }
+        @keyframes sq-float {
+          0%, 100% { transform: translate(0,0) scale(1); }
+          50% { transform: translate(20px, -15px) scale(1.15); }
+        }
+        @keyframes sq-pop-in {
+          0% { opacity: 0; transform: scale(0.9) translateY(8px); }
+          100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes sq-check-in {
+          0% { opacity: 0; transform: scale(0.4); }
+          60% { opacity: 1; transform: scale(1.15); }
+          100% { opacity: 1; transform: scale(1); }
+        }
+        @keyframes sq-ring-in {
+          0% { stroke-dashoffset: var(--ring-full); }
+          100% { stroke-dashoffset: var(--ring-offset); }
+        }
+        @keyframes sq-icon-float {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-4px); }
+        }
+        .sq-anim-pop { animation: sq-pop-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+        .sq-anim-check { animation: sq-check-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
+        .sq-anim-float { animation: sq-icon-float 3.2s ease-in-out infinite; }
+      `}</style>
+    </div>
+  );
+};
+
+// ─── PER-QUEST ICONOGRAPHY ─────────────────────────────────────────────────────
+// Every quest gets its own glyph + gradient theme, echoing the "cup" treatment
+// in the reference: a soft gradient disc, an inner ring, and a centered icon.
+const QuestSvg = {
+  cup: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3h10l-1 12a4 4 0 0 1-4 4h0a4 4 0 0 1-4-4L7 3Z"/><path d="M9 3v3"/><path d="M15 3v3"/></svg>),
+  smoothie: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2h8l-1 3H9L8 2Z"/><path d="M7 5h10l-1.2 14.2A2 2 0 0 1 13.8 21h-3.6a2 2 0 0 1-2-1.8L7 5Z"/><path d="M7.6 11h8.8"/></svg>),
+  dumbbell: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9v6"/><path d="M2 10v4"/><path d="M20 9v6"/><path d="M22 10v4"/><path d="M6.5 8v8"/><path d="M17.5 8v8"/><path d="M6.5 12h11"/></svg>),
+  run: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="13" cy="4" r="1.6"/><path d="M9.5 21l2-5 2.2 1.8L16 21"/><path d="M6 14l3-3 3 1 3.5-3.5"/><path d="M9 11 7 8"/></svg>),
+  bike: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="17" r="3.2"/><circle cx="18" cy="17" r="3.2"/><path d="M6 17l4-8h4l3 8"/><path d="M10 9h4"/><path d="M13 5h3l2 4"/></svg>),
+  footsteps: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 5.5a2 2 0 1 1 3 1.7v4.3a2.3 2.3 0 0 1-4.5.5"/><path d="M16 12.5a2 2 0 1 1 3 1.7v4.3a2.3 2.3 0 0 1-4.5.5"/></svg>),
+  droplet: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3s6 6.5 6 10.5a6 6 0 0 1-12 0C6 9.5 12 3 12 3Z"/></svg>),
+  leaf: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 5c-9 0-15 6-15 15 9 0 15-6 15-15Z"/><path d="M6 19 18 6"/></svg>),
+  bowl: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h16a8 6 0 0 1-16 0Z"/><path d="M12 12V5"/><path d="M9 7l3-2 3 2"/></svg>),
+  pot: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 11h16v3a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5v-3Z"/><path d="M2 11h20"/><path d="M6 11V8h12v3"/></svg>),
+  moon: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>),
+  lotus: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21c-4-1-6-3.5-6-7 3 0 6 1.5 6 5 0-3.5 3-5 6-5 0 3.5-2 6-6 7Z"/><path d="M12 21V9"/><path d="M8 9c0-3 2-6 4-7 2 1 4 4 4 7"/></svg>),
+  stretch: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="4" r="1.6"/><path d="M12 6v5"/><path d="M6 8l6 3 6-3"/><path d="M12 11l-3 9"/><path d="M12 11l3 9"/></svg>),
+  bolt: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>),
+  flame: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c4 0 7-2.7 7-6.5 0-3-2-5-3-7-.3 2-1.5 3-2.5 2.2.7-2.3-.2-4.7-2-6.2C11 7 8 9 8 13c-1-.6-1.5-1.8-1.5-3.2C5.3 11.2 5 13 5 15.2 5 19 8 22 12 22Z"/></svg>),
+  pencil: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="M14 6l4 4"/></svg>),
+  snowflake: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M4.5 7l15 10M19.5 7l-15 10"/></svg>),
+  wind: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 13h15a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 18h9a2 2 0 1 0-2-2"/></svg>),
+  rope: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20c4-8 12-8 16 0"/><path d="M4 4c4 8 12 8 16 0"/></svg>),
+  target: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.6" fill="currentColor"/></svg>),
+};
+
+// id -> { icon, gradient (tailwind classes), ring (border/glow color) }
+const QUEST_THEME = {
+  q1:  { icon: 'dumbbell', grad: 'from-fuchsia-500 to-purple-600' },
+  q2:  { icon: 'dumbbell', grad: 'from-violet-500 to-indigo-600' },
+  q3:  { icon: 'run',      grad: 'from-orange-400 to-rose-500' },
+  q4:  { icon: 'dumbbell', grad: 'from-purple-500 to-blue-600' },
+  q5:  { icon: 'footsteps',grad: 'from-teal-400 to-cyan-600' },
+  q6:  { icon: 'cup',      grad: 'from-indigo-400 to-violet-600' },
+  q7:  { icon: 'lotus',    grad: 'from-emerald-400 to-teal-600' },
+  q8:  { icon: 'stretch',  grad: 'from-sky-400 to-indigo-600' },
+  q9:  { icon: 'leaf',     grad: 'from-lime-400 to-emerald-600' },
+  q10: { icon: 'moon',     grad: 'from-indigo-500 to-slate-700' },
+  q11: { icon: 'bolt',     grad: 'from-yellow-400 to-orange-600' },
+  q12: { icon: 'flame',    grad: 'from-rose-500 to-red-600' },
+  q13: { icon: 'pencil',   grad: 'from-amber-400 to-orange-600' },
+  q14: { icon: 'smoothie', grad: 'from-green-400 to-emerald-600' },
+  q15: { icon: 'target',   grad: 'from-cyan-400 to-blue-600' },
+  q16: { icon: 'bike',     grad: 'from-blue-400 to-indigo-600' },
+  q17: { icon: 'rope',     grad: 'from-pink-500 to-fuchsia-600' },
+  q18: { icon: 'droplet',  grad: 'from-sky-400 to-blue-600' },
+  q19: { icon: 'leaf',     grad: 'from-emerald-400 to-green-600' },
+  q20: { icon: 'pot',      grad: 'from-orange-400 to-amber-600' },
+  q21: { icon: 'wind',     grad: 'from-cyan-300 to-teal-600' },
+  q22: { icon: 'footsteps',grad: 'from-violet-400 to-purple-600' },
+  q23: { icon: 'dumbbell', grad: 'from-fuchsia-500 to-rose-600' },
+  q24: { icon: 'moon',     grad: 'from-indigo-400 to-blue-700' },
+  q25: { icon: 'snowflake',grad: 'from-cyan-300 to-blue-600' },
+};
+
+const QUEST_ABOUT = {
+  q1: "Pushups build raw upper-body strength and core stability in one clean movement — no equipment required.",
+  q2: "Squats fire up your biggest muscle groups and reinforce the mechanics behind almost every athletic movement.",
+  q3: "A steady run gets your heart rate up, clears your head, and builds endurance over time.",
+  q4: "Pullups are one of the purest tests of back and grip strength — a few reps go a long way.",
+  q5: "A brisk walk outside boosts circulation, mood, and gives your eyes a break from the screen.",
+  q6: "Staying hydrated helps your body perform better and keeps your mind sharp.",
+  q7: "A short meditation resets your focus and lowers stress before it builds up.",
+  q8: "Stretching keeps your muscles loose and your joints moving through their full range.",
+  q9: "A balanced, whole-food meal fuels recovery and keeps your energy steady.",
+  q10: "Consistent, sufficient sleep is the single biggest lever for recovery and focus.",
+  q11: "A quick cardio burst spikes your heart rate and wakes up your whole body fast.",
+  q12: "Situps target your core and build the stability everything else is built on.",
+  q13: "Journaling for a few minutes helps you process the day and plan the next one.",
+  q14: "A green smoothie is an easy way to pack in nutrients when you're short on time.",
+  q15: "Holding a plank builds isometric core strength that carries over to everything else.",
+  q16: "Cycling is easy on the joints while still building serious cardio endurance.",
+  q17: "Jump rope sharpens coordination and torches calories in a small amount of time.",
+  q18: "A cold shower is a quick way to train discipline and wake up your nervous system.",
+  q19: "Cutting added sugar for a day gives your energy levels a noticeably steadier baseline.",
+  q20: "Cooking from scratch puts you in control of what goes into your body.",
+  q21: "A few minutes of deep breathing calms your nervous system and sharpens focus.",
+  q22: "Hitting your step count keeps your body moving steadily throughout the day.",
+  q23: "Lunges build single-leg strength and balance that squats alone don't cover.",
+  q24: "An earlier bedtime compounds — better sleep tonight means a better day tomorrow.",
+  q25: "Cold exposure trains resilience and gives your recovery a real boost.",
+};
+
+const QUEST_QUOTES = [
+  "Small steps every day lead to big changes.",
+  "Discipline is choosing between what you want now and what you want most.",
+  "Progress, not perfection.",
+  "The body achieves what the mind believes.",
+  "One quest at a time.",
+  "Consistency beats intensity.",
+  "You didn't come this far to only come this far.",
+];
+
+const QuestIconBadge = ({ questId, size = 96, dark, floating = false }) => {
+  const theme = QUEST_THEME[questId] || { icon: 'target', grad: 'from-indigo-500 to-purple-600' };
+  const Icon = QuestSvg[theme.icon] || QuestSvg.target;
+  return (
+    <div
+      className={`relative flex items-center justify-center rounded-full bg-gradient-to-br ${theme.grad} ${floating ? 'sq-anim-float' : ''}`}
+      style={{
+        width: size, height: size,
+        boxShadow: `0 0 0 1px rgba(255,255,255,0.15) inset, 0 8px 30px -8px rgba(139,92,246,0.65)`,
+      }}
+    >
+      <div className="absolute inset-[3px] rounded-full border border-white/25" />
+      <Icon width={Math.round(size * 0.42)} height={Math.round(size * 0.42)} className="text-white relative z-10" />
+    </div>
+  );
+};
+
+// Circular ring used for the "Daily Progress" card
+const ProgressRing = ({ pct, size = 56, stroke = 5, dark }) => {
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const offset = c - (pct / 100) * c;
+  return (
+    <div className="relative" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={dark ? '#27272a' : '#e5e7eb'} strokeWidth={stroke} />
+        <circle
+          cx={size / 2} cy={size / 2} r={r} fill="none"
+          stroke="url(#sq-ring-gradient)" strokeWidth={stroke} strokeLinecap="round"
+          strokeDasharray={c}
+          style={{ strokeDashoffset: offset, transition: 'stroke-dashoffset 0.8s cubic-bezier(0.22,1,0.36,1)' }}
+        />
+        <defs>
+          <linearGradient id="sq-ring-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#818cf8" />
+            <stop offset="100%" stopColor="#c084fc" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className={`text-[11px] font-bold ${dark ? 'text-white' : 'text-gray-900'}`}>{Math.round(pct)}%</span>
+      </div>
+    </div>
+  );
+};
+
+// ─── QUEST DETAIL SCREEN ────────────────────────────────────────────────────────
+function QuestDetailScreen({ quest, dark, timeLeft, onBack, onMarkComplete }) {
+  const txt = dark ? 'text-white' : 'text-gray-900';
+  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
+  const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
+  const cardBg = dark ? 'bg-zinc-900/70' : 'bg-white';
+  const theme = QUEST_THEME[quest.id] || { grad: 'from-indigo-500 to-purple-600' };
+  const about = QUEST_ABOUT[quest.id] || 'Stay consistent — every quest you complete adds up to real progress.';
+
+  return (
+    <div className="sq-anim-pop relative z-10">
+      <div className="flex items-center justify-between px-4 pt-2 pb-3">
+        <button onClick={onBack}
+          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70`}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+        </button>
+        <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${pill}`}>
+          <span className="text-[10px]">⏱</span>
+          <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
+        </div>
+        <div className={`w-9 h-9 rounded-full flex items-center justify-center ${pill}`}>
+          <span className="text-[15px]">☀️</span>
+        </div>
+      </div>
+
+      <div className="px-4">
+        <div
+          className={`relative overflow-hidden rounded-[26px] px-6 pt-10 pb-8 flex flex-col items-center text-center bg-gradient-to-b ${dark ? 'from-[#1c1530] to-[#0d0a17]' : 'from-indigo-50 to-white'} border ${dark ? 'border-white/10' : 'border-gray-100'}`}
+        >
+          <AnimatedBackground dark={dark} />
+          <div className="relative z-10 flex flex-col items-center">
+            <QuestIconBadge questId={quest.id} size={92} dark={dark} floating />
+            <h2 className={`mt-5 text-[22px] font-bold leading-tight max-w-[240px] ${txt}`}>{quest.text}</h2>
+            <span className={`mt-3 px-3 py-1 rounded-full text-xs font-semibold bg-gradient-to-r ${theme.grad} text-white`}>
+              +{quest.xp} XP
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-4 mt-5">
+        <p className={`text-[11px] font-semibold uppercase tracking-widest mb-1.5 px-1 ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>
+          About this quest
+        </p>
+        <div className={`${cardBg} rounded-[16px] p-4 border ${dark ? 'border-white/5' : 'border-gray-100'}`}>
+          <p className={`text-[14px] leading-relaxed ${sub}`}>{about}</p>
+        </div>
+      </div>
+
+      <div className="px-4 mt-6">
+        <button
+          onClick={onMarkComplete}
+          className={`w-full py-4 rounded-[16px] text-[15px] font-semibold text-white bg-gradient-to-r ${theme.grad} shadow-lg active:scale-[0.97] transition-transform`}
+          style={{ boxShadow: '0 10px 30px -10px rgba(139,92,246,0.6)' }}
+        >
+          Mark as Completed
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── COMPLETION SCREEN ───────────────────────────────────────────────────────────
+function CompletionScreen({ quest, dark, timeLeft, onBack }) {
+  const txt = dark ? 'text-white' : 'text-gray-900';
+  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
+  const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
+  const cardBg = dark ? 'bg-zinc-900/70' : 'bg-white';
+  const quote = useMemo(() => QUEST_QUOTES[Math.floor(Math.random() * QUEST_QUOTES.length)], [quest?.id]);
+
+  return (
+    <div className="sq-anim-pop relative z-10">
+      <div className="flex items-center justify-between px-4 pt-2 pb-3">
+        <button onClick={onBack}
+          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70`}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+        </button>
+        <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${pill}`}>
+          <span className="text-[10px]">⏱</span>
+          <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
+        </div>
+        <div className={`w-9 h-9 rounded-full flex items-center justify-center ${pill}`}>
+          <span className="text-[15px]">☀️</span>
+        </div>
+      </div>
+
+      <div className="px-4">
+        <div className={`relative overflow-hidden rounded-[26px] px-6 pt-12 pb-10 flex flex-col items-center text-center bg-gradient-to-b ${dark ? 'from-[#0e2318] to-[#081712]' : 'from-emerald-50 to-white'} border ${dark ? 'border-emerald-500/20' : 'border-emerald-100'}`}>
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-emerald-500/25 blur-3xl" />
+            <div className="absolute -bottom-14 -right-10 w-48 h-48 rounded-full bg-green-400/20 blur-3xl" />
+          </div>
+          <div className="relative z-10 flex flex-col items-center">
+            <div className="sq-anim-check w-24 h-24 rounded-full flex items-center justify-center border-2 border-emerald-400"
+              style={{ boxShadow: '0 0 40px -6px rgba(52,211,153,0.55)' }}>
+              <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+            </div>
+            <h2 className={`mt-5 text-[22px] font-bold ${txt}`}>Quest Completed!</h2>
+            <span className="mt-3 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/90 text-white">
+              +{quest?.xp ?? 0} XP
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="px-4 mt-5">
+        <div className={`${cardBg} rounded-[16px] p-5 border ${dark ? 'border-white/5' : 'border-gray-100'} relative`}>
+          <span className={`absolute top-2 left-3 text-3xl leading-none ${dark ? 'text-zinc-700' : 'text-gray-200'}`}>&ldquo;</span>
+          <p className={`text-[15px] font-medium text-center leading-relaxed px-3 ${txt}`}>{quote}</p>
+          <span className={`absolute bottom-1 right-3 text-3xl leading-none ${dark ? 'text-zinc-700' : 'text-gray-200'}`}>&rdquo;</span>
+        </div>
+      </div>
+
+      <div className="px-4 mt-6">
+        <button
+          onClick={onBack}
+          className={`w-full py-4 rounded-[16px] text-[15px] font-semibold ${dark ? 'bg-zinc-800 text-white' : 'bg-gray-100 text-gray-800'} active:opacity-70`}
+        >
+          Back to Quests
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── CAMERA / AI MODAL ────────────────────────────────────────────────────────
 function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const videoRef     = useRef(null);
@@ -847,6 +1191,8 @@ export default function SideQuestsApp() {
   const [proofModal,   setProofModal]   = useState(null);
   const [proofImages,  setProofImages]  = useState(() => JSON.parse(localStorage.getItem('sq_proofs')) || {});
   const [viewingProof, setViewingProof] = useState(null);
+  const [detailQuest,     setDetailQuest]     = useState(null);
+  const [completionQuest, setCompletionQuest] = useState(null);
 
   const xpRef    = useRef(xp);
   const levelRef = useRef(level);
@@ -895,7 +1241,7 @@ export default function SideQuestsApp() {
       applyXpChange(-quest.xp);
       setProofImages(prev => { const n = { ...prev }; delete n[quest.id]; return n; });
     } else {
-      setProofModal(quest);
+      setDetailQuest(quest);
     }
   };
 
@@ -905,6 +1251,8 @@ export default function SideQuestsApp() {
     setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true } : q));
     applyXpChange(quest?.xp ?? 0);
     setProofModal(null);
+    setDetailQuest(null);
+    setCompletionQuest(quest || null);
   };
 
   const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
@@ -917,9 +1265,14 @@ export default function SideQuestsApp() {
   const sep      = dark ? 'border-zinc-800' : 'border-gray-100';
   const secLabel = dark ? 'text-zinc-500' : 'text-gray-400';
 
+  const completedCount = quests.filter(q => q.completed).length;
+  const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
+
   return (
     <div className={`${bg} min-h-screen flex flex-col items-center transition-colors duration-200`}>
-      <div className="w-full max-w-[430px] flex flex-col min-h-screen">
+      <div className="relative w-full max-w-[430px] flex flex-col min-h-screen overflow-hidden">
+
+      <AnimatedBackground dark={dark} />
 
       {proofModal && (
         <CameraModal quest={proofModal} dark={dark}
@@ -935,8 +1288,17 @@ export default function SideQuestsApp() {
         </div>
       )}
 
+      {completionQuest ? (
+        <CompletionScreen quest={completionQuest} dark={dark} timeLeft={timeLeft}
+          onBack={() => setCompletionQuest(null)} />
+      ) : detailQuest ? (
+        <QuestDetailScreen quest={detailQuest} dark={dark} timeLeft={timeLeft}
+          onBack={() => setDetailQuest(null)}
+          onMarkComplete={() => setProofModal(detailQuest)} />
+      ) : (
+      <>
       {/* Header */}
-      <div className={`${cardBg} safe-top px-4 pb-3 border-b ${sep} transition-colors duration-200`}>
+      <div className={`relative z-10 safe-top px-4 pb-3 transition-colors duration-200`}>
         <div className="flex items-center justify-between pt-2">
           <div className="flex items-center gap-2.5">
             <LogoIcon size={34} dark={dark} />
@@ -944,40 +1306,42 @@ export default function SideQuestsApp() {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${dark ? 'bg-zinc-800' : 'bg-gray-100'}`}>
+            <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${dark ? 'bg-zinc-800/80' : 'bg-gray-100'}`}>
               <span className="text-[10px]">⏱</span>
               <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
             </div>
             <button onClick={() => setDark(d => !d)}
-              className={`w-8 h-8 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
+              className={`w-8 h-8 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
               {dark ? <SunIcon /> : <MoonIcon />}
             </button>
           </div>
         </div>
 
-        {/* XP Progress Bar */}
-        <div className="mt-3">
-          <div className="flex items-center justify-between mb-1.5">
-            <div className="flex items-center gap-1.5">
-              <span className="bg-[#007AFF] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Lv {level}</span>
-              <span className={`text-[11px] ${sub}`}>Novice Adventurer</span>
-            </div>
-            <span className={`text-[11px] ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{xp} / {xpRequired} XP</span>
-          </div>
-          <div className={`w-full h-1 rounded-full overflow-hidden ${dark ? 'bg-zinc-800' : 'bg-gray-200'}`}>
-            <div className="h-full bg-[#007AFF] rounded-full transition-all duration-700 ease-out" style={{ width: `${xpPct}%` }} />
-          </div>
+        <div className="mt-3 flex items-center gap-1.5">
+          <span className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Lv {level}</span>
+          <span className={`text-[11px] ${sub}`}>Novice Adventurer</span>
+          <span className={`ml-auto text-[11px] ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{xp} / {xpRequired} XP</span>
         </div>
       </div>
 
       {/* Quest List Containers */}
-      <div className="flex-1 scroll-ios px-4 pt-4 pb-6 space-y-5">
+      <div className="relative z-10 flex-1 scroll-ios px-4 pt-1 pb-6 space-y-5">
+
+        {/* Daily Progress card */}
+        <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100'} rounded-[16px] px-4 py-3.5 flex items-center justify-between sq-anim-pop`}>
+          <div>
+            <p className={`text-[14px] font-semibold ${txt}`}>Daily Progress</p>
+            <p className={`text-[12px] mt-0.5 ${sub}`}>{completedCount} / {quests.length} completed</p>
+          </div>
+          <ProgressRing pct={dailyPct} dark={dark} />
+        </div>
+
         <div>
           <p className={`text-[11px] font-semibold uppercase tracking-widest ${secLabel} mb-1.5 px-1`}>
             Today's Objectives
           </p>
 
-          <div className={`${dark ? 'bg-zinc-900' : 'bg-[#F2F2F7]'} rounded-[14px] overflow-hidden`}>
+          <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-[#F2F2F7]'} rounded-[14px] overflow-hidden`}>
             {quests.map((quest, i) => (
               <div key={quest.id}>
                 {i > 0 && <div className={`border-t ${sep} ml-14`} />}
@@ -1050,6 +1414,8 @@ export default function SideQuestsApp() {
           </p>
         )}
       </div>
+      </>
+      )}
 
       <div className="safe-bottom" />
       </div>
