@@ -54,3 +54,5 @@ Bash
 npm run dev
 🛡️ Privacy & Security Disclaimer
 Side Quests is completely decentralized. The application opens a fully sandbox-contained media capture context inside your browser window. No media assets, images, tracking maps, or metadata logs are transferred over the internet. Your workout records belong to you alone.
+
+-Made By Qais Kurdieh 
