@@ -202,9 +202,15 @@ const CheckIcon = () => (
 // Soft diagonal light streaks that drift slowly behind the whole app, like the
 // reference design. Pure CSS keyframes, no canvas — cheap to run.
 const AnimatedBackground = ({ dark }) => {
-  if (!dark) return null;
+  const vars = {
+    '--sq-streak-c1': dark ? 'rgba(139,92,246,0.55)' : 'rgba(99,102,241,0.30)',
+    '--sq-streak-c2': dark ? 'rgba(99,102,241,0.35)' : 'rgba(168,85,247,0.20)',
+    '--sq-glow-1':    dark ? '#7c3aed' : '#c7d2fe',
+    '--sq-glow-2':    dark ? '#4f46e5' : '#e0d4fc',
+    '--sq-glow-o':    dark ? 0.28 : 0.55,
+  };
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden z-0">
+    <div className="pointer-events-none absolute inset-0 overflow-hidden z-0" style={vars}>
       <div className="sq-streak sq-streak-1" />
       <div className="sq-streak sq-streak-2" />
       <div className="sq-streak sq-streak-3" />
@@ -216,7 +222,7 @@ const AnimatedBackground = ({ dark }) => {
           width: 180%;
           height: 1.5px;
           left: -40%;
-          background: linear-gradient(90deg, transparent, rgba(139,92,246,0.55), rgba(99,102,241,0.35), transparent);
+          background: linear-gradient(90deg, transparent, var(--sq-streak-c1), var(--sq-streak-c2), transparent);
           transform-origin: center;
           filter: blur(0.5px);
           opacity: 0.7;
@@ -239,10 +245,10 @@ const AnimatedBackground = ({ dark }) => {
           width: 260px; height: 260px;
           border-radius: 999px;
           filter: blur(70px);
-          opacity: 0.28;
+          opacity: var(--sq-glow-o);
         }
-        .sq-glow-1 { top: -60px; left: -60px; background: #7c3aed; animation: sq-float 10s ease-in-out infinite; }
-        .sq-glow-2 { bottom: -80px; right: -60px; background: #4f46e5; animation: sq-float 12s ease-in-out infinite reverse; }
+        .sq-glow-1 { top: -60px; left: -60px; background: var(--sq-glow-1); animation: sq-float 10s ease-in-out infinite; }
+        .sq-glow-2 { bottom: -80px; right: -60px; background: var(--sq-glow-2); animation: sq-float 12s ease-in-out infinite reverse; }
         @keyframes sq-float {
           0%, 100% { transform: translate(0,0) scale(1); }
           50% { transform: translate(20px, -15px) scale(1.15); }
@@ -255,10 +261,6 @@ const AnimatedBackground = ({ dark }) => {
           0% { opacity: 0; transform: scale(0.4); }
           60% { opacity: 1; transform: scale(1.15); }
           100% { opacity: 1; transform: scale(1); }
-        }
-        @keyframes sq-ring-in {
-          0% { stroke-dashoffset: var(--ring-full); }
-          100% { stroke-dashoffset: var(--ring-offset); }
         }
         @keyframes sq-icon-float {
           0%, 100% { transform: translateY(0px); }
@@ -281,7 +283,11 @@ const QuestSvg = {
   dumbbell: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9v6"/><path d="M2 10v4"/><path d="M20 9v6"/><path d="M22 10v4"/><path d="M6.5 8v8"/><path d="M17.5 8v8"/><path d="M6.5 12h11"/></svg>),
   run: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="13" cy="4" r="1.6"/><path d="M9.5 21l2-5 2.2 1.8L16 21"/><path d="M6 14l3-3 3 1 3.5-3.5"/><path d="M9 11 7 8"/></svg>),
   bike: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="17" r="3.2"/><circle cx="18" cy="17" r="3.2"/><path d="M6 17l4-8h4l3 8"/><path d="M10 9h4"/><path d="M13 5h3l2 4"/></svg>),
-  footsteps: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 5.5a2 2 0 1 1 3 1.7v4.3a2.3 2.3 0 0 1-4.5.5"/><path d="M16 12.5a2 2 0 1 1 3 1.7v4.3a2.3 2.3 0 0 1-4.5.5"/></svg>),
+  footsteps: (p) => (<svg {...p} viewBox="0 0 24 24" fill="currentColor" stroke="none"><ellipse cx="8.3" cy="15.6" rx="2.3" ry="3.5" transform="rotate(-12 8.3 15.6)"/><circle cx="6.6" cy="11" r="0.95"/><circle cx="8" cy="10.1" r="0.95"/><circle cx="9.4" cy="10.3" r="0.9"/><circle cx="10.6" cy="11" r="0.8"/><ellipse cx="15.9" cy="8.6" rx="2.3" ry="3.5" transform="rotate(10 15.9 8.6)"/><circle cx="14.1" cy="4" r="0.95"/><circle cx="15.5" cy="3.2" r="0.95"/><circle cx="16.9" cy="3.4" r="0.9"/><circle cx="18.1" cy="4.1" r="0.8"/></svg>),
+  legs: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="4" r="1.6"/><path d="M12 6v5"/><path d="M12 11 8 14v7"/><path d="M12 11l4 3v7"/><path d="M8 21h2"/><path d="M14 21h2"/></svg>),
+  core: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="7" y="3.5" width="10" height="17" rx="4.5"/><path d="M12 3.5v17"/><path d="M7.5 9.5h9"/><path d="M7.5 14.5h9"/></svg>),
+  stopwatch: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="13.5" r="7.2"/><path d="M12 13.5V9.2"/><path d="M9.5 2.5h5"/><path d="M18 5.5l1.4-1.4"/></svg>),
+  bar: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5h16"/><circle cx="12" cy="9" r="1.6"/><path d="M12 10.6v4"/><path d="M9 6.5l2 3"/><path d="M15 6.5l-2 3"/><path d="M10 14.6l-1.6 4"/><path d="M14 14.6l1.6 4"/></svg>),
   droplet: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3s6 6.5 6 10.5a6 6 0 0 1-12 0C6 9.5 12 3 12 3Z"/></svg>),
   leaf: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 5c-9 0-15 6-15 15 9 0 15-6 15-15Z"/><path d="M6 19 18 6"/></svg>),
   bowl: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h16a8 6 0 0 1-16 0Z"/><path d="M12 12V5"/><path d="M9 7l3-2 3 2"/></svg>),
@@ -301,20 +307,20 @@ const QuestSvg = {
 // id -> { icon, gradient (tailwind classes), ring (border/glow color) }
 const QUEST_THEME = {
   q1:  { icon: 'dumbbell', grad: 'from-fuchsia-500 to-purple-600' },
-  q2:  { icon: 'dumbbell', grad: 'from-violet-500 to-indigo-600' },
+  q2:  { icon: 'legs',     grad: 'from-violet-500 to-indigo-600' },
   q3:  { icon: 'run',      grad: 'from-orange-400 to-rose-500' },
-  q4:  { icon: 'dumbbell', grad: 'from-purple-500 to-blue-600' },
+  q4:  { icon: 'bar',      grad: 'from-purple-500 to-blue-600' },
   q5:  { icon: 'footsteps',grad: 'from-teal-400 to-cyan-600' },
   q6:  { icon: 'cup',      grad: 'from-indigo-400 to-violet-600' },
   q7:  { icon: 'lotus',    grad: 'from-emerald-400 to-teal-600' },
   q8:  { icon: 'stretch',  grad: 'from-sky-400 to-indigo-600' },
-  q9:  { icon: 'leaf',     grad: 'from-lime-400 to-emerald-600' },
+  q9:  { icon: 'bowl',     grad: 'from-lime-400 to-emerald-600' },
   q10: { icon: 'moon',     grad: 'from-indigo-500 to-slate-700' },
   q11: { icon: 'bolt',     grad: 'from-yellow-400 to-orange-600' },
-  q12: { icon: 'flame',    grad: 'from-rose-500 to-red-600' },
+  q12: { icon: 'core',     grad: 'from-rose-500 to-red-600' },
   q13: { icon: 'pencil',   grad: 'from-amber-400 to-orange-600' },
   q14: { icon: 'smoothie', grad: 'from-green-400 to-emerald-600' },
-  q15: { icon: 'target',   grad: 'from-cyan-400 to-blue-600' },
+  q15: { icon: 'stopwatch',grad: 'from-cyan-400 to-blue-600' },
   q16: { icon: 'bike',     grad: 'from-blue-400 to-indigo-600' },
   q17: { icon: 'rope',     grad: 'from-pink-500 to-fuchsia-600' },
   q18: { icon: 'droplet',  grad: 'from-sky-400 to-blue-600' },
@@ -322,7 +328,7 @@ const QUEST_THEME = {
   q20: { icon: 'pot',      grad: 'from-orange-400 to-amber-600' },
   q21: { icon: 'wind',     grad: 'from-cyan-300 to-teal-600' },
   q22: { icon: 'footsteps',grad: 'from-violet-400 to-purple-600' },
-  q23: { icon: 'dumbbell', grad: 'from-fuchsia-500 to-rose-600' },
+  q23: { icon: 'legs',     grad: 'from-fuchsia-500 to-rose-600' },
   q24: { icon: 'moon',     grad: 'from-indigo-400 to-blue-700' },
   q25: { icon: 'snowflake',grad: 'from-cyan-300 to-blue-600' },
 };
@@ -554,6 +560,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const lastVideoTimeRef = useRef(-1);
   const confirmedRef = useRef(false);
   const passStreakRef = useRef(0);
+  const smoothedActionRef = useRef(0);
   const repTrackerRef = useRef(createRepTracker());
 
   const [phase,         setPhase]         = useState('starting');
@@ -820,8 +827,10 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           }
         } else {
           const actScore = getMaxLabelScore(results, labels.activity);
-          setLiveScore(Math.round(actScore * 100));
-          const passed = actScore > negScore && actScore >= PASS_THRESHOLD;
+          smoothedActionRef.current = smoothedActionRef.current * 0.5 + actScore * 0.5;
+          const displayScore = smoothedActionRef.current;
+          setLiveScore(Math.round(displayScore * 100));
+          const passed = displayScore > negScore && displayScore >= PASS_THRESHOLD;
           passStreakRef.current = passed ? passStreakRef.current + 1 : 0;
           setPassStreak(passStreakRef.current);
           if (passStreakRef.current >= REQUIRED_PASSES) {
@@ -872,6 +881,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     scanRunRef.current += 1;
     setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(0);
     passStreakRef.current = 0;
+    smoothedActionRef.current = 0;
     confirmedRef.current = false;
     lastVideoTimeRef.current = -1;
     resetRepTracking();
@@ -939,24 +949,28 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     onConfirm(canvas.toDataURL('image/jpeg', 0.82));
   };
 
-  const meterColor = liveScore >= (quest.reps ? REP_FORM_CONFIDENCE : PASS_THRESHOLD) * 100 ? 'bg-green-500' : liveScore >= 15 ? 'bg-yellow-400' : 'bg-red-500';
+  const meterColor = liveScore >= (quest.reps ? REP_FORM_CONFIDENCE : PASS_THRESHOLD) * 100 ? 'bg-emerald-500' : liveScore >= 15 ? 'bg-amber-400' : 'bg-rose-500';
 
-  const bg     = dark ? 'bg-zinc-900'  : 'bg-white';
-  const border = dark ? 'border-zinc-700' : 'border-gray-200';
+  const bg     = dark ? 'bg-zinc-950'  : 'bg-white';
+  const border = dark ? 'border-white/10' : 'border-gray-200';
   const txt    = dark ? 'text-white'   : 'text-gray-900';
   const sub    = dark ? 'text-zinc-400' : 'text-gray-500';
-  const pill   = dark ? 'bg-zinc-800'  : 'bg-gray-100';
+  const pill   = dark ? 'bg-zinc-800/80'  : 'bg-gray-100';
+  const accentText = dark ? 'text-violet-400' : 'text-violet-600';
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
-      <div className={`${bg} w-full max-w-lg rounded-t-[28px] overflow-hidden shadow-2xl`} style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 16px)' }}>
+      <div className={`relative ${bg} w-full max-w-lg rounded-t-[28px] overflow-hidden shadow-2xl border-t ${border}`} style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 16px)' }}>
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-40 overflow-hidden opacity-60">
+          <AnimatedBackground dark={dark} />
+        </div>
 
-        <div className="flex justify-center pt-3 pb-1">
+        <div className="relative flex justify-center pt-3 pb-1">
           <div className={`w-10 h-1 rounded-full ${dark ? 'bg-zinc-600' : 'bg-gray-300'}`} />
         </div>
 
-        <div className={`flex items-center justify-between px-5 py-3 border-b ${border}`}>
-          <button onClick={onCancel} className="text-[#007AFF] text-sm font-medium">Cancel</button>
+        <div className={`relative flex items-center justify-between px-5 py-3 border-b ${border}`}>
+          <button onClick={onCancel} className={`text-sm font-medium ${accentText}`}>Cancel</button>
           <div className="text-center">
             <p className={`text-sm font-semibold ${txt}`}>AI Verification</p>
             <p className={`text-xs ${sub} mt-0.5 max-w-[240px] truncate`}>{uiSubtext}</p>
@@ -969,26 +983,26 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
               className={`w-full h-full object-cover ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
 
           {phase === 'live' && !uploadedProof && labels?.bodyParts && (
-            <div className="absolute inset-0 pointer-events-none border-[3px] border-dashed border-cyan-500/30 m-4 rounded-xl animate-pulse z-10">
-              <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-cyan-500/40 text-[10px] font-mono tracking-wider text-cyan-400">
+            <div className="absolute inset-0 pointer-events-none border-[3px] border-dashed border-violet-500/30 m-4 rounded-xl animate-pulse z-10">
+              <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-violet-500/40 text-[10px] font-mono tracking-wider text-violet-300">
                 <div className="flex items-center gap-1.5 mb-1 text-white uppercase font-bold text-[11px]">
-                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block" />
+                  <span className="w-2 h-2 rounded-full bg-violet-400 animate-ping inline-block" />
                   Biometric Engine Active
                 </div>
                 <div className="text-white/60 text-[9px] mb-0.5">Tracking Matrix Focus Points:</div>
                 <div className="flex flex-wrap gap-1 max-w-[180px] mt-1">
                   {labels.bodyParts.map((part) => (
-                    <span key={part} className="bg-cyan-950 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-800/60 font-semibold">
+                    <span key={part} className="bg-violet-950 text-violet-300 px-1.5 py-0.5 rounded border border-violet-800/60 font-semibold">
                       {part}
                     </span>
                   ))}
                 </div>
               </div>
               
-              <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-cyan-400" />
-              <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-cyan-400" />
-              <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-cyan-400" />
-              <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-cyan-400" />
+              <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-violet-400" />
+              <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-violet-400" />
+              <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-violet-400" />
+              <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-violet-400" />
             </div>
           )}
 
@@ -1087,7 +1101,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
               style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)' }}>
               <p className="text-white/60 text-xs mb-1">Loading AI model… {modelProgress ?? 0}%</p>
               <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
-                <div className="h-full bg-[#007AFF] transition-all duration-300 rounded-full"
+                <div className="h-full bg-gradient-to-r from-indigo-400 to-violet-500 transition-all duration-300 rounded-full"
                   style={{ width: `${modelProgress ?? 0}%` }} />
               </div>
             </div>
@@ -1126,7 +1140,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                 disabled={!confirmed}
                 className={`w-full py-4 rounded-[14px] text-sm font-semibold transition-all duration-300 ${
                   confirmed
-                    ? 'bg-[#007AFF] text-white shadow-lg active:scale-[0.97]'
+                    ? 'bg-gradient-to-r from-indigo-500 to-violet-600 text-white shadow-lg active:scale-[0.97]'
                     : `${pill} ${sub} cursor-not-allowed`
                 }`}
               >
@@ -1139,7 +1153,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   Flip Camera
                 </button>
                 {!quest.reps && (
-                <label className={`flex-1 py-3 rounded-[14px] text-sm font-medium ${pill} ${sub} text-center cursor-pointer active:opacity-70 ${questType === 'map' ? 'ring-2 ring-[#007AFF]' : ''}`}>
+                <label className={`flex-1 py-3 rounded-[14px] text-sm font-medium ${pill} ${sub} text-center cursor-pointer active:opacity-70 ${questType === 'map' ? 'ring-2 ring-violet-500' : ''}`}>
                   Upload Photo
                   <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
                 </label>
