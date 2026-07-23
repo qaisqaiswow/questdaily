@@ -459,7 +459,7 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
         const video = videoRef.current;
 
         while (isRunning && video && canvas) {
-          if (video.readyState === 4) {
+          if (video.readyState >= 2) {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             const ctx = canvas.getContext('2d');
@@ -468,32 +468,34 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
 
             const questConfig = QUEST_LABELS[quest.id] || { activity: [quest.text], label: quest.text };
             const negLabels = getNegativeLabels(questConfig.type || 'action');
-            const allLabels = [...(questConfig.activity || [quest.text]), ...negLabels];
+            const repConfig = isRepQuest ? REP_PROFILES[quest.id] : null;
+            
+            // Fix: Include target/reset reps in the labels we pass to the classifier
+            const allLabels = (isRepQuest && repConfig)
+              ? [...repConfig.target, ...repConfig.reset, ...negLabels]
+              : [...(questConfig.activity || [quest.text]), ...negLabels];
 
             const results = await classifier(imageSrc, allLabels);
-            const targetScore = getMaxLabelScore(results, questConfig.activity || [quest.text]);
             const negScore = getMaxLabelScore(results, negLabels);
 
-            if (isRepQuest) {
-              const repConfig = REP_PROFILES[quest.id];
-              if (repConfig) {
-                const tScore = getMaxLabelScore(results, repConfig.target);
-                const rScore = getMaxLabelScore(results, repConfig.reset);
-                const step = advanceRepTracker(trackerRef.current, { targetScore: tScore, resetScore: rScore, now: Date.now() });
-                
-                setAiConfidence(Math.round(step.confidence * 100));
-                if (step.counted) {
-                  setReps(r => {
-                    const next = r + 1;
-                    if (next >= quest.reps) setFeedback("🎉 Target reached! Click Complete below!");
-                    else setFeedback(`🔥 Good rep! (${next}/${quest.reps})`);
-                    return next;
-                  });
-                } else if (reps < quest.reps) {
-                  setFeedback(step.phase === 'seek-target' ? (repConfig.cue || "Go down...") : "Now rise back up!");
-                }
+            if (isRepQuest && repConfig) {
+              const tScore = getMaxLabelScore(results, repConfig.target);
+              const rScore = getMaxLabelScore(results, repConfig.reset);
+              const step = advanceRepTracker(trackerRef.current, { targetScore: tScore, resetScore: rScore, now: Date.now() });
+              
+              setAiConfidence(Math.round(step.confidence * 100));
+              if (step.counted) {
+                setReps(r => {
+                  const next = r + 1;
+                  if (next >= quest.reps) setFeedback("🎉 Target reached! Click Complete below!");
+                  else setFeedback(`🔥 Good rep! (${next}/${quest.reps})`);
+                  return next;
+                });
+              } else if (reps < quest.reps) {
+                setFeedback(step.phase === 'seek-target' ? (repConfig.cue || "Go down...") : "Now rise back up!");
               }
             } else {
+              const targetScore = getMaxLabelScore(results, questConfig.activity || [quest.text]);
               setAiConfidence(Math.round(targetScore * 100));
               if (targetScore > PASS_THRESHOLD && targetScore > negScore) {
                 setFeedback("✅ AI Verified: Activity clearly detected!");
@@ -672,7 +674,7 @@ function ActiveQuestScreen({ quest, dark, onBack, onComplete }) {
 }
 
 // ─── QUEST DETAIL SCREEN (RESTORED FROM CODE 1) ───────────────────────────────
-function QuestDetailScreen({ quest, dark, timeLeft = "23:59:01", onBack, onStartQuest }) {
+function QuestDetailScreen({ quest, dark, timeLeft, onBack, onStartQuest }) {
   const txt = dark ? 'text-white' : 'text-gray-900';
   const sub = dark ? 'text-zinc-400' : 'text-gray-500';
   const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
@@ -686,7 +688,7 @@ function QuestDetailScreen({ quest, dark, timeLeft = "23:59:01", onBack, onStart
         <button onClick={onBack} className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70`}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${pill}`}>
+        <div className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full ${pill}`}>
           <span className="text-[10px]">⏱</span>
           <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
         </div>
@@ -738,6 +740,23 @@ export default function App() {
   const [activeQuestId, setActiveQuestId] = useState(null);
   const [executingQuestId, setExecutingQuestId] = useState(null);
   const [completedQuests, setCompletedQuests] = useState(['q6']);
+  const [timeRemaining, setTimeRemaining] = useState("23:59:59");
+
+  // Global Countdown Timer
+  useEffect(() => {
+    const updateTimer = () => {
+      const now = new Date();
+      const hours = 23 - now.getHours();
+      const mins = 59 - now.getMinutes();
+      const secs = 59 - now.getSeconds();
+      setTimeRemaining(
+        `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+      );
+    };
+    updateTimer(); 
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleMarkComplete = (id) => {
     if (!completedQuests.includes(id)) setCompletedQuests([...completedQuests, id]);
@@ -771,6 +790,7 @@ export default function App() {
           <QuestDetailScreen
             quest={activeQuest}
             dark={dark}
+            timeLeft={timeRemaining}
             onBack={() => setActiveQuestId(null)}
             onStartQuest={() => setExecutingQuestId(activeQuest.id)}
           />
@@ -781,13 +801,19 @@ export default function App() {
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-md shadow-indigo-500/20 font-black text-white text-lg">⚡️</div>
                 <div>
-                  <h1 className="text-lg font-bold leading-none">Side Quests</h1>
+                  <h1 className="text-lg font-bold leading-none">QuestDaily</h1>
                   <span className={`text-[11px] font-mono ${dark ? 'text-purple-400' : 'text-purple-600'}`}>+{totalXP} XP EARNED</span>
                 </div>
               </div>
-              <button onClick={() => setDark(!dark)} className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-200/80 text-gray-700'}`}>
-                {dark ? <SunIcon /> : <MoonIcon />}
-              </button>
+              <div className="flex items-center gap-3">
+                <div className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full ${dark ? 'bg-zinc-800/80' : 'bg-gray-200/80'}`}>
+                  <span className="text-[10px]">⏱</span>
+                  <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeRemaining}</span>
+                </div>
+                <button onClick={() => setDark(!dark)} className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-200/80 text-gray-700'}`}>
+                  {dark ? <SunIcon /> : <MoonIcon />}
+                </button>
+              </div>
             </div>
 
             <div className={`mt-2 p-5 rounded-[24px] border flex items-center justify-between ${dark ? 'bg-white/[0.03] border-white/10 shadow-2xl' : 'bg-white border-gray-100 shadow-sm'}`}>
