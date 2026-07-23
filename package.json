@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "pnpm run build && wrangler dev",
+    "deploy": "pnpm run build && wrangler deploy"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
@@ -18,10 +19,12 @@
     "adm-zip": "^0.6.0"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.47.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.17",
-    "vite": "^6.0.5"
+    "vite": "^6.0.5",
+    "wrangler": "^4.114.0"
   }
 }
