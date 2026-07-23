@@ -1,13 +1,16 @@
-"use client"; // <-- ADD THIS AS THE VERY FIRST LINE
+"use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { pipeline, env } from '@huggingface/transformers';
-// ... rest of the code
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { pipeline, env } from '@huggingface/transformers';
 
-// ─── AI SETUP ────────────────────────────────────────────────────────────────
+// ─── AI SETUP & PRODUCTION BUILD FIXES ───────────────────────────────────────
 env.allowLocalModels = false;
+env.useBrowserCache = true; // Prevents reloading the model constantly
+// Prevent WASM memory crashes during production build/runtime
+if (env.backends?.onnx?.wasm) {
+  env.backends.onnx.wasm.numThreads = 1; 
+}
+
 let classifierPromise = null;
 function getClassifier(onProgress) {
   if (!classifierPromise) {
@@ -95,7 +98,7 @@ const REQUIRED_PASSES = 2;
 const PASS_THRESHOLD  = 0.35; 
 const REP_SCAN_INTERVAL_MS = 200; 
 const REP_MIN_DURATION_MS = 600;
-const REP_FORM_CONFIDENCE = 0.35; // Increased threshold now that softmax isn't diluted
+const REP_FORM_CONFIDENCE = 0.35;
 
 const REP_PROFILES = {
   q1: {
@@ -244,8 +247,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
   const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
   
-  // FIXED: Mutually exclusive labels prevent softmax score dilution.
-  // Rep tracking uses ONLY target/reset states, not generic activities.
   const classifierLabels = useMemo(() => {
     if (questType === 'reps' && repProfile) {
       return [...new Set([...repProfile.target, ...repProfile.reset, ...activeNegatives])];
@@ -267,7 +268,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       uiSubtext = "Keep your entire working frame visible to log movements.";
   }
 
-  // FIXED: Real-time Skeletal HUD Overlay Engine now properly respects unmounting
   useEffect(() => {
     if (phase !== 'live' || uploadedProof || !quest.reps) return undefined;
     
@@ -287,7 +287,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       
-      // Sync canvas internal resolution with CSS layout to prevent stretching
       const rect = video.getBoundingClientRect();
       if (canvas.width !== rect.width || canvas.height !== rect.height) {
         canvas.width = rect.width;
@@ -543,8 +542,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const context = canvas.getContext('2d');
         if (!context) throw new Error('Canvas 2D context unavailable');
         
-        // FIXED: Replaced Letterboxing with Center-Crop (Object-Fit: Cover style).
-        // This stops the AI from analyzing huge black borders and zeroes in on the user.
         const size = Math.min(video.videoWidth, video.videoHeight);
         const startX = (video.videoWidth - size) / 2;
         const startY = (video.videoHeight - size) / 2;
@@ -935,6 +932,8 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function SideQuestsApp() {
   const [dark, setDark] = useState(() => {
+    // Check if we are rendering on the server/build time vs client
+    if (typeof window === 'undefined') return true; 
     const saved = localStorage.getItem('sq_dark');
     if (saved !== null) return saved === 'true';
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -945,9 +944,10 @@ export default function SideQuestsApp() {
     localStorage.setItem('sq_dark', dark);
   }, [dark]);
 
-  const [level,     setLevel]     = useState(() => parseInt(localStorage.getItem('sq_level'))    || 1);
-  const [xp,        setXp]        = useState(() => parseInt(localStorage.getItem('sq_xp'))       || 0);
+  const [level,     setLevel]     = useState(() => typeof window !== 'undefined' ? parseInt(localStorage.getItem('sq_level'))    || 1 : 1);
+  const [xp,        setXp]        = useState(() => typeof window !== 'undefined' ? parseInt(localStorage.getItem('sq_xp'))       || 0 : 0);
   const [quests,    setQuests]    = useState(() => {
+    if (typeof window === 'undefined') return [];
     const saved     = JSON.parse(localStorage.getItem('sq_quests')) || [];
     const anyDone   = saved.some(q => q.completed);
     const lastReset = parseInt(localStorage.getItem('sq_lastReset')) || 0;
@@ -958,10 +958,10 @@ export default function SideQuestsApp() {
     return [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n)
       .map(q => ({ ...q, completed: false }));
   });
-  const [lastReset, setLastReset] = useState(() => parseInt(localStorage.getItem('sq_lastReset')) || 0);
+  const [lastReset, setLastReset] = useState(() => typeof window !== 'undefined' ? parseInt(localStorage.getItem('sq_lastReset')) || 0 : 0);
   const [timeLeft,  setTimeLeft]  = useState('--:--:--');
   const [proofModal,   setProofModal]   = useState(null);
-  const [proofImages,  setProofImages]  = useState(() => JSON.parse(localStorage.getItem('sq_proofs')) || {});
+  const [proofImages,  setProofImages]  = useState(() => typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('sq_proofs')) || {} : {});
   const [viewingProof, setViewingProof] = useState(null);
 
   const xpRef    = useRef(xp);
@@ -995,7 +995,10 @@ export default function SideQuestsApp() {
     localStorage.setItem('sq_quests',    JSON.stringify(quests));
     localStorage.setItem('sq_lastReset', lastReset);
   }, [level, xp, quests, lastReset]);
-  useEffect(() => { localStorage.setItem('sq_proofs', JSON.stringify(proofImages)); }, [proofImages]);
+  
+  useEffect(() => { 
+    localStorage.setItem('sq_proofs', JSON.stringify(proofImages)); 
+  }, [proofImages]);
 
   const applyXpChange = useCallback((amount) => {
     let newXp = xpRef.current + amount, newLevel = levelRef.current;
