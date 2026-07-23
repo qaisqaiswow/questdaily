@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { pipeline, env } from '@huggingface/transformers';
 
@@ -90,7 +92,7 @@ const REQUIRED_PASSES = 2;
 const PASS_THRESHOLD  = 0.35; 
 const REP_SCAN_INTERVAL_MS = 200; 
 const REP_MIN_DURATION_MS = 600;
-const REP_FORM_CONFIDENCE = 0.35; // Increased threshold now that softmax isn't diluted
+const REP_FORM_CONFIDENCE = 0.35;
 
 const REP_PROFILES = {
   q1: {
@@ -199,7 +201,6 @@ const CheckIcon = () => (
 // ─── CAMERA / AI MODAL ────────────────────────────────────────────────────────
 function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const videoRef     = useRef(null);
-  const canvasRef    = useRef(null);
   const aiCanvasRef  = useRef(null); 
   const streamRef    = useRef(null);
   const scanTimerRef = useRef(null);
@@ -239,8 +240,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
   const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
   
-  // FIXED: Mutually exclusive labels prevent softmax score dilution.
-  // Rep tracking uses ONLY target/reset states, not generic activities.
   const classifierLabels = useMemo(() => {
     if (questType === 'reps' && repProfile) {
       return [...new Set([...repProfile.target, ...repProfile.reset, ...activeNegatives])];
@@ -261,102 +260,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       instructionText = `Position the camera for full-body tracking: ${quest.reps} reps.`;
       uiSubtext = "Keep your entire working frame visible to log movements.";
   }
-
-  // FIXED: Real-time Skeletal HUD Overlay Engine now properly respects unmounting
-  useEffect(() => {
-    if (phase !== 'live' || uploadedProof || !quest.reps) return undefined;
-    
-    let animFrameId;
-    let disposed = false;
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    
-    const renderSkeletonHUD = () => {
-      if (disposed) return;
-      
-      if (!canvas || !video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-        animFrameId = requestAnimationFrame(renderSkeletonHUD);
-        return;
-      }
-      
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      
-      // Sync canvas internal resolution with CSS layout to prevent stretching
-      const rect = video.getBoundingClientRect();
-      if (canvas.width !== rect.width || canvas.height !== rect.height) {
-        canvas.width = rect.width;
-        canvas.height = rect.height;
-      }
-      
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      const t = performance.now() * 0.003;
-      const w = canvas.width;
-      const h = canvas.height;
-      
-      let spineOffset = Math.sin(t * 2) * 8;
-      let limbFlex = Math.cos(t * 1.5) * 12;
-      
-      if (repPhase === 'seek-reset') {
-        spineOffset = Math.sin(t * 4) * 4;
-        limbFlex = Math.cos(t * 3) * 5;
-      }
-      
-      const joints = {
-        head:     { x: w * 0.5 + spineOffset * 0.3, y: h * 0.22 },
-        neck:     { x: w * 0.5 + spineOffset * 0.5, y: h * 0.28 },
-        lShoulder:{ x: w * 0.36,                    y: h * 0.32 + limbFlex * 0.2 },
-        rShoulder:{ x: w * 0.64,                    y: h * 0.32 - limbFlex * 0.2 },
-        lElbow:   { x: w * 0.26 - limbFlex * 0.4,   y: h * 0.48 },
-        rElbow:   { x: w * 0.74 + limbFlex * 0.4,   y: h * 0.48 },
-        lWrist:   { x: w * 0.28,                    y: h * 0.68 + limbFlex * 0.3 },
-        rWrist:   { x: w * 0.72,                    y: h * 0.68 - limbFlex * 0.3 },
-        lHip:     { x: w * 0.40 + spineOffset,      y: h * 0.58 },
-        rHip:     { x: w * 0.60 + spineOffset,      y: h * 0.58 },
-        lKnee:    { x: w * 0.38 + limbFlex * 0.3,   y: h * 0.76 },
-        rKnee:    { x: w * 0.62 - limbFlex * 0.3,   y: h * 0.76 },
-        lAnkle:   { x: w * 0.41,                    y: h * 0.90 },
-        rAnkle:   { x: w * 0.59,                    y: h * 0.90 }
-      };
-
-      const lockedColor = repPhase === 'seek-reset' ? '#34c759' : '#00f0ff';
-      
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = lockedColor;
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = lockedColor;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      
-      const drawBone = (j1, j2) => {
-        ctx.beginPath(); ctx.moveTo(j1.x, j1.y); ctx.lineTo(j2.x, j2.y); ctx.stroke();
-      };
-      
-      drawBone(joints.head, joints.neck);
-      drawBone(joints.neck, joints.lShoulder); drawBone(joints.neck, joints.rShoulder);
-      drawBone(joints.lShoulder, joints.lElbow); drawBone(joints.rShoulder, joints.rElbow);
-      drawBone(joints.lElbow, joints.lWrist); drawBone(joints.rElbow, joints.rWrist);
-      drawBone(joints.lShoulder, joints.lHip); drawBone(joints.rShoulder, joints.rHip);
-      drawBone(joints.lHip, joints.rHip);
-      drawBone(joints.lHip, joints.lKnee); drawBone(joints.rHip, joints.rKnee);
-      drawBone(joints.lKnee, joints.lAnkle); drawBone(joints.rKnee, joints.rAnkle);
-      
-      ctx.fillStyle = '#ffffff';
-      ctx.shadowBlur = 6;
-      Object.values(joints).forEach(j => {
-        ctx.beginPath(); ctx.arc(j.x, j.y, 6, 0, Math.PI * 2); ctx.fill();
-      });
-      
-      animFrameId = requestAnimationFrame(renderSkeletonHUD);
-    };
-    
-    renderSkeletonHUD();
-    return () => {
-      disposed = true;
-      cancelAnimationFrame(animFrameId);
-    };
-  }, [phase, uploadedProof, quest.reps, repPhase]);
 
   useEffect(() => {
     let intervalId = null;
@@ -538,8 +441,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const context = canvas.getContext('2d');
         if (!context) throw new Error('Canvas 2D context unavailable');
         
-        // FIXED: Replaced Letterboxing with Center-Crop (Object-Fit: Cover style).
-        // This stops the AI from analyzing huge black borders and zeroes in on the user.
         const size = Math.min(video.videoWidth, video.videoHeight);
         const startX = (video.videoWidth - size) / 2;
         const startY = (video.videoHeight - size) / 2;
@@ -706,12 +607,10 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
       <div className={`${bg} w-full max-w-lg rounded-t-[28px] overflow-hidden shadow-2xl`} style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 16px)' }}>
 
-        {/* Drag handle */}
         <div className="flex justify-center pt-3 pb-1">
           <div className={`w-10 h-1 rounded-full ${dark ? 'bg-zinc-600' : 'bg-gray-300'}`} />
         </div>
 
-        {/* Header */}
         <div className={`flex items-center justify-between px-5 py-3 border-b ${border}`}>
           <button onClick={onCancel} className="text-[#007AFF] text-sm font-medium">Cancel</button>
           <div className="text-center">
@@ -721,19 +620,12 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           <div className="w-14" />
         </div>
 
-        {/* Viewfinder */}
         <div className="relative bg-black" style={{ aspectRatio: '4/3' }}>
           <video ref={videoRef} autoPlay playsInline muted
               className={`w-full h-full object-cover ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
-          
-          {/* Visible Interactive Skeletal Canvas Overlay */}
-          {phase === 'live' && !uploadedProof && quest.reps && (
-            <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none z-20" />
-          )}
 
           {phase === 'live' && !uploadedProof && labels?.bodyParts && (
             <div className="absolute inset-0 pointer-events-none border-[3px] border-dashed border-cyan-500/30 m-4 rounded-xl animate-pulse z-10">
-              {/* Target HUD Tracking Box */}
               <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-cyan-500/40 text-[10px] font-mono tracking-wider text-cyan-400">
                 <div className="flex items-center gap-1.5 mb-1 text-white uppercase font-bold text-[11px]">
                   <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block" />
@@ -793,7 +685,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             </div>
           )}
 
-          {/* AI overlay */}
           {phase === 'live' && modelReady && (
             <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pt-8 z-20"
               style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)' }}>
@@ -861,7 +752,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           <canvas ref={aiCanvasRef} className="hidden" />
         </div>
 
-        {/* Objective Session Timer Panel View Feature */}
         {quest.duration && (
           <div className={`px-4 py-3 mx-4 mt-3 rounded-xl border flex items-center justify-between ${dark ? 'bg-zinc-800/50 border-zinc-700' : 'bg-gray-50 border-gray-200'}`}>
             <div className="flex flex-col">
@@ -884,7 +774,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           </div>
         )}
 
-        {/* Controls */}
         <div className="px-4 pt-4 pb-2 space-y-3">
           {phase === 'live' && (
             <>
@@ -977,16 +866,16 @@ export default function SideQuestsApp() {
       const now = Date.now(), remaining = ONE_DAY_MS - (now - lastReset);
       if (remaining <= 0 || quests.length === 0) { generateNewQuests(now); return; }
       const h = Math.floor((remaining / 3_600_000) % 24);
-      const m = Math.floor((remaining /    60_000) % 60);
-      const s = Math.floor((remaining /     1_000) % 60);
+      const m = Math.floor((remaining /     60_000) % 60);
+      const s = Math.floor((remaining /      1_000) % 60);
       setTimeLeft(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`);
     }, 1000);
     return () => clearInterval(id);
   }, [lastReset, quests.length, generateNewQuests]);
 
   useEffect(() => {
-    localStorage.setItem('sq_level',     level);
-    localStorage.setItem('sq_xp',        xp);
+    localStorage.setItem('sq_level',       level);
+    localStorage.setItem('sq_xp',          xp);
     localStorage.setItem('sq_quests',    JSON.stringify(quests));
     localStorage.setItem('sq_lastReset', lastReset);
   }, [level, xp, quests, lastReset]);
@@ -996,7 +885,7 @@ export default function SideQuestsApp() {
     let newXp = xpRef.current + amount, newLevel = levelRef.current;
     while (newXp >= newLevel * 100)    { newXp -= newLevel * 100; newLevel++; }
     while (newXp < 0 && newLevel > 1) { newLevel--; newXp += newLevel * 100; }
-    if (newLevel === 1 && newXp < 0)   newXp = 0;
+    if (newLevel === 1 && newXp < 0)    newXp = 0;
     setXp(newXp); setLevel(newLevel);
   }, []);
 
