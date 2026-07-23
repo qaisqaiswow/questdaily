@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { pipeline, env } from '@huggingface/transformers';
+import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 
 // ─── AI SETUP ────────────────────────────────────────────────────────────────
 env.allowLocalModels = false;
@@ -18,6 +19,136 @@ function getClassifier(onProgress) {
     });
   }
   return classifierPromise;
+}
+
+// ─── POSE MODEL SETUP (real rep counting via joint tracking) ────────────────
+let landmarkerPromise = null;
+function getPoseLandmarker() {
+  if (!landmarkerPromise) {
+    landmarkerPromise = (async () => {
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+      );
+      return PoseLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        numPoses: 1,
+      });
+    })().catch(error => {
+      landmarkerPromise = null;
+      throw error;
+    });
+  }
+  return landmarkerPromise;
+}
+
+const LM = {
+  L_SHOULDER: 11, R_SHOULDER: 12,
+  L_ELBOW: 13, R_ELBOW: 14,
+  L_WRIST: 15, R_WRIST: 16,
+  L_HIP: 23, R_HIP: 24,
+  L_KNEE: 25, R_KNEE: 26,
+  L_ANKLE: 27, R_ANKLE: 28,
+};
+
+function angleBetween(a, b, c) {
+  if (!a || !b || !c) return null;
+  const v1 = { x: a.x - b.x, y: a.y - b.y };
+  const v2 = { x: c.x - b.x, y: c.y - b.y };
+  const dot = v1.x * v2.x + v1.y * v2.y;
+  const mag1 = Math.hypot(v1.x, v1.y);
+  const mag2 = Math.hypot(v2.x, v2.y);
+  if (mag1 === 0 || mag2 === 0) return null;
+  const cos = Math.min(1, Math.max(-1, dot / (mag1 * mag2)));
+  return (Math.acos(cos) * 180) / Math.PI;
+}
+
+function visiblePt(pt, minVis = 0.5) {
+  return pt && (pt.visibility === undefined || pt.visibility >= minVis);
+}
+
+function pickSide(lms, leftKeys, rightKeys) {
+  const left = leftKeys.map(k => lms[k]);
+  const right = rightKeys.map(k => lms[k]);
+  const leftOk = left.every(p => visiblePt(p));
+  const rightOk = right.every(p => visiblePt(p));
+  if (leftOk && rightOk) {
+    return left.map((p, i) => ({
+      x: (p.x + right[i].x) / 2,
+      y: (p.y + right[i].y) / 2,
+      visibility: Math.min(p.visibility ?? 1, right[i].visibility ?? 1),
+    }));
+  }
+  if (leftOk) return left;
+  if (rightOk) return right;
+  return null;
+}
+
+// Metric extractors: return an angle (degrees) or normalized position we track
+// through a down/up state machine per exercise.
+const REP_METRICS = {
+  q1: (lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+  q2: (lms) => { const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+  q4: (lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+  q12:(lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_HIP, LM.L_KNEE], [LM.R_SHOULDER, LM.R_HIP, LM.R_KNEE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+  q17:(lms) => { const hips = [lms[LM.L_HIP], lms[LM.R_HIP]].filter(p => visiblePt(p)); if (!hips.length) return null; return hips.reduce((s, p) => s + p.y, 0) / hips.length; },
+  q23:(lms) => { const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+};
+
+const REP_CONFIG = {
+  q1:  { mode: 'angle',  downThreshold: 100,  upThreshold: 155,   cueDown: 'Lower into the pushup', cueUp: 'Push back up to full extension' },
+  q2:  { mode: 'angle',  downThreshold: 110,  upThreshold: 160,   cueDown: 'Squat down',             cueUp: 'Stand back up' },
+  q4:  { mode: 'angle',  downThreshold: 80,   upThreshold: 150,   cueDown: 'Pull up to the bar',     cueUp: 'Lower to a full hang' },
+  q12: { mode: 'angle',  downThreshold: 110,  upThreshold: 150,   cueDown: 'Crunch up',              cueUp: 'Lower back down' },
+  q17: { mode: 'height', downThreshold: 0.02, upThreshold: 0.005, cueDown: 'Jump!',                  cueUp: 'Land' },
+  q23: { mode: 'angle',  downThreshold: 110,  upThreshold: 160,   cueDown: 'Lower into the lunge',   cueUp: 'Return to standing' },
+};
+
+const MIN_REP_MS = 500;
+
+function createPoseRepState() {
+  return { phase: 'up', reps: 0, baselineY: null, lastRepAt: 0, smoothed: null };
+}
+
+function updatePoseRepState(state, questId, landmarks, now) {
+  const config = REP_CONFIG[questId];
+  const metricFn = REP_METRICS[questId];
+  if (!config || !metricFn || !landmarks) {
+    return { reps: state.reps, phase: state.phase, cue: 'Move into frame', counted: false };
+  }
+  const raw = metricFn(landmarks);
+  if (raw === null) {
+    return { reps: state.reps, phase: state.phase, cue: 'Move fully into frame', counted: false };
+  }
+  state.smoothed = state.smoothed === null ? raw : state.smoothed * 0.6 + raw * 0.4;
+  const value = state.smoothed;
+  let counted = false;
+
+  if (config.mode === 'height') {
+    if (state.baselineY === null) state.baselineY = value;
+    else state.baselineY = state.baselineY * 0.98 + value * 0.02;
+    const jumpHeight = state.baselineY - value;
+    if (state.phase === 'up' && jumpHeight >= config.downThreshold) {
+      state.phase = 'down';
+    } else if (state.phase === 'down' && jumpHeight <= config.upThreshold) {
+      if (now - state.lastRepAt >= MIN_REP_MS) { state.reps += 1; state.lastRepAt = now; counted = true; }
+      state.phase = 'up';
+    }
+  } else {
+    if (state.phase === 'up' && value <= config.downThreshold) {
+      state.phase = 'down';
+    } else if (state.phase === 'down' && value >= config.upThreshold) {
+      if (now - state.lastRepAt >= MIN_REP_MS) { state.reps += 1; state.lastRepAt = now; counted = true; }
+      state.phase = 'up';
+    }
+  }
+
+  const cue = state.phase === 'up' ? config.cueDown : config.cueUp;
+  return { reps: state.reps, phase: state.phase, cue, counted };
 }
 
 // ─── QUEST LABELS & PROFILES ─────────────────────────────────────────────────
@@ -86,111 +217,11 @@ const QUEST_POOL = [
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_PASSES = 2;
-const PASS_THRESHOLD  = 0.35; 
-const REP_SCAN_INTERVAL_MS = 280;
-const REP_PHASE_HOLD_MS = 180;
-const REP_MIN_DURATION_MS = 650;
-const REP_RETURN_TIMEOUT_MS = 7000;
-const REP_FORM_CONFIDENCE = 0.20;
-const REP_FORM_MARGIN = 0.035;
-const REP_ACTIVITY_MARGIN = 0.01;
-
-const REP_PROFILES = {
-  q1: {
-    target: ['person at the bottom of a pushup with elbows bent', 'person lowering chest close to floor in a pushup'],
-    reset: ['person at the top of a pushup with arms straight', 'person holding a straight-arm plank after a pushup'],
-    cue: 'Lower into the pushup, then return to straight arms.',
-  },
-  q2: {
-    target: ['person at the bottom of a deep squat with knees bent', 'person squatting with thighs near parallel to floor'],
-    reset: ['person standing tall after a squat with legs straight', 'person at the top of a squat standing upright'],
-    cue: 'Reach squat depth, then stand fully upright.',
-  },
-  q4: {
-    target: ['person at the top of a pullup with chin near bar', 'person pulling body up on a pullup bar'],
-    reset: ['person hanging from a pullup bar with arms straight', 'person at the bottom of a pullup with arms extended'],
-    cue: 'Pull up to the bar, then lower to straight arms.',
-  },
-  q12: {
-    target: ['person at the top of a situp with torso raised', 'person crunching with shoulders lifted from floor'],
-    reset: ['person lying back down after a situp', 'person on back with torso extended on floor'],
-    cue: 'Raise your torso, then return to the floor.',
-  },
-  q17: {
-    target: ['person jumping in the air while skipping rope', 'person airborne during a jump rope exercise'],
-    reset: ['person landing with both feet while jumping rope', 'person standing on the ground with a jump rope'],
-    cue: 'Jump, land, and let the camera see both positions.',
-  },
-  q23: {
-    target: ['person at the bottom of a lunge with knees bent', 'person in a deep split-stance lunge'],
-    reset: ['person standing upright after a lunge', 'person at the top of a lunge with legs straight'],
-    cue: 'Lower into the lunge, then return to standing.',
-  },
-};
+const PASS_THRESHOLD  = 0.35;
 
 function getMaxLabelScore(results, candidates) {
   if (!candidates?.length) return 0;
   return results.reduce((best, result) => (candidates.includes(result.label) ? Math.max(best, result.score) : best), 0);
-}
-
-function createRepTracker() {
-  return { phase: 'seek-target', reps: 0, smoothedTarget: 0, smoothedReset: 0, lastSampleAt: 0, phaseStartedAt: 0, targetHeldAt: 0, resetHeldAt: 0, lastRepAt: 0 };
-}
-
-function advanceRepTracker(tracker, { targetScore, resetScore, negativeScore, now }) {
-  const alpha = tracker.lastSampleAt ? 0.45 : 1;
-  tracker.lastSampleAt = now;
-  tracker.smoothedTarget = tracker.smoothedTarget * (1 - alpha) + targetScore * alpha;
-  tracker.smoothedReset = tracker.smoothedReset * (1 - alpha) + resetScore * alpha;
-
-  const formScore = Math.max(tracker.smoothedTarget, tracker.smoothedReset);
-  const activityVisible = formScore >= REP_FORM_CONFIDENCE && formScore >= negativeScore + REP_ACTIVITY_MARGIN;
-  const atTarget = activityVisible && tracker.smoothedTarget >= REP_FORM_CONFIDENCE && tracker.smoothedTarget >= tracker.smoothedReset + REP_FORM_MARGIN;
-  const atReset = tracker.smoothedReset >= REP_FORM_CONFIDENCE && tracker.smoothedReset >= tracker.smoothedTarget + REP_FORM_MARGIN;
-
-  let counted = false;
-  let phaseChanged = false;
-
-  if (tracker.phase === 'seek-target') {
-    tracker.resetHeldAt = 0;
-    if (atTarget) {
-      tracker.targetHeldAt ||= now;
-      if (now - tracker.targetHeldAt >= REP_PHASE_HOLD_MS) {
-        tracker.phase = 'seek-reset';
-        tracker.phaseStartedAt = now;
-        tracker.targetHeldAt = 0;
-        phaseChanged = true;
-      }
-    } else {
-      tracker.targetHeldAt = 0;
-    }
-  } else {
-    tracker.targetHeldAt = 0;
-    if (now - tracker.phaseStartedAt > REP_RETURN_TIMEOUT_MS) {
-      tracker.phase = 'seek-target';
-      tracker.phaseStartedAt = 0;
-      tracker.resetHeldAt = 0;
-      phaseChanged = true;
-    } else if (atReset) {
-      tracker.resetHeldAt ||= now;
-      const hasHeldReturn = now - tracker.resetHeldAt >= REP_PHASE_HOLD_MS;
-      const isNewRep = now - tracker.lastRepAt >= REP_MIN_DURATION_MS;
-      const hasValidDuration = now - tracker.phaseStartedAt >= REP_MIN_DURATION_MS;
-      if (hasHeldReturn && isNewRep && hasValidDuration) {
-        tracker.reps += 1;
-        tracker.lastRepAt = now;
-        tracker.phase = 'seek-target';
-        tracker.phaseStartedAt = 0;
-        tracker.resetHeldAt = 0;
-        counted = true;
-        phaseChanged = true;
-      }
-    } else {
-      tracker.resetHeldAt = 0;
-    }
-  }
-
-  return { counted, phaseChanged, phase: tracker.phase, confidence: formScore, activityVisible };
 }
 
 // ─── ICONS ───────────────────────────────────────────────────────────────────
@@ -546,7 +577,9 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const lastVideoTimeRef = useRef(-1);
   const confirmedRef = useRef(false);
   const passStreakRef = useRef(0);
-  const repTrackerRef = useRef(createRepTracker());
+  const poseStateRef = useRef(createPoseRepState());
+  const poseRafRef = useRef(null);
+  const poseLastVideoTimeRef = useRef(-1);
 
   const [phase,         setPhase]         = useState('starting');
   const [camError,      setCamError]      = useState(null);
@@ -556,13 +589,16 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const [modelProgress, setModelProgress] = useState(null);
   const [modelError,    setModelError]    = useState(null);
   const [modelVersion,  setModelVersion]  = useState(0);
+  const [poseReady,     setPoseReady]     = useState(false);
+  const [poseError,     setPoseError]     = useState(null);
+  const [repCue,        setRepCue]        = useState('Get in frame');
   const [notice,        setNotice]        = useState(null);
   const [scanning,      setScanning]      = useState(false);
   const [uploading,     setUploading]     = useState(false);
   const [liveScore,     setLiveScore]     = useState(0);
   const [passStreak,    setPassStreak]    = useState(0);
   const [repsDone,      setRepsDone]      = useState(0);
-  const [repPhase,      setRepPhase]      = useState('seek-target');
+  const [repPhase,      setRepPhase]      = useState('up');
   const [confirmed,     setConfirmed]     = useState(false);
   const [lastLabel,     setLastLabel]     = useState('');
   const [uploadedProof, setUploadedProof] = useState(null);
@@ -572,12 +608,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
   const labels = QUEST_LABELS[quest.id];
   const questType = labels?.type || 'action';
-  const repProfile = questType === 'reps' ? REP_PROFILES[quest.id] : null;
-  
+
   const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
   const classifierLabels = useMemo(
-    () => [...new Set([...(labels?.activity ?? []), ...(repProfile?.target ?? []), ...(repProfile?.reset ?? []), ...activeNegatives])],
-    [labels, repProfile, activeNegatives]
+    () => [...new Set([...(labels?.activity ?? []), ...activeNegatives])],
+    [labels, activeNegatives]
   );
 
   let instructionText = `Show the camera you're ${labels?.label ?? 'doing it'}…`;
@@ -657,7 +692,9 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     return () => { cameraSessionRef.current += 1; stopCamera(); };
   }, [facingMode, cameraVersion, startCamera, stopCamera]);
 
+  // CLIP model — only needed for food / map / action verification, not reps.
   useEffect(() => {
+    if (quest.reps) { setModelReady(true); return undefined; }
     let cancelled = false;
     (async () => {
       try {
@@ -672,11 +709,18 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [modelVersion]);
+  }, [modelVersion, quest.reps]);
 
-  const resetRepTracking = useCallback(() => { repTrackerRef.current = createRepTracker(); setRepsDone(0); setRepPhase('seek-target'); }, []);
+  const resetRepTracking = useCallback(() => {
+    poseStateRef.current = createPoseRepState();
+    setRepsDone(0);
+    setRepPhase('up');
+    setRepCue('Get in frame');
+  }, []);
 
+  // CLIP scanning loop — food / map / action quests only. Reps use pose tracking below.
   useEffect(() => {
+    if (quest.reps) return undefined;
     if (phase !== 'live' || !modelReady || confirmed || uploading || !labels || !classifierLabels.length) return undefined;
     const runId = ++scanRunRef.current;
     let disposed = false;
@@ -717,39 +761,71 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const negScore = getMaxLabelScore(results, activeNegatives);
         setLastLabel(results[0]?.label ?? '');
 
-        if (quest.reps && repProfile) {
-          const update = advanceRepTracker(repTrackerRef.current, {
-            targetScore: getMaxLabelScore(results, repProfile.target),
-            resetScore: getMaxLabelScore(results, repProfile.reset),
-            negativeScore: negScore,
-            now: performance.now(),
-          });
-          setLiveScore(Math.round(update.confidence * 100));
-          if (update.phaseChanged) setRepPhase(update.phase);
-          if (update.counted) {
-            setRepsDone(repTrackerRef.current.reps);
-            if (repTrackerRef.current.reps >= quest.reps) {
-              confirmedRef.current = true; setConfirmed(true);
-            }
-          }
-        } else {
-          setLiveScore(Math.round(actScore * 100));
-          const passed = actScore > negScore && actScore >= PASS_THRESHOLD;
-          passStreakRef.current = passed ? passStreakRef.current + 1 : 0;
-          setPassStreak(passStreakRef.current);
-          if (passStreakRef.current >= REQUIRED_PASSES) { confirmedRef.current = true; setConfirmed(true); }
-        }
+        setLiveScore(Math.round(actScore * 100));
+        const passed = actScore > negScore && actScore >= PASS_THRESHOLD;
+        passStreakRef.current = passed ? passStreakRef.current + 1 : 0;
+        setPassStreak(passStreakRef.current);
+        if (passStreakRef.current >= REQUIRED_PASSES) { confirmedRef.current = true; setConfirmed(true); }
       } catch (err) { 
         consecutiveErrors += 1;
         if (consecutiveErrors >= 3 && isCurrentRun()) setModelError('AI analysis is temporarily unavailable. Try closing and reopening the camera.');
       } finally { 
         isScanningRef.current = false;
-        if (isCurrentRun()) { setScanning(false); scheduleNext(consecutiveErrors ? 1000 : (quest.reps ? REP_SCAN_INTERVAL_MS : 1200)); }
+        if (isCurrentRun()) { setScanning(false); scheduleNext(consecutiveErrors ? 1000 : 1200); }
       }
     };
     scanLoop();
     return () => { disposed = true; scanRunRef.current += 1; clearTimeout(scanTimerRef.current); };
-  }, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, repProfile, activeNegatives]);
+  }, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, activeNegatives]);
+
+  // Pose tracking loop — reps quests only. Uses real joint-angle detection to count reps.
+  useEffect(() => {
+    if (!quest.reps || phase !== 'live' || confirmed) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        setPoseError(null);
+        const landmarker = await getPoseLandmarker();
+        if (cancelled) return;
+        setPoseReady(true);
+
+        const loop = () => {
+          if (cancelled) return;
+          const video = videoRef.current;
+          if (video && video.readyState >= 2 && video.currentTime !== poseLastVideoTimeRef.current) {
+            poseLastVideoTimeRef.current = video.currentTime;
+            const now = performance.now();
+            try {
+              const result = landmarker.detectForVideo(video, now);
+              const landmarks = result?.landmarks?.[0] ?? null;
+              if (landmarks) {
+                const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, now);
+                setRepPhase(update.phase);
+                setRepCue(update.cue);
+                if (update.counted) {
+                  setRepsDone(update.reps);
+                  if (update.reps >= quest.reps) {
+                    confirmedRef.current = true;
+                    setConfirmed(true);
+                  }
+                }
+              } else {
+                setRepCue('Step back so your full body is visible');
+              }
+            } catch (err) { /* transient frame errors are fine, keep looping */ }
+          }
+          if (!cancelled) poseRafRef.current = requestAnimationFrame(loop);
+        };
+        poseRafRef.current = requestAnimationFrame(loop);
+      } catch (err) {
+        if (!cancelled) setPoseError('Could not load the pose tracking model. Check your connection and try again.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (poseRafRef.current) cancelAnimationFrame(poseRafRef.current);
+    };
+  }, [quest.reps, quest.id, phase, confirmed]);
 
   const retryCamera = () => { scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); };
   const retryModel = () => { setModelReady(false); setModelProgress(null); setModelError(null); setModelVersion(v => v + 1); };
@@ -787,7 +863,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     onConfirm(canvas.toDataURL('image/jpeg', 0.82));
   };
 
-  const meterColor = liveScore >= (quest.reps ? REP_FORM_CONFIDENCE : PASS_THRESHOLD) * 100 ? 'bg-emerald-500' : liveScore >= 15 ? 'bg-amber-400' : 'bg-rose-500';
+  const meterColor = liveScore >= PASS_THRESHOLD * 100 ? 'bg-emerald-500' : liveScore >= 15 ? 'bg-amber-400' : 'bg-rose-500';
   const bg = dark ? 'bg-zinc-950' : 'bg-white';
   const border = dark ? 'border-white/10' : 'border-gray-200';
   const txt = dark ? 'text-white' : 'text-gray-900';
@@ -870,7 +946,39 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             </div>
           )}
 
-          {phase === 'live' && modelReady && (
+          {/* ── REP QUESTS: pose-tracking overlay ── */}
+          {phase === 'live' && quest.reps && (
+            <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)' }}>
+              {confirmed ? (
+                <div className="flex items-center gap-2.5 bg-green-500/20 w-max px-4 py-2 rounded-full border border-green-500/30 backdrop-blur-md">
+                  <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
+                    <CheckIcon />
+                  </div>
+                  <p className="text-green-50 text-[13px] font-bold tracking-wide">Verified & Locked!</p>
+                </div>
+              ) : poseError ? (
+                <p className="text-rose-300 text-[12px] font-semibold">{poseError}</p>
+              ) : !poseReady ? (
+                <p className="text-white/80 text-[11px] font-bold tracking-widest uppercase mb-2">Loading Pose Tracking Model…</p>
+              ) : (
+                <>
+                  <div className="flex items-end justify-between mb-2">
+                    <p className="text-white/90 text-[13px] font-semibold tracking-wide drop-shadow-md">{repCue}</p>
+                    <p className="text-white text-[13px] font-black tracking-widest bg-[#007AFF] px-3 py-1 rounded-lg shadow-lg">
+                      {repsDone} / {quest.reps} REPS
+                    </p>
+                  </div>
+                  <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden shadow-inner">
+                    <div className="h-full bg-green-400 transition-all duration-300 ease-out rounded-full" style={{ width: `${Math.min(100, (repsDone / quest.reps) * 100)}%` }} />
+                  </div>
+                  <p className="text-white/40 text-[9px] font-mono mt-1.5 truncate uppercase tracking-widest">{repPhase === 'up' ? 'Ready position' : 'Mid-rep'}</p>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── FOOD / MAP / ACTION QUESTS: CLIP overlay (unchanged) ── */}
+          {phase === 'live' && !quest.reps && modelReady && (
             <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)' }}>
               {confirmed ? (
                 <div className="flex items-center gap-2.5 bg-green-500/20 w-max px-4 py-2 rounded-full border border-green-500/30 backdrop-blur-md">
@@ -886,37 +994,22 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                       {scanning ? 'Scanning environment…' : `${liveScore}% confidence`}
                     </p>
                     <div className="flex items-center gap-1.5">
-                      {quest.reps ? (
-                        <p className="text-white text-[13px] font-black tracking-widest bg-[#007AFF] px-3 py-1 rounded-lg shadow-lg">
-                            {repsDone} / {quest.reps} REPS
-                        </p>
-                      ) : (
-                        Array.from({ length: REQUIRED_PASSES }).map((_, i) => (
-                            <div key={i} className={`w-2 h-2 rounded-full transition-all duration-300 ${i < passStreak ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)]' : 'bg-white/30'}`} />
-                        ))
-                      )}
+                      {Array.from({ length: REQUIRED_PASSES }).map((_, i) => (
+                          <div key={i} className={`w-2 h-2 rounded-full transition-all duration-300 ${i < passStreak ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)]' : 'bg-white/30'}`} />
+                      ))}
                     </div>
                   </div>
                   
                   <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden shadow-inner">
-                    {quest.reps ? (
-                        <div className={`h-full bg-green-400 transition-all duration-300 ease-out rounded-full`} style={{ width: `${Math.min(100, (repsDone / quest.reps) * 100)}%` }} />
-                    ) : (
-                        <div className={`h-full ${meterColor} transition-all duration-700 ease-out rounded-full`} style={{ width: `${liveScore}%` }} />
-                    )}
+                    <div className={`h-full ${meterColor} transition-all duration-700 ease-out rounded-full`} style={{ width: `${liveScore}%` }} />
                   </div>
-                  {quest.reps && !confirmed && (
-                    <p className="text-white/90 font-medium text-[11px] mt-2.5 bg-black/50 backdrop-blur p-2 rounded-lg border border-white/10 shadow-lg">
-                      {repPhase === 'seek-target' ? `Target: ${repProfile?.cue}` : 'Position Locked! Return to complete this rep.'}
-                    </p>
-                  )}
                   {lastLabel && <p className="text-white/40 text-[9px] font-mono mt-1.5 truncate uppercase tracking-widest">{lastLabel}</p>}
                 </>
               )}
             </div>
           )}
 
-          {phase === 'live' && !modelReady && !modelError && (
+          {phase === 'live' && !quest.reps && !modelReady && !modelError && (
             <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)' }}>
               <p className="text-white/80 text-[11px] font-bold tracking-widest uppercase mb-2">Loading Vision Model… {modelProgress ?? 0}%</p>
               <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden">
