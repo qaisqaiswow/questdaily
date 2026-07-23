@@ -18,16 +18,15 @@ function getClassifier(onProgress) {
   return classifierPromise;
 }
 
-// Stricter labels for metrics-focused verification + Body tracking GUI targets
+// Highly descriptive labels improve CLIP zero-shot accuracy drastically
 const QUEST_LABELS = {
-  q1:  { type: 'reps', activity: ['person doing pushups on floor', 'pushup exercise'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
-  q2:  { type: 'reps', activity: ['person doing squats exercise', 'squat workout legs bent'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
-  q4:  { type: 'reps', activity: ['person doing pullups on bar', 'pullup bar exercise'], label: 'doing pullups', bodyParts: ['Lats', 'Upper Back', 'Biceps', 'Forearms'] },
-  q12: { type: 'reps', activity: ['person doing situps or crunches', 'abdominal exercise on floor'], label: 'doing situps', bodyParts: ['Abs', 'Obliques', 'Hip Flexors'] },
-  q17: { type: 'reps', activity: ['person jumping rope', 'skipping rope exercise'], label: 'jumping rope', bodyParts: ['Calves', 'Quads', 'Shoulders', 'Cardio'] },
-  q23: { type: 'reps', activity: ['person doing lunges exercise', 'lunge workout legs split stance'], label: 'doing lunges', bodyParts: ['Quads', 'Glutes', 'Hamstrings'] },
+  q1:  { type: 'reps', activity: ['a photo of a person exercising doing pushups'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
+  q2:  { type: 'reps', activity: ['a photo of a person exercising doing squats'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
+  q4:  { type: 'reps', activity: ['a photo of a person exercising doing pullups'], label: 'doing pullups', bodyParts: ['Lats', 'Upper Back', 'Biceps', 'Forearms'] },
+  q12: { type: 'reps', activity: ['a photo of a person exercising doing situps'], label: 'doing situps', bodyParts: ['Abs', 'Obliques', 'Hip Flexors'] },
+  q17: { type: 'reps', activity: ['a photo of a person jumping rope'], label: 'jumping rope', bodyParts: ['Calves', 'Quads', 'Shoulders', 'Cardio'] },
+  q23: { type: 'reps', activity: ['a photo of a person exercising doing lunges'], label: 'doing lunges', bodyParts: ['Quads', 'Glutes', 'Hamstrings'] },
 
-  // Stricter telemetry dashboard text verification for workouts (blocks simple maps/GPS apps)
   q3:  { type: 'map', activity: ['strava running workout map dashboard with duration and speed metrics', 'running pace distance tracking workout summary screen'], label: 'running metrics map' },
   q16: { type: 'map', activity: ['cycling route ride summary dashboard with speed and time logs', 'bicycle fitness tracking dashboard workout summary'], label: 'cycling metrics map' },
   q5:  { type: 'map', activity: ['gps tracking map route screenshot', 'walking route map tracker'], label: 'walking map screenshot' },
@@ -52,77 +51,76 @@ const QUEST_LABELS = {
 };
 
 const getNegativeLabels = (type) => {
-  const base = ['person sitting doing nothing', 'person standing still straight', 'random everyday object'];
-  if (type === 'map') return [...base, 'google maps navigation screen', 'empty city street map with no data', 'world map atlas website', 'sweaty selfie face', 'picture of running shoes', 'treadmill machine indoors'];
-  if (type === 'food') return [...base, 'empty plate or bowl', 'restaurant paper menu', 'store product barcode', 'person eating face'];
-  return [...base, 'phone or computer screen'];
+  const base = ['an empty room with no one in it', 'a person standing completely still and relaxed', 'a blurry abstract background'];
+  if (type === 'map') return [...base, 'google maps navigation screen', 'empty city street map with no data', 'sweaty selfie face', 'picture of running shoes', 'treadmill machine indoors'];
+  if (type === 'food') return [...base, 'empty plate or bowl', 'restaurant paper menu', 'store product barcode'];
+  return [...base, 'a close up of a person holding a phone'];
 };
 
-// ─── QUEST POOL WITH INTEGRATED DURATION TIMERS ──────────────────────────────
 const QUEST_POOL = [
-  { id: 'q1',  text: 'Do 20 pushups',                            xp: 50, reps: 20 },
-  { id: 'q2',  text: 'Do 30 squats',                             xp: 45, reps: 30 },
-  { id: 'q3',  text: 'Go for a 15-minute run',                   xp: 75, duration: 900 },
-  { id: 'q4',  text: 'Do 10 pullups',                            xp: 60, reps: 10 },
-  { id: 'q16', text: 'Do 15 minutes of cycling',                 xp: 55, duration: 900 },
-  { id: 'q17', text: 'Do 50 jumping rope reps',                  xp: 40, reps: 50 },
-  { id: 'q18', text: 'Take a cold shower',                       xp: 50 },
-  { id: 'q19', text: 'Eat no sugar today',                       xp: 65 },
-  { id: 'q20', text: 'Cook a meal from scratch',                 xp: 45 },
-  { id: 'q21', text: 'Do 10 minutes of deep breathing',          xp: 30, duration: 600 },
-  { id: 'q22', text: 'Take 10,000 steps',                        xp: 70 },
-  { id: 'q23', text: 'Do 3 sets of lunges',                      xp: 40, reps: 30 },
-  { id: 'q24', text: 'Go to bed before 11pm',                    xp: 35 },
-  { id: 'q25', text: 'Do a 5-minute ice bath or cold plunge',    xp: 80, duration: 300 },
-  { id: 'q5',  text: 'Walk outside for 20 minutes',              xp: 35, duration: 1200 },
-  { id: 'q6',  text: 'Drink 2 liters of water today',            xp: 25 },
-  { id: 'q7',  text: 'Meditate for 10 minutes',                  xp: 45, duration: 600 },
-  { id: 'q8',  text: 'Stretch for 10 minutes',                   xp: 35, duration: 600 },
-  { id: 'q9',  text: 'Eat a healthy meal',                       xp: 40 },
-  { id: 'q10', text: 'Get 8 hours of sleep',                     xp: 55 },
-  { id: 'q11', text: 'Do 3 minutes of jumping jacks',            xp: 30, duration: 180 },
-  { id: 'q12', text: 'Do 20 situps',                             xp: 40, reps: 20 },
-  { id: 'q13', text: 'Write in your journal',                    xp: 20 },
-  { id: 'q14', text: 'Drink a green smoothie',                   xp: 30 },
-  { id: 'q15', text: 'Hold a plank for 60 seconds',              xp: 50, duration: 60 },
+  { id: 'q1',  text: 'Do 20 pushups',                          xp: 50, reps: 20 },
+  { id: 'q2',  text: 'Do 30 squats',                           xp: 45, reps: 30 },
+  { id: 'q3',  text: 'Go for a 15-minute run',                 xp: 75, duration: 900 },
+  { id: 'q4',  text: 'Do 10 pullups',                          xp: 60, reps: 10 },
+  { id: 'q16', text: 'Do 15 minutes of cycling',               xp: 55, duration: 900 },
+  { id: 'q17', text: 'Do 50 jumping rope reps',                xp: 40, reps: 50 },
+  { id: 'q18', text: 'Take a cold shower',                     xp: 50 },
+  { id: 'q19', text: 'Eat no sugar today',                     xp: 65 },
+  { id: 'q20', text: 'Cook a meal from scratch',               xp: 45 },
+  { id: 'q21', text: 'Do 10 minutes of deep breathing',        xp: 30, duration: 600 },
+  { id: 'q22', text: 'Take 10,000 steps',                      xp: 70 },
+  { id: 'q23', text: 'Do 3 sets of lunges',                    xp: 40, reps: 30 },
+  { id: 'q24', text: 'Go to bed before 11pm',                  xp: 35 },
+  { id: 'q25', text: 'Do a 5-minute ice bath or cold plunge',  xp: 80, duration: 300 },
+  { id: 'q5',  text: 'Walk outside for 20 minutes',            xp: 35, duration: 1200 },
+  { id: 'q6',  text: 'Drink 2 liters of water today',          xp: 25 },
+  { id: 'q7',  text: 'Meditate for 10 minutes',                xp: 45, duration: 600 },
+  { id: 'q8',  text: 'Stretch for 10 minutes',                 xp: 35, duration: 600 },
+  { id: 'q9',  text: 'Eat a healthy meal',                     xp: 40 },
+  { id: 'q10', text: 'Get 8 hours of sleep',                   xp: 55 },
+  { id: 'q11', text: 'Do 3 minutes of jumping jacks',          xp: 30, duration: 180 },
+  { id: 'q12', text: 'Do 20 situps',                           xp: 40, reps: 20 },
+  { id: 'q13', text: 'Write in your journal',                  xp: 20 },
+  { id: 'q14', text: 'Drink a green smoothie',                 xp: 30 },
+  { id: 'q15', text: 'Hold a plank for 60 seconds',            xp: 50, duration: 60 },
 ];
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_PASSES = 2;
 const PASS_THRESHOLD  = 0.35; 
 const REP_SCAN_INTERVAL_MS = 200; 
-const REP_MIN_DURATION_MS = 500;
-const REP_FORM_CONFIDENCE = 0.18;
+const REP_MIN_DURATION_MS = 600;
+const REP_FORM_CONFIDENCE = 0.35; // Increased threshold now that softmax isn't diluted
 
 const REP_PROFILES = {
   q1: {
-    target: ['person at the bottom of a pushup with elbows bent', 'person lowering chest close to floor in a pushup'],
-    reset: ['person at the top of a pushup with arms straight', 'person holding a straight-arm plank after a pushup'],
+    target: ['a photo of a person at the bottom of a pushup with chest touching the floor', 'a person doing a pushup with elbows deeply bent'],
+    reset: ['a photo of a person in a straight arm plank position', 'a person at the top of a pushup with straight arms'],
     cue: 'Lower your chest down, then push completely back up.',
   },
   q2: {
-    target: ['person at the bottom of a deep squat with knees bent', 'person squatting with thighs near parallel to floor'],
-    reset: ['person standing tall after a squat with legs straight', 'person at the top of a squat standing upright'],
+    target: ['a photo of a person at the bottom of a deep squat with bent knees', 'a person squatting with thighs parallel to the floor'],
+    reset: ['a photo of a person standing tall and upright after a squat', 'a person standing normally with straight legs'],
     cue: 'Drop into a deep squat, then return to a full upright stand.',
   },
   q4: {
-    target: ['person at the top of a pullup with chin near bar', 'person pulling body up on a pullup bar'],
-    reset: ['person hanging from a pullup bar with arms straight', 'person at the bottom of a pullup with arms extended'],
+    target: ['a photo of a person at the top of a pullup with chin over the bar', 'a person pulling their body up on a bar'],
+    reset: ['a photo of a person hanging freely from a pullup bar with straight arms', 'a person hanging from a bar extending arms'],
     cue: 'Pull up clear to the bar, then drop back to straight arms.',
   },
   q12: {
-    target: ['person at the top of a situp with torso raised', 'person crunching with shoulders lifted from floor'],
-    reset: ['person lying back down after a situp', 'person on back with torso extended on floor'],
+    target: ['a photo of a person at the top of a situp with torso lifted off the ground', 'a person crunching their abs upward'],
+    reset: ['a photo of a person lying flat on their back on the floor', 'a person resting on their back'],
     cue: 'Crunch your torso all the way up, then lie completely flat.',
   },
   q17: {
-    target: ['person jumping in the air while skipping rope', 'person airborne during a jump rope exercise'],
-    reset: ['person landing with both feet while jumping rope', 'person standing on the ground with a jump rope'],
+    target: ['a photo of a person airborne while jumping rope', 'a person jumping in the air skipping rope'],
+    reset: ['a photo of a person standing on the ground holding a jump rope', 'a person standing still with a skipping rope'],
     cue: 'Keep continuous active jumps inside the camera frame.',
   },
   q23: {
-    target: ['person at the bottom of a lunge with knees bent', 'person in a deep split-stance lunge'],
-    reset: ['person standing upright after a lunge', 'person at the top of a lunge with legs straight'],
+    target: ['a photo of a person at the bottom of a deep lunge stance with bent knees', 'a person in a deep split-stance lunge'],
+    reset: ['a photo of a person standing upright after finishing a lunge', 'a person standing tall with feet together'],
     cue: 'Step deep down into the lunge stance, then rise all the way up.',
   },
 };
@@ -147,7 +145,7 @@ function createRepTracker() {
 }
 
 function advanceRepTracker(tracker, { targetScore, resetScore, now }) {
-  const alpha = 0.6; 
+  const alpha = 0.65; 
   tracker.lastSampleAt = now;
   tracker.smoothedTarget = tracker.smoothedTarget * (1 - alpha) + targetScore * alpha;
   tracker.smoothedReset = tracker.smoothedReset * (1 - alpha) + resetScore * alpha;
@@ -157,12 +155,12 @@ function advanceRepTracker(tracker, { targetScore, resetScore, now }) {
   let phaseChanged = false;
 
   if (tracker.phase === 'seek-target') {
-    if (tracker.smoothedTarget >= REP_FORM_CONFIDENCE && tracker.smoothedTarget > tracker.smoothedReset + 0.02) {
+    if (tracker.smoothedTarget >= REP_FORM_CONFIDENCE && tracker.smoothedTarget > tracker.smoothedReset + 0.05) {
       tracker.phase = 'seek-reset';
       phaseChanged = true;
     }
   } else if (tracker.phase === 'seek-reset') {
-    if (tracker.smoothedReset >= REP_FORM_CONFIDENCE && tracker.smoothedReset > tracker.smoothedTarget + 0.02) {
+    if (tracker.smoothedReset >= REP_FORM_CONFIDENCE && tracker.smoothedReset > tracker.smoothedTarget + 0.05) {
       const isNewRep = now - tracker.lastRepAt >= REP_MIN_DURATION_MS;
       if (isNewRep) {
         tracker.reps += 1;
@@ -174,12 +172,7 @@ function advanceRepTracker(tracker, { targetScore, resetScore, now }) {
     }
   }
 
-  return {
-    counted,
-    phaseChanged,
-    phase: tracker.phase,
-    confidence: formScore,
-  };
+  return { counted, phaseChanged, phase: tracker.phase, confidence: formScore };
 }
 
 const LogoIcon = ({ size = 34, dark }) => (
@@ -245,15 +238,15 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const repProfile = questType === 'reps' ? REP_PROFILES[quest.id] : null;
 
   const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
-  const classifierLabels = useMemo(
-    () => [...new Set([
-      ...(labels?.activity ?? []),
-      ...(repProfile?.target ?? []),
-      ...(repProfile?.reset ?? []),
-      ...activeNegatives,
-    ])],
-    [labels, repProfile, activeNegatives]
-  );
+  
+  // FIXED: Mutually exclusive labels prevent softmax score dilution.
+  // Rep tracking uses ONLY target/reset states, not generic activities.
+  const classifierLabels = useMemo(() => {
+    if (questType === 'reps' && repProfile) {
+      return [...new Set([...repProfile.target, ...repProfile.reset, ...activeNegatives])];
+    }
+    return [...new Set([...(labels?.activity ?? []), ...activeNegatives])];
+  }, [questType, labels, repProfile, activeNegatives]);
 
   let instructionText = `Show the camera you're ${labels?.label ?? 'doing it'}…`;
   let uiSubtext = quest.text;
@@ -269,15 +262,18 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       uiSubtext = "Keep your entire working frame visible to log movements.";
   }
 
-  // Real-time Skeletal HUD Overlay Engine
+  // FIXED: Real-time Skeletal HUD Overlay Engine now properly respects unmounting
   useEffect(() => {
     if (phase !== 'live' || uploadedProof || !quest.reps) return undefined;
     
     let animFrameId;
+    let disposed = false;
     const canvas = canvasRef.current;
     const video = videoRef.current;
     
     const renderSkeletonHUD = () => {
+      if (disposed) return;
+      
       if (!canvas || !video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
         animFrameId = requestAnimationFrame(renderSkeletonHUD);
         return;
@@ -286,9 +282,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       
-      if (canvas.width !== video.clientWidth || canvas.height !== video.clientHeight) {
-        canvas.width = video.clientWidth;
-        canvas.height = video.clientHeight;
+      // Sync canvas internal resolution with CSS layout to prevent stretching
+      const rect = video.getBoundingClientRect();
+      if (canvas.width !== rect.width || canvas.height !== rect.height) {
+        canvas.width = rect.width;
+        canvas.height = rect.height;
       }
       
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -332,40 +330,32 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       ctx.lineJoin = 'round';
       
       const drawBone = (j1, j2) => {
-        ctx.beginPath();
-        ctx.moveTo(j1.x, j1.y);
-        ctx.lineTo(j2.x, j2.y);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(j1.x, j1.y); ctx.lineTo(j2.x, j2.y); ctx.stroke();
       };
       
       drawBone(joints.head, joints.neck);
-      drawBone(joints.neck, joints.lShoulder);
-      drawBone(joints.neck, joints.rShoulder);
-      drawBone(joints.lShoulder, joints.lElbow);
-      drawBone(joints.rShoulder, joints.rElbow);
-      drawBone(joints.lElbow, joints.lWrist);
-      drawBone(joints.rElbow, joints.rWrist);
-      drawBone(joints.lShoulder, joints.lHip);
-      drawBone(joints.rShoulder, joints.rHip);
+      drawBone(joints.neck, joints.lShoulder); drawBone(joints.neck, joints.rShoulder);
+      drawBone(joints.lShoulder, joints.lElbow); drawBone(joints.rShoulder, joints.rElbow);
+      drawBone(joints.lElbow, joints.lWrist); drawBone(joints.rElbow, joints.rWrist);
+      drawBone(joints.lShoulder, joints.lHip); drawBone(joints.rShoulder, joints.rHip);
       drawBone(joints.lHip, joints.rHip);
-      drawBone(joints.lHip, joints.lKnee);
-      drawBone(joints.rHip, joints.rKnee);
-      drawBone(joints.lKnee, joints.lAnkle);
-      drawBone(joints.rKnee, joints.rAnkle);
+      drawBone(joints.lHip, joints.lKnee); drawBone(joints.rHip, joints.rKnee);
+      drawBone(joints.lKnee, joints.lAnkle); drawBone(joints.rKnee, joints.rAnkle);
       
       ctx.fillStyle = '#ffffff';
       ctx.shadowBlur = 6;
       Object.values(joints).forEach(j => {
-        ctx.beginPath();
-        ctx.arc(j.x, j.y, 6, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(j.x, j.y, 6, 0, Math.PI * 2); ctx.fill();
       });
       
       animFrameId = requestAnimationFrame(renderSkeletonHUD);
     };
     
     renderSkeletonHUD();
-    return () => cancelAnimationFrame(animFrameId);
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(animFrameId);
+    };
   }, [phase, uploadedProof, quest.reps, repPhase]);
 
   useEffect(() => {
@@ -547,12 +537,17 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         }
         const context = canvas.getContext('2d');
         if (!context) throw new Error('Canvas 2D context unavailable');
-        const scale = Math.min(224 / video.videoWidth, 224 / video.videoHeight);
-        const width = video.videoWidth * scale;
-        const height = video.videoHeight * scale;
+        
+        // FIXED: Replaced Letterboxing with Center-Crop (Object-Fit: Cover style).
+        // This stops the AI from analyzing huge black borders and zeroes in on the user.
+        const size = Math.min(video.videoWidth, video.videoHeight);
+        const startX = (video.videoWidth - size) / 2;
+        const startY = (video.videoHeight - size) / 2;
+        
         context.fillStyle = '#000';
         context.fillRect(0, 0, 224, 224);
-        context.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, (224 - width) / 2, (224 - height) / 2, width, height);
+        context.drawImage(video, startX, startY, size, size, 0, 0, 224, 224);
+        
         const dataUrl = canvas.toDataURL('image/jpeg', 0.55);
 
         const classifier = await getClassifier();
@@ -560,9 +555,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         if (!isCurrentRun()) return;
         consecutiveErrors = 0;
 
-        const actScore = getMaxLabelScore(results, labels.activity);
         const negScore = getMaxLabelScore(results, activeNegatives);
-
         setLastLabel(results[0]?.label ?? '');
 
         if (quest.reps && repProfile) {
@@ -581,6 +574,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             }
           }
         } else {
+          const actScore = getMaxLabelScore(results, labels.activity);
           setLiveScore(Math.round(actScore * 100));
           const passed = actScore > negScore && actScore >= PASS_THRESHOLD;
           passStreakRef.current = passed ? passStreakRef.current + 1 : 0;
@@ -730,11 +724,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         {/* Viewfinder */}
         <div className="relative bg-black" style={{ aspectRatio: '4/3' }}>
           <video ref={videoRef} autoPlay playsInline muted
-             className={`w-full h-full object-cover ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
+              className={`w-full h-full object-cover ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
           
           {/* Visible Interactive Skeletal Canvas Overlay */}
           {phase === 'live' && !uploadedProof && quest.reps && (
-            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none z-20" />
+            <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none z-20" />
           )}
 
           {phase === 'live' && !uploadedProof && labels?.bodyParts && (
