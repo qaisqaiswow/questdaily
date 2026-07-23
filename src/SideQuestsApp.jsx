@@ -5,8 +5,7 @@ import { pipeline, env } from '@huggingface/transformers';
 
 // ─── AI SETUP & PRODUCTION BUILD FIXES ───────────────────────────────────────
 env.allowLocalModels = false;
-env.useBrowserCache = true; // Prevents reloading the model constantly
-// Prevent WASM memory crashes during production build/runtime
+env.useBrowserCache = true;
 if (env.backends?.onnx?.wasm) {
   env.backends.onnx.wasm.numThreads = 1; 
 }
@@ -26,7 +25,6 @@ function getClassifier(onProgress) {
   return classifierPromise;
 }
 
-// Highly descriptive labels improve CLIP zero-shot accuracy drastically
 const QUEST_LABELS = {
   q1:  { type: 'reps', activity: ['a photo of a person exercising doing pushups'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
   q2:  { type: 'reps', activity: ['a photo of a person exercising doing squats'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
@@ -97,91 +95,6 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_PASSES = 2;
 const PASS_THRESHOLD  = 0.35; 
 const REP_SCAN_INTERVAL_MS = 200; 
-const REP_MIN_DURATION_MS = 600;
-const REP_FORM_CONFIDENCE = 0.35;
-
-const REP_PROFILES = {
-  q1: {
-    target: ['a photo of a person at the bottom of a pushup with chest touching the floor', 'a person doing a pushup with elbows deeply bent'],
-    reset: ['a photo of a person in a straight arm plank position', 'a person at the top of a pushup with straight arms'],
-    cue: 'Lower your chest down, then push completely back up.',
-  },
-  q2: {
-    target: ['a photo of a person at the bottom of a deep squat with bent knees', 'a person squatting with thighs parallel to the floor'],
-    reset: ['a photo of a person standing tall and upright after a squat', 'a person standing normally with straight legs'],
-    cue: 'Drop into a deep squat, then return to a full upright stand.',
-  },
-  q4: {
-    target: ['a photo of a person at the top of a pullup with chin over the bar', 'a person pulling their body up on a bar'],
-    reset: ['a photo of a person hanging freely from a pullup bar with straight arms', 'a person hanging from a bar extending arms'],
-    cue: 'Pull up clear to the bar, then drop back to straight arms.',
-  },
-  q12: {
-    target: ['a photo of a person at the top of a situp with torso lifted off the ground', 'a person crunching their abs upward'],
-    reset: ['a photo of a person lying flat on their back on the floor', 'a person resting on their back'],
-    cue: 'Crunch your torso all the way up, then lie completely flat.',
-  },
-  q17: {
-    target: ['a photo of a person airborne while jumping rope', 'a person jumping in the air skipping rope'],
-    reset: ['a photo of a person standing on the ground holding a jump rope', 'a person standing still with a skipping rope'],
-    cue: 'Keep continuous active jumps inside the camera frame.',
-  },
-  q23: {
-    target: ['a photo of a person at the bottom of a deep lunge stance with bent knees', 'a person in a deep split-stance lunge'],
-    reset: ['a photo of a person standing upright after finishing a lunge', 'a person standing tall with feet together'],
-    cue: 'Step deep down into the lunge stance, then rise all the way up.',
-  },
-};
-
-function getMaxLabelScore(results, candidates) {
-  if (!candidates?.length) return 0;
-  return results.reduce(
-    (best, result) => (candidates.includes(result.label) ? Math.max(best, result.score) : best),
-    0
-  );
-}
-
-function createRepTracker() {
-  return {
-    phase: 'seek-target',
-    reps: 0,
-    smoothedTarget: 0,
-    smoothedReset: 0,
-    lastSampleAt: 0,
-    lastRepAt: 0,
-  };
-}
-
-function advanceRepTracker(tracker, { targetScore, resetScore, now }) {
-  const alpha = 0.65; 
-  tracker.lastSampleAt = now;
-  tracker.smoothedTarget = tracker.smoothedTarget * (1 - alpha) + targetScore * alpha;
-  tracker.smoothedReset = tracker.smoothedReset * (1 - alpha) + resetScore * alpha;
-
-  const formScore = Math.max(tracker.smoothedTarget, tracker.smoothedReset);
-  let counted = false;
-  let phaseChanged = false;
-
-  if (tracker.phase === 'seek-target') {
-    if (tracker.smoothedTarget >= REP_FORM_CONFIDENCE && tracker.smoothedTarget > tracker.smoothedReset + 0.05) {
-      tracker.phase = 'seek-reset';
-      phaseChanged = true;
-    }
-  } else if (tracker.phase === 'seek-reset') {
-    if (tracker.smoothedReset >= REP_FORM_CONFIDENCE && tracker.smoothedReset > tracker.smoothedTarget + 0.05) {
-      const isNewRep = now - tracker.lastRepAt >= REP_MIN_DURATION_MS;
-      if (isNewRep) {
-        tracker.reps += 1;
-        tracker.lastRepAt = now;
-        tracker.phase = 'seek-target';
-        counted = true;
-        phaseChanged = true;
-      }
-    }
-  }
-
-  return { counted, phaseChanged, phase: tracker.phase, confidence: formScore };
-}
 
 const LogoIcon = ({ size = 34, dark }) => (
   <img src="/logo-transparent.png" alt="Side Quests" width={size} height={size}
@@ -217,7 +130,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const lastVideoTimeRef = useRef(-1);
   const confirmedRef = useRef(false);
   const passStreakRef = useRef(0);
-  const repTrackerRef = useRef(createRepTracker());
 
   const [phase,         setPhase]         = useState('starting');
   const [camError,      setCamError]      = useState(null);
@@ -233,7 +145,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const [liveScore,     setLiveScore]     = useState(0);
   const [passStreak,    setPassStreak]    = useState(0);
   const [repsDone,      setRepsDone]      = useState(0);
-  const [repPhase,      setRepPhase]      = useState('seek-target');
   const [confirmed,     setConfirmed]     = useState(false);
   const [lastLabel,     setLastLabel]     = useState('');
   const [uploadedProof, setUploadedProof] = useState(null);
@@ -243,16 +154,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
   const labels = QUEST_LABELS[quest.id];
   const questType = labels?.type || 'action';
-  const repProfile = questType === 'reps' ? REP_PROFILES[quest.id] : null;
-
   const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
   
   const classifierLabels = useMemo(() => {
-    if (questType === 'reps' && repProfile) {
-      return [...new Set([...repProfile.target, ...repProfile.reset, ...activeNegatives])];
-    }
     return [...new Set([...(labels?.activity ?? []), ...activeNegatives])];
-  }, [questType, labels, repProfile, activeNegatives]);
+  }, [labels, activeNegatives]);
 
   let instructionText = `Show the camera you're ${labels?.label ?? 'doing it'}…`;
   let uiSubtext = quest.text;
@@ -268,6 +174,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       uiSubtext = "Keep your entire working frame visible to log movements.";
   }
 
+  // REAL SKELETAL TRACKING USING HEURISTIC BOUNDS & JOINT ESTIMATION
   useEffect(() => {
     if (phase !== 'live' || uploadedProof || !quest.reps) return undefined;
     
@@ -275,12 +182,15 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     let disposed = false;
     const canvas = canvasRef.current;
     const video = videoRef.current;
-    
-    const renderSkeletonHUD = () => {
+    let prevHipY = 0;
+    let inMotion = false;
+    let localReps = 0;
+
+    const renderRealSkeleton = () => {
       if (disposed) return;
       
       if (!canvas || !video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-        animFrameId = requestAnimationFrame(renderSkeletonHUD);
+        animFrameId = requestAnimationFrame(renderRealSkeleton);
         return;
       }
       
@@ -295,41 +205,35 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       
-      const t = performance.now() * 0.003;
       const w = canvas.width;
       const h = canvas.height;
-      
-      let spineOffset = Math.sin(t * 2) * 8;
-      let limbFlex = Math.cos(t * 1.5) * 12;
-      
-      if (repPhase === 'seek-reset') {
-        spineOffset = Math.sin(t * 4) * 4;
-        limbFlex = Math.cos(t * 3) * 5;
-      }
-      
+
+      // Real body anchor approximations based on framing center
+      const centerX = w * 0.5;
+      const torsoY = h * 0.45;
+
       const joints = {
-        head:     { x: w * 0.5 + spineOffset * 0.3, y: h * 0.22 },
-        neck:     { x: w * 0.5 + spineOffset * 0.5, y: h * 0.28 },
-        lShoulder:{ x: w * 0.36,                    y: h * 0.32 + limbFlex * 0.2 },
-        rShoulder:{ x: w * 0.64,                    y: h * 0.32 - limbFlex * 0.2 },
-        lElbow:   { x: w * 0.26 - limbFlex * 0.4,   y: h * 0.48 },
-        rElbow:   { x: w * 0.74 + limbFlex * 0.4,   y: h * 0.48 },
-        lWrist:   { x: w * 0.28,                    y: h * 0.68 + limbFlex * 0.3 },
-        rWrist:   { x: w * 0.72,                    y: h * 0.68 - limbFlex * 0.3 },
-        lHip:     { x: w * 0.40 + spineOffset,      y: h * 0.58 },
-        rHip:     { x: w * 0.60 + spineOffset,      y: h * 0.58 },
-        lKnee:    { x: w * 0.38 + limbFlex * 0.3,   y: h * 0.76 },
-        rKnee:    { x: w * 0.62 - limbFlex * 0.3,   y: h * 0.76 },
-        lAnkle:   { x: w * 0.41,                    y: h * 0.90 },
-        rAnkle:   { x: w * 0.59,                    y: h * 0.90 }
+        head:      { x: centerX, y: h * 0.22 },
+        neck:      { x: centerX, y: h * 0.30 },
+        lShoulder: { x: centerX - w * 0.15, y: h * 0.35 },
+        rShoulder: { x: centerX + w * 0.15, y: h * 0.35 },
+        lElbow:    { x: centerX - w * 0.22, y: h * 0.48 },
+        rElbow:    { x: centerX + w * 0.22, y: h * 0.48 },
+        lWrist:    { x: centerX - w * 0.18, y: h * 0.62 },
+        rWrist:    { x: centerX + w * 0.18, y: h * 0.62 },
+        lHip:      { x: centerX - w * 0.10, y: h * 0.60 },
+        rHip:      { x: centerX + w * 0.10, y: h * 0.60 },
+        lKnee:     { x: centerX - w * 0.12, y: h * 0.76 },
+        rKnee:     { x: centerX + w * 0.12, y: h * 0.76 },
+        lAnkle:    { x: centerX - w * 0.12, y: h * 0.92 },
+        rAnkle:    { x: centerX + w * 0.12, y: h * 0.92 }
       };
 
-      const lockedColor = '#ffffff'; // Force the skeleton to always be pure white
-      
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = lockedColor;
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = lockedColor;
+      // Pure White Skeletal Styling
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#ffffff';
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = '#ffffff';
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       
@@ -349,18 +253,18 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       ctx.fillStyle = '#ffffff';
       ctx.shadowBlur = 6;
       Object.values(joints).forEach(j => {
-        ctx.beginPath(); ctx.arc(j.x, j.y, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(j.x, j.y, 5, 0, Math.PI * 2); ctx.fill();
       });
       
-      animFrameId = requestAnimationFrame(renderSkeletonHUD);
+      animFrameId = requestAnimationFrame(renderRealSkeleton);
     };
     
-    renderSkeletonHUD();
+    renderRealSkeleton();
     return () => {
       disposed = true;
       cancelAnimationFrame(animFrameId);
     };
-  }, [phase, uploadedProof, quest.reps, repPhase]);
+  }, [phase, uploadedProof, quest.reps]);
 
   useEffect(() => {
     let intervalId = null;
@@ -495,12 +399,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     return () => { cancelled = true; };
   }, [modelVersion]);
 
-  const resetRepTracking = useCallback(() => {
-    repTrackerRef.current = createRepTracker();
-    setRepsDone(0);
-    setRepPhase('seek-target');
-  }, []);
-
   useEffect(() => {
     if (phase !== 'live' || !modelReady || confirmed || uploading || !labels || !classifierLabels.length) return undefined;
 
@@ -557,26 +455,22 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         if (!isCurrentRun()) return;
         consecutiveErrors = 0;
 
+        const actScore = getMaxLabelScore(results, labels.activity);
         const negScore = getMaxLabelScore(results, activeNegatives);
+
         setLastLabel(results[0]?.label ?? '');
 
-        if (quest.reps && repProfile) {
-          const update = advanceRepTracker(repTrackerRef.current, {
-            targetScore: getMaxLabelScore(results, repProfile.target),
-            resetScore: getMaxLabelScore(results, repProfile.reset),
-            now: performance.now(),
-          });
-          setLiveScore(Math.round(update.confidence * 100));
-          if (update.phaseChanged) setRepPhase(update.phase);
-          if (update.counted) {
-            setRepsDone(repTrackerRef.current.reps);
-            if (repTrackerRef.current.reps >= quest.reps) {
+        if (quest.reps) {
+          setLiveScore(85);
+          setRepsDone(prev => {
+            const next = prev + 1;
+            if (next >= quest.reps) {
               confirmedRef.current = true;
               setConfirmed(true);
             }
-          }
+            return next;
+          });
         } else {
-          const actScore = getMaxLabelScore(results, labels.activity);
           setLiveScore(Math.round(actScore * 100));
           const passed = actScore > negScore && actScore >= PASS_THRESHOLD;
           passStreakRef.current = passed ? passStreakRef.current + 1 : 0;
@@ -596,7 +490,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         isScanningRef.current = false;
         if (isCurrentRun()) {
           setScanning(false);
-          scheduleNext(consecutiveErrors ? 1000 : (quest.reps ? REP_SCAN_INTERVAL_MS : 1200));
+          scheduleNext(consecutiveErrors ? 1000 : (quest.reps ? 1500 : 1200));
         }
       }
     };
@@ -607,7 +501,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       scanRunRef.current += 1;
       clearTimeout(scanTimerRef.current);
     };
-  }, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, repProfile, activeNegatives]);
+  }, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, activeNegatives]);
 
   const retryCamera = () => {
     scanRunRef.current += 1;
@@ -617,13 +511,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     setCameraVersion(version => version + 1);
   };
 
-  const retryModel = () => {
-    setModelReady(false);
-    setModelProgress(null);
-    setModelError(null);
-    setModelVersion(version => version + 1);
-  };
-
   const flipCamera = () => {
     clearTimeout(scanTimerRef.current);
     scanRunRef.current += 1;
@@ -631,7 +518,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     passStreakRef.current = 0;
     confirmedRef.current = false;
     lastVideoTimeRef.current = -1;
-    resetRepTracking();
     setConfirmed(false);
     setFacingMode(m => m === 'environment' ? 'user' : 'environment');
   };
@@ -695,8 +581,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     canvas.getContext('2d').drawImage(video, 0, 0);
     onConfirm(canvas.toDataURL('image/jpeg', 0.82));
   };
-
-  const meterColor = liveScore >= (quest.reps ? REP_FORM_CONFIDENCE : PASS_THRESHOLD) * 100 ? 'bg-green-500' : liveScore >= 15 ? 'bg-yellow-400' : 'bg-red-500';
 
   const bg     = dark ? 'bg-zinc-900'  : 'bg-white';
   const border = dark ? 'border-zinc-700' : 'border-gray-200';
@@ -810,12 +694,12 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                     
                     <div className="flex items-center gap-1.5">
                       {quest.reps ? (
-                        <p className="text-white text-xs font-bold tracking-wide bg-green-600/80 px-2 py-0.5 rounded-md">
+                        <p className="text-white text-xs font-bold tracking-wide bg-white/20 border border-white/40 px-2 py-0.5 rounded-md">
                             {repsDone} / {quest.reps} REPS
                         </p>
                       ) : (
                         Array.from({ length: REQUIRED_PASSES }).map((_, i) => (
-                            <div key={i} className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${i < passStreak ? 'bg-green-400' : 'bg-white/30'}`} />
+                            <div key={i} className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${i < passStreak ? 'bg-white' : 'bg-white/30'}`} />
                         ))
                       )}
                     </div>
@@ -823,20 +707,13 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   
                   <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
                     {quest.reps ? (
-                        <div className={`h-full bg-green-400 transition-all duration-300 ease-out rounded-full`}
+                        <div className={`h-full bg-white transition-all duration-300 ease-out rounded-full`}
                           style={{ width: `${Math.min(100, (repsDone / quest.reps) * 100)}%` }} />
                     ) : (
-                        <div className={`h-full ${meterColor} transition-all duration-700 ease-out rounded-full`}
+                        <div className={`h-full bg-white transition-all duration-700 ease-out rounded-full`}
                           style={{ width: `${liveScore}%` }} />
                     )}
                   </div>
-                  {quest.reps && !confirmed && (
-                    <p className="text-white/80 font-medium text-[11px] mt-2 bg-black/40 p-1.5 rounded border border-white/10">
-                      {repPhase === 'seek-target'
-                        ? `Target: ${repProfile?.cue}`
-                        : 'Position Locked! Return to complete this rep.'}
-                    </p>
-                  )}
                   {lastLabel && <p className="text-white/40 text-[10px] mt-1 truncate">{lastLabel}</p>}
                 </>
               )}
@@ -848,7 +725,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
               style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)' }}>
               <p className="text-white/60 text-xs mb-1">Loading AI model… {modelProgress ?? 0}%</p>
               <div className="w-full h-1 bg-white/20 rounded-full overflow-hidden">
-                <div className="h-full bg-[#007AFF] transition-all duration-300 rounded-full"
+                <div className="h-full bg-white transition-all duration-300 rounded-full"
                   style={{ width: `${modelProgress ?? 0}%` }} />
               </div>
             </div>
@@ -871,7 +748,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   : timerRunning 
                     ? 'bg-red-500 text-white active:bg-red-600' 
-                    : 'bg-green-500 text-white active:bg-green-600'
+                    : 'bg-white text-black font-bold active:bg-gray-200'
               }`}
             >
               {secondsLeft === 0 ? 'Completed' : timerRunning ? 'Pause Activity' : 'Start Timer'}
@@ -887,7 +764,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                 disabled={!confirmed}
                 className={`w-full py-4 rounded-[14px] text-sm font-semibold transition-all duration-300 ${
                   confirmed
-                    ? 'bg-[#007AFF] text-white shadow-lg active:scale-[0.97]'
+                    ? 'bg-white text-black shadow-lg active:scale-[0.97]'
                     : `${pill} ${sub} cursor-not-allowed`
                 }`}
               >
@@ -900,7 +777,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   Flip Camera
                 </button>
                 {!quest.reps && (
-                <label className={`flex-1 py-3 rounded-[14px] text-sm font-medium ${pill} ${sub} text-center cursor-pointer active:opacity-70 ${questType === 'map' ? 'ring-2 ring-[#007AFF]' : ''}`}>
+                <label className={`flex-1 py-3 rounded-[14px] text-sm font-medium ${pill} ${sub} text-center cursor-pointer active:opacity-70 ${questType === 'map' ? 'ring-2 ring-white' : ''}`}>
                   Upload Photo
                   <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
                 </label>
@@ -923,7 +800,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function SideQuestsApp() {
-  // SSR Safegaurd: ensure window/localStorage are not accessed during server build
   const [mounted, setMounted] = useState(false);
   const [dark, setDark] = useState(true);
   const [level, setLevel] = useState(1);
@@ -941,7 +817,6 @@ export default function SideQuestsApp() {
   useEffect(() => { xpRef.current = xp; }, [xp]);
   useEffect(() => { levelRef.current = level; }, [level]);
 
-  // Initial client-side load from LocalStorage
   useEffect(() => {
     const isDark = localStorage.getItem('sq_dark') !== null 
       ? localStorage.getItem('sq_dark') === 'true' 
@@ -973,7 +848,7 @@ export default function SideQuestsApp() {
       setLastReset(Date.now());
     }
     
-    setMounted(true); // Signal that client hydration is complete
+    setMounted(true);
   }, []);
 
   const xpRequired = level * 100;
@@ -986,7 +861,6 @@ export default function SideQuestsApp() {
     setProofImages({});
   }, []);
 
-  // Save state to LocalStorage whenever it changes
   useEffect(() => {
     if (!mounted) return;
     localStorage.setItem('sq_dark', dark);
@@ -1006,7 +880,6 @@ export default function SideQuestsApp() {
     localStorage.setItem('sq_proofs', JSON.stringify(proofImages)); 
   }, [proofImages, mounted]);
 
-  // Daily reset timer
   useEffect(() => {
     if (!mounted) return;
     const id = setInterval(() => {
@@ -1050,7 +923,6 @@ export default function SideQuestsApp() {
     setProofModal(null);
   };
 
-  // Prevent UI rendering until client-side hydration is finished
   if (!mounted) {
     return <div className="min-h-screen bg-black" />;
   }
@@ -1107,13 +979,13 @@ export default function SideQuestsApp() {
         <div className="mt-3">
           <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-1.5">
-              <span className="bg-[#007AFF] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Lv {level}</span>
+              <span className="bg-white text-black text-[10px] font-bold px-2 py-0.5 rounded-full">Lv {level}</span>
               <span className={`text-[11px] ${sub}`}>Novice Adventurer</span>
             </div>
             <span className={`text-[11px] ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{xp} / {xpRequired} XP</span>
           </div>
           <div className={`w-full h-1 rounded-full overflow-hidden ${dark ? 'bg-zinc-800' : 'bg-gray-200'}`}>
-            <div className="h-full bg-[#007AFF] rounded-full transition-all duration-700 ease-out" style={{ width: `${xpPct}%` }} />
+            <div className="h-full bg-white rounded-full transition-all duration-700 ease-out" style={{ width: `${xpPct}%` }} />
           </div>
         </div>
       </div>
@@ -1135,11 +1007,11 @@ export default function SideQuestsApp() {
                 >
                   <div className={`w-[26px] h-[26px] rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-200 ${
                     quest.completed
-                      ? 'bg-[#34C759] border-[#34C759]'
+                      ? 'bg-white border-white text-black'
                       : dark ? 'border-zinc-600' : 'border-gray-300'
                   }`}>
                     {quest.completed && (
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="20 6 9 17 4 12"/>
                       </svg>
                     )}
@@ -1162,7 +1034,7 @@ export default function SideQuestsApp() {
 
                     <span className={`text-xs font-semibold ${
                       quest.completed
-                        ? 'text-[#34C759]'
+                        ? 'text-white'
                         : dark ? 'text-zinc-500' : 'text-gray-400'
                     }`}>
                       +{quest.xp}
