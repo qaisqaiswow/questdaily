@@ -708,12 +708,10 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
       <div className={`${bg} w-full max-w-lg rounded-t-[28px] overflow-hidden shadow-2xl`} style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 16px)' }}>
 
-        {/* Drag handle */}
         <div className="flex justify-center pt-3 pb-1">
           <div className={`w-10 h-1 rounded-full ${dark ? 'bg-zinc-600' : 'bg-gray-300'}`} />
         </div>
 
-        {/* Header */}
         <div className={`flex items-center justify-between px-5 py-3 border-b ${border}`}>
           <button onClick={onCancel} className="text-[#007AFF] text-sm font-medium">Cancel</button>
           <div className="text-center">
@@ -723,19 +721,16 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           <div className="w-14" />
         </div>
 
-        {/* Viewfinder */}
         <div className="relative bg-black" style={{ aspectRatio: '4/3' }}>
           <video ref={videoRef} autoPlay playsInline muted
               className={`w-full h-full object-cover ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
           
-          {/* Visible Interactive Skeletal Canvas Overlay */}
           {phase === 'live' && !uploadedProof && quest.reps && (
             <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none z-20" />
           )}
 
           {phase === 'live' && !uploadedProof && labels?.bodyParts && (
             <div className="absolute inset-0 pointer-events-none border-[3px] border-dashed border-cyan-500/30 m-4 rounded-xl animate-pulse z-10">
-              {/* Target HUD Tracking Box */}
               <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-2.5 py-1.5 rounded-lg border border-cyan-500/40 text-[10px] font-mono tracking-wider text-cyan-400">
                 <div className="flex items-center gap-1.5 mb-1 text-white uppercase font-bold text-[11px]">
                   <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block" />
@@ -795,7 +790,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             </div>
           )}
 
-          {/* AI overlay */}
           {phase === 'live' && modelReady && (
             <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pt-8 z-20"
               style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)' }}>
@@ -863,7 +857,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           <canvas ref={aiCanvasRef} className="hidden" />
         </div>
 
-        {/* Objective Session Timer Panel View Feature */}
         {quest.duration && (
           <div className={`px-4 py-3 mx-4 mt-3 rounded-xl border flex items-center justify-between ${dark ? 'bg-zinc-800/50 border-zinc-700' : 'bg-gray-50 border-gray-200'}`}>
             <div className="flex flex-col">
@@ -886,7 +879,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           </div>
         )}
 
-        {/* Controls */}
         <div className="px-4 pt-4 pb-2 space-y-3">
           {phase === 'live' && (
             <>
@@ -931,80 +923,112 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function SideQuestsApp() {
-  const [dark, setDark] = useState(() => {
-    // Check if we are rendering on the server/build time vs client
-    if (typeof window === 'undefined') return true; 
-    const saved = localStorage.getItem('sq_dark');
-    if (saved !== null) return saved === 'true';
-    return window.matchMedia('(prefers-color-scheme: dark)').matches;
-  });
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', dark);
-    localStorage.setItem('sq_dark', dark);
-  }, [dark]);
-
-  const [level,     setLevel]     = useState(() => typeof window !== 'undefined' ? parseInt(localStorage.getItem('sq_level'))    || 1 : 1);
-  const [xp,        setXp]        = useState(() => typeof window !== 'undefined' ? parseInt(localStorage.getItem('sq_xp'))       || 0 : 0);
-  const [quests,    setQuests]    = useState(() => {
-    if (typeof window === 'undefined') return [];
-    const saved     = JSON.parse(localStorage.getItem('sq_quests')) || [];
-    const anyDone   = saved.some(q => q.completed);
-    const lastReset = parseInt(localStorage.getItem('sq_lastReset')) || 0;
-    const expired   = Date.now() - lastReset >= ONE_DAY_MS;
-    if (!expired && saved.length >= 5) return saved;
-    if (!expired && anyDone)            return saved;
-    const n = Math.floor(Math.random() * 3) + 5;
-    return [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n)
-      .map(q => ({ ...q, completed: false }));
-  });
-  const [lastReset, setLastReset] = useState(() => typeof window !== 'undefined' ? parseInt(localStorage.getItem('sq_lastReset')) || 0 : 0);
-  const [timeLeft,  setTimeLeft]  = useState('--:--:--');
-  const [proofModal,   setProofModal]   = useState(null);
-  const [proofImages,  setProofImages]  = useState(() => typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('sq_proofs')) || {} : {});
+  // SSR Safegaurd: ensure window/localStorage are not accessed during server build
+  const [mounted, setMounted] = useState(false);
+  const [dark, setDark] = useState(true);
+  const [level, setLevel] = useState(1);
+  const [xp, setXp] = useState(0);
+  const [quests, setQuests] = useState([]);
+  const [lastReset, setLastReset] = useState(0);
+  const [timeLeft, setTimeLeft] = useState('--:--:--');
+  const [proofModal, setProofModal] = useState(null);
+  const [proofImages, setProofImages] = useState({});
   const [viewingProof, setViewingProof] = useState(null);
 
-  const xpRef    = useRef(xp);
+  const xpRef = useRef(xp);
   const levelRef = useRef(level);
-  useEffect(() => { xpRef.current    = xp;    }, [xp]);
+  
+  useEffect(() => { xpRef.current = xp; }, [xp]);
   useEffect(() => { levelRef.current = level; }, [level]);
+
+  // Initial client-side load from LocalStorage
+  useEffect(() => {
+    const isDark = localStorage.getItem('sq_dark') !== null 
+      ? localStorage.getItem('sq_dark') === 'true' 
+      : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    setDark(isDark);
+    document.documentElement.classList.toggle('dark', isDark);
+
+    const loadedLevel = parseInt(localStorage.getItem('sq_level')) || 1;
+    const loadedXp = parseInt(localStorage.getItem('sq_xp')) || 0;
+    const loadedLastReset = parseInt(localStorage.getItem('sq_lastReset')) || 0;
+    const loadedProofs = JSON.parse(localStorage.getItem('sq_proofs')) || {};
+
+    setLevel(loadedLevel);
+    setXp(loadedXp);
+    setLastReset(loadedLastReset);
+    setProofImages(loadedProofs);
+
+    const savedQuests = JSON.parse(localStorage.getItem('sq_quests')) || [];
+    const expired = Date.now() - loadedLastReset >= ONE_DAY_MS;
+    
+    if (!expired && savedQuests.length >= 5) {
+      setQuests(savedQuests);
+    } else if (!expired && savedQuests.some(q => q.completed)) {
+      setQuests(savedQuests);
+    } else {
+      const n = Math.floor(Math.random() * 3) + 5;
+      const freshQuests = [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(q => ({ ...q, completed: false }));
+      setQuests(freshQuests);
+      setLastReset(Date.now());
+    }
+    
+    setMounted(true); // Signal that client hydration is complete
+  }, []);
 
   const xpRequired = level * 100;
 
   const generateNewQuests = useCallback((ts) => {
     const n = Math.floor(Math.random() * 3) + 5;
     const selected = [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(q => ({ ...q, completed: false }));
-    setQuests(selected); setLastReset(ts); setProofImages({});
+    setQuests(selected); 
+    setLastReset(ts); 
+    setProofImages({});
   }, []);
 
+  // Save state to LocalStorage whenever it changes
   useEffect(() => {
+    if (!mounted) return;
+    localStorage.setItem('sq_dark', dark);
+    document.documentElement.classList.toggle('dark', dark);
+  }, [dark, mounted]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    localStorage.setItem('sq_level', level);
+    localStorage.setItem('sq_xp', xp);
+    localStorage.setItem('sq_quests', JSON.stringify(quests));
+    localStorage.setItem('sq_lastReset', lastReset);
+  }, [level, xp, quests, lastReset, mounted]);
+  
+  useEffect(() => { 
+    if (!mounted) return;
+    localStorage.setItem('sq_proofs', JSON.stringify(proofImages)); 
+  }, [proofImages, mounted]);
+
+  // Daily reset timer
+  useEffect(() => {
+    if (!mounted) return;
     const id = setInterval(() => {
-      const now = Date.now(), remaining = ONE_DAY_MS - (now - lastReset);
-      if (remaining <= 0 || quests.length === 0) { generateNewQuests(now); return; }
+      const now = Date.now();
+      const remaining = ONE_DAY_MS - (now - lastReset);
+      if (remaining <= 0 || quests.length === 0) { 
+        generateNewQuests(now); 
+        return; 
+      }
       const h = Math.floor((remaining / 3_600_000) % 24);
-      const m = Math.floor((remaining /    60_000) % 60);
-      const s = Math.floor((remaining /     1_000) % 60);
+      const m = Math.floor((remaining / 60_000) % 60);
+      const s = Math.floor((remaining / 1_000) % 60);
       setTimeLeft(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`);
     }, 1000);
     return () => clearInterval(id);
-  }, [lastReset, quests.length, generateNewQuests]);
-
-  useEffect(() => {
-    localStorage.setItem('sq_level',     level);
-    localStorage.setItem('sq_xp',        xp);
-    localStorage.setItem('sq_quests',    JSON.stringify(quests));
-    localStorage.setItem('sq_lastReset', lastReset);
-  }, [level, xp, quests, lastReset]);
-  
-  useEffect(() => { 
-    localStorage.setItem('sq_proofs', JSON.stringify(proofImages)); 
-  }, [proofImages]);
+  }, [lastReset, quests.length, generateNewQuests, mounted]);
 
   const applyXpChange = useCallback((amount) => {
     let newXp = xpRef.current + amount, newLevel = levelRef.current;
-    while (newXp >= newLevel * 100)    { newXp -= newLevel * 100; newLevel++; }
+    while (newXp >= newLevel * 100) { newXp -= newLevel * 100; newLevel++; }
     while (newXp < 0 && newLevel > 1) { newLevel--; newXp += newLevel * 100; }
-    if (newLevel === 1 && newXp < 0)   newXp = 0;
+    if (newLevel === 1 && newXp < 0) newXp = 0;
     setXp(newXp); setLevel(newLevel);
   }, []);
 
@@ -1026,7 +1050,12 @@ export default function SideQuestsApp() {
     setProofModal(null);
   };
 
-  const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
+  // Prevent UI rendering until client-side hydration is finished
+  if (!mounted) {
+    return <div className="min-h-screen bg-black" />;
+  }
+
+  const xpPct = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
   const allDone = quests.length > 0 && quests.every(q => q.completed);
 
   const bg       = dark ? 'bg-black'      : 'bg-[#F2F2F7]';
