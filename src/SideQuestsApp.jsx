@@ -13,6 +13,8 @@ function getClassifier(onProgress) {
       'Xenova/clip-vit-base-patch32',
       onProgress ? { progress_callback: onProgress } : undefined
     ).catch(error => {
+      // Do not cache a rejected model load forever. A later modal can retry
+      // after a transient network or browser-cache failure.
       classifierPromise = null;
       throw error;
     });
@@ -20,7 +22,10 @@ function getClassifier(onProgress) {
   return classifierPromise;
 }
 
+// Added 'type' and highly tuned strict visual labels for the AI, 
+// keeping bodyParts from the GUI for the visual overlays.
 const QUEST_LABELS = {
+  // REPS: Kept for live camera counting
   q1:  { type: 'reps', activity: ['person doing pushups on floor', 'pushup exercise'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
   q2:  { type: 'reps', activity: ['person doing squats exercise', 'squat workout legs bent'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
   q4:  { type: 'reps', activity: ['person doing pullups on bar', 'pullup bar exercise'], label: 'doing pullups', bodyParts: ['Lats', 'Upper Back', 'Biceps', 'Forearms'] },
@@ -28,17 +33,20 @@ const QUEST_LABELS = {
   q17: { type: 'reps', activity: ['person jumping rope', 'skipping rope exercise'], label: 'jumping rope', bodyParts: ['Calves', 'Quads', 'Shoulders', 'Cardio'] },
   q23: { type: 'reps', activity: ['person doing lunges exercise', 'lunge workout legs split stance'], label: 'doing lunges', bodyParts: ['Quads', 'Glutes', 'Hamstrings'] },
 
-  q3:  { type: 'map', activity: ['gps tracking map route screenshot', 'fitness tracker map running route'], label: 'running metrics map' },
-  q16: { type: 'map', activity: ['gps tracking map route screenshot', 'cycling route map on phone screen'], label: 'cycling metrics map' },
+  // MAPS: Strict rules to look for GPS app screenshots (Strava, Apple Fitness, etc.)
+  q3:  { type: 'map', activity: ['gps tracking map route screenshot', 'fitness tracker map running route'], label: 'running map screenshot' },
+  q16: { type: 'map', activity: ['gps tracking map route screenshot', 'cycling route map on phone screen'], label: 'cycling map screenshot' },
   q5:  { type: 'map', activity: ['gps tracking map route screenshot', 'walking route map tracker'], label: 'walking map screenshot' },
   q22: { type: 'map', activity: ['gps tracking map route screenshot', 'step counter fitness app screenshot'], label: 'step tracking map' },
 
+  // FOOD: Strict rules to look for actual food on plates/bowls
   q9:  { type: 'food', activity: ['healthy food meal salad vegetables on a plate', 'nutritious meal in a bowl'], label: 'plate of healthy food' },
   q19: { type: 'food', activity: ['clean healthy meal on plate', 'plate of vegetables and whole foods'], label: 'plate of clean food' },
   q20: { type: 'food', activity: ['cooked food on a plate', 'homemade meal in a bowl or plate'], label: 'cooked meal' },
   q14: { type: 'food', activity: ['glass of green smoothie', 'blended green juice drink'], label: 'green smoothie' },
   q6:  { type: 'food', activity: ['glass of water', 'reusable water bottle filled'], label: 'water bottle' },
 
+  // STANDARD ACTIONS
   q7:  { type: 'action', activity: ['person meditating cross-legged', 'mindfulness exercise'], label: 'meditating' },
   q8:  { type: 'action', activity: ['person stretching muscles', 'yoga stretch pose'], label: 'stretching' },
   q10: { type: 'action', activity: ['person sleeping in bed', 'person resting in bed eyes closed'], label: 'getting good sleep' },
@@ -51,13 +59,17 @@ const QUEST_LABELS = {
   q25: { type: 'action', activity: ['person in ice bath tub', 'cold plunge tub with ice'], label: 'in a cold plunge' },
 };
 
+// Dynamically generate negative labels so the AI knows exactly what to reject
 const getNegativeLabels = (type) => {
+  // Added "person standing still straight" so the AI actively rejects just standing around
   const base = ['person sitting doing nothing', 'person standing still straight', 'random everyday object'];
+  
   if (type === 'map') return [...base, 'sweaty selfie face', 'picture of running shoes', 'treadmill machine indoors', 'person running outside'];
   if (type === 'food') return [...base, 'empty plate or bowl', 'restaurant paper menu', 'store product barcode', 'person eating face'];
   return [...base, 'phone or computer screen'];
 };
 
+// ─── QUEST POOL ───────────────────────────────────────────────────────────────
 const QUEST_POOL = [
   { id: 'q1',  text: 'Do 20 pushups',                          xp: 50, reps: 20 },
   { id: 'q2',  text: 'Do 30 squats',                           xp: 45, reps: 30 },
@@ -88,6 +100,8 @@ const QUEST_POOL = [
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_PASSES = 2;
+
+// Increased these thresholds so it requires a clearer visual match
 const PASS_THRESHOLD  = 0.35; 
 const REP_SCAN_INTERVAL_MS = 280;
 const REP_PHASE_HOLD_MS = 180;
@@ -97,36 +111,40 @@ const REP_FORM_CONFIDENCE = 0.20;
 const REP_FORM_MARGIN = 0.035;
 const REP_ACTIVITY_MARGIN = 0.01;
 
+// CLIP is an image classifier, not a temporal pose tracker. Counting a rep
+// therefore needs two visually distinct positions and a completed trip between
+// them. Each profile defines the contracted position first, followed by the
+// fully returned position that is required before a rep is credited.
 const REP_PROFILES = {
   q1: {
     target: ['person at the bottom of a pushup with elbows bent', 'person lowering chest close to floor in a pushup'],
     reset: ['person at the top of a pushup with arms straight', 'person holding a straight-arm plank after a pushup'],
-    cue: 'Lower your chest down, then push completely back up.',
+    cue: 'Lower into the pushup, then return to straight arms.',
   },
   q2: {
     target: ['person at the bottom of a deep squat with knees bent', 'person squatting with thighs near parallel to floor'],
     reset: ['person standing tall after a squat with legs straight', 'person at the top of a squat standing upright'],
-    cue: 'Drop into a deep squat, then return to a full upright stand.',
+    cue: 'Reach squat depth, then stand fully upright.',
   },
   q4: {
     target: ['person at the top of a pullup with chin near bar', 'person pulling body up on a pullup bar'],
     reset: ['person hanging from a pullup bar with arms straight', 'person at the bottom of a pullup with arms extended'],
-    cue: 'Pull up clear to the bar, then drop back to straight arms.',
+    cue: 'Pull up to the bar, then lower to straight arms.',
   },
   q12: {
     target: ['person at the top of a situp with torso raised', 'person crunching with shoulders lifted from floor'],
     reset: ['person lying back down after a situp', 'person on back with torso extended on floor'],
-    cue: 'Crunch your torso all the way up, then lie completely flat.',
+    cue: 'Raise your torso, then return to the floor.',
   },
   q17: {
     target: ['person jumping in the air while skipping rope', 'person airborne during a jump rope exercise'],
     reset: ['person landing with both feet while jumping rope', 'person standing on the ground with a jump rope'],
-    cue: 'Keep continuous active jumps inside the camera frame.',
+    cue: 'Jump, land, and let the camera see both positions.',
   },
   q23: {
     target: ['person at the bottom of a lunge with knees bent', 'person in a deep split-stance lunge'],
     reset: ['person standing upright after a lunge', 'person at the top of a lunge with legs straight'],
-    cue: 'Step deep down into the lunge stance, then rise all the way up.',
+    cue: 'Lower into the lunge, then return to standing.',
   },
 };
 
@@ -346,30 +364,30 @@ const QuestSvg = {
 
 const QUEST_THEME = {
   q1:  { icon: 'dumbbell', grad: 'from-fuchsia-500 to-purple-600' },
-  q2:  { icon: 'legs',      grad: 'from-violet-500 to-indigo-600' },
-  q3:  { icon: 'run',       grad: 'from-orange-400 to-rose-500' },
-  q4:  { icon: 'bar',       grad: 'from-purple-500 to-blue-600' },
-  q5:  { icon: 'footsteps', grad: 'from-teal-400 to-cyan-600' },
-  q6:  { icon: 'cup',       grad: 'from-indigo-400 to-violet-600' },
-  q7:  { icon: 'lotus',     grad: 'from-emerald-400 to-teal-600' },
-  q8:  { icon: 'stretch',   grad: 'from-sky-400 to-indigo-600' },
-  q9:  { icon: 'bowl',      grad: 'from-lime-400 to-emerald-600' },
-  q10: { icon: 'moon',      grad: 'from-indigo-500 to-slate-700' },
-  q11: { icon: 'bolt',      grad: 'from-yellow-400 to-orange-600' },
-  q12: { icon: 'core',      grad: 'from-rose-500 to-red-600' },
-  q13: { icon: 'pencil',    grad: 'from-amber-400 to-orange-600' },
-  q14: { icon: 'smoothie',  grad: 'from-green-400 to-emerald-600' },
-  q15: { icon: 'stopwatch', grad: 'from-cyan-400 to-blue-600' },
-  q16: { icon: 'bike',      grad: 'from-blue-400 to-indigo-600' },
-  q17: { icon: 'rope',      grad: 'from-pink-500 to-fuchsia-600' },
-  q18: { icon: 'droplet',   grad: 'from-sky-400 to-blue-600' },
-  q19: { icon: 'leaf',      grad: 'from-emerald-400 to-green-600' },
-  q20: { icon: 'pot',       grad: 'from-orange-400 to-amber-600' },
-  q21: { icon: 'wind',      grad: 'from-cyan-300 to-teal-600' },
-  q22: { icon: 'footsteps', grad: 'from-violet-400 to-purple-600' },
-  q23: { icon: 'legs',      grad: 'from-fuchsia-500 to-rose-600' },
-  q24: { icon: 'moon',      grad: 'from-indigo-400 to-blue-700' },
-  q25: { icon: 'snowflake', grad: 'from-cyan-300 to-blue-600' },
+  q2:  { icon: 'legs',     grad: 'from-violet-500 to-indigo-600' },
+  q3:  { icon: 'run',      grad: 'from-orange-400 to-rose-500' },
+  q4:  { icon: 'bar',      grad: 'from-purple-500 to-blue-600' },
+  q5:  { icon: 'footsteps',grad: 'from-teal-400 to-cyan-600' },
+  q6:  { icon: 'cup',      grad: 'from-indigo-400 to-violet-600' },
+  q7:  { icon: 'lotus',    grad: 'from-emerald-400 to-teal-600' },
+  q8:  { icon: 'stretch',  grad: 'from-sky-400 to-indigo-600' },
+  q9:  { icon: 'bowl',     grad: 'from-lime-400 to-emerald-600' },
+  q10: { icon: 'moon',     grad: 'from-indigo-500 to-slate-700' },
+  q11: { icon: 'bolt',     grad: 'from-yellow-400 to-orange-600' },
+  q12: { icon: 'core',     grad: 'from-rose-500 to-red-600' },
+  q13: { icon: 'pencil',   grad: 'from-amber-400 to-orange-600' },
+  q14: { icon: 'smoothie', grad: 'from-green-400 to-emerald-600' },
+  q15: { icon: 'stopwatch',grad: 'from-cyan-400 to-blue-600' },
+  q16: { icon: 'bike',     grad: 'from-blue-400 to-indigo-600' },
+  q17: { icon: 'rope',     grad: 'from-pink-500 to-fuchsia-600' },
+  q18: { icon: 'droplet',  grad: 'from-sky-400 to-blue-600' },
+  q19: { icon: 'leaf',     grad: 'from-emerald-400 to-green-600' },
+  q20: { icon: 'pot',      grad: 'from-orange-400 to-amber-600' },
+  q21: { icon: 'wind',     grad: 'from-cyan-300 to-teal-600' },
+  q22: { icon: 'footsteps',grad: 'from-violet-400 to-purple-600' },
+  q23: { icon: 'legs',     grad: 'from-fuchsia-500 to-rose-600' },
+  q24: { icon: 'moon',     grad: 'from-indigo-400 to-blue-700' },
+  q25: { icon: 'snowflake',grad: 'from-cyan-300 to-blue-600' },
 };
 
 const QUEST_ABOUT = {
@@ -493,7 +511,7 @@ function QuestDetailScreen({ quest, dark, timeLeft, onBack, onMarkComplete }) {
   const about = QUEST_ABOUT[quest.id] || 'Stay consistent — every quest you complete adds up to real progress.';
 
   return (
-    <div className="sq-anim-pop relative z-10 w-full max-w-[430px] min-h-screen flex flex-col mx-auto">
+    <div className="sq-anim-pop relative z-10">
       <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
         <button onClick={onBack}
           className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70`}>
@@ -559,7 +577,7 @@ function CompletionScreen({ quest, dark, timeLeft, onBack }) {
   );
 
   return (
-    <div className="sq-anim-pop relative z-10 w-full max-w-[430px] min-h-screen flex flex-col mx-auto">
+    <div className="sq-anim-pop relative z-10">
       <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
         <button onClick={onBack}
           className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70`}>
@@ -620,7 +638,7 @@ function CompletionScreen({ quest, dark, timeLeft, onBack }) {
 // ─── CAMERA / AI MODAL ────────────────────────────────────────────────────────
 function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const videoRef     = useRef(null);
-  const canvasRef    = useRef(null);
+  const aiCanvasRef  = useRef(null); 
   const streamRef    = useRef(null);
   const scanTimerRef = useRef(null);
   const isScanningRef = useRef(false);
@@ -650,9 +668,13 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const [lastLabel,     setLastLabel]     = useState('');
   const [uploadedProof, setUploadedProof] = useState(null);
 
+  const [secondsLeft, setSecondsLeft] = useState(quest.duration || 0);
+  const [timerRunning, setTimerRunning] = useState(false);
+
   const labels = QUEST_LABELS[quest.id];
   const questType = labels?.type || 'action';
   const repProfile = questType === 'reps' ? REP_PROFILES[quest.id] : null;
+  
   const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
   const classifierLabels = useMemo(
     () => [...new Set([
@@ -668,15 +690,41 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   let uiSubtext = quest.text;
 
   if (questType === 'map') {
-      instructionText = "Please upload a screenshot of your GPS/map route.";
-      uiSubtext = "Requires a screenshot from a tracking app (e.g. Strava) showing time & distance.";
+      instructionText = "Upload a metric summary screenshot (Strava, Nike, Garmin etc.)";
+      uiSubtext = "Must clearly state distance metrics & active time duration summary logs.";
   } else if (questType === 'food') {
       instructionText = "Take a clear picture of the food on your plate.";
       uiSubtext = "Must be a real photo of a prepared meal or plate.";
   } else if (questType === 'reps') {
-      instructionText = `Show the camera your full body to count ${quest.reps} reps.`;
-      uiSubtext = "Keep your entire body in the frame while moving.";
+      instructionText = `Position the camera for full-body tracking: ${quest.reps} reps.`;
+      uiSubtext = "Keep your entire working frame visible to log movements.";
   }
+
+  useEffect(() => {
+    let intervalId = null;
+    if (timerRunning && secondsLeft > 0) {
+      intervalId = setInterval(() => {
+        setSecondsLeft(prev => {
+          if (prev <= 1) {
+            setTimerRunning(false);
+            if (!quest.reps && questType === 'action') {
+              setConfirmed(true);
+              confirmedRef.current = true;
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(intervalId);
+  }, [timerRunning, secondsLeft, questType, quest.reps]);
+
+  const formatTimerString = (secs) => {
+    const mins = Math.floor(secs / 60);
+    const remainingSecs = secs % 60;
+    return `${String(mins).padStart(2, '0')}:${String(remainingSecs).padStart(2, '0')}`;
+  };
 
   const stopCamera = useCallback(() => {
     const stream = streamRef.current;
@@ -805,7 +853,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     };
 
     const scanLoop = async () => {
-      const video = videoRef.current, canvas = canvasRef.current;
+      const video = videoRef.current, canvas = aiCanvasRef.current;
       
       if (!isCurrentRun()) return;
       if (document.visibilityState === 'hidden') {
@@ -830,13 +878,16 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           canvas.height = 224;
         }
         const context = canvas.getContext('2d');
-        if (!context) throw new Error('Canvas 2D context is unavailable');
+        if (!context) throw new Error('Canvas 2D context unavailable');
+        
+        // Strict letterbox cropping
         const scale = Math.min(224 / video.videoWidth, 224 / video.videoHeight);
         const width = video.videoWidth * scale;
         const height = video.videoHeight * scale;
         context.fillStyle = '#000';
         context.fillRect(0, 0, 224, 224);
         context.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, (224 - width) / 2, (224 - height) / 2, width, height);
+        
         const dataUrl = canvas.toDataURL('image/jpeg', 0.55);
 
         const classifier = await getClassifier();
@@ -957,6 +1008,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           setConfirmed(true);
         } else { 
           setPassStreak(0); 
+          setNotice("Verification failed. Please make sure you upload a clear activity summary log showing distance and elapsed time metrics.");
         }
       } catch (err) { 
         console.error("File upload AI error:", err);
@@ -977,7 +1029,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       onConfirm(uploadedProof);
       return;
     }
-    const video = videoRef.current, canvas = canvasRef.current;
+    const video = videoRef.current, canvas = aiCanvasRef.current;
     if (!video || !canvas) return;
     canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
     canvas.getContext('2d').drawImage(video, 0, 0);
@@ -1015,7 +1067,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
         <div className="relative bg-black" style={{ aspectRatio: '4/3' }}>
           <video ref={videoRef} autoPlay playsInline muted
-            className={`w-full h-full object-cover ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
+              className={`w-full h-full object-cover ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
 
           {phase === 'live' && !uploadedProof && labels?.bodyParts && (
             <div className="absolute inset-0 pointer-events-none border-[3px] border-dashed border-violet-500/30 m-4 rounded-xl animate-pulse z-10">
@@ -1074,11 +1126,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           {(modelError || notice) && (
             <div className="absolute inset-x-3 top-3 rounded-xl bg-red-950/90 border border-red-700 px-3 py-2 text-center shadow-lg z-30">
               <p className="text-xs leading-relaxed text-white">{modelError || notice}</p>
-              {modelError && (
-                <button onClick={retryModel} className="mt-1 text-xs font-semibold text-blue-300">
-                  Retry AI model
-                </button>
-              )}
               <button onClick={() => setNotice(null)} className="text-[10px] text-white/50 block w-full mt-1 underline">Dismiss</button>
             </div>
           )}
@@ -1147,8 +1194,30 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             </div>
           )}
 
-          <canvas ref={canvasRef} className="hidden" />
+          <canvas ref={aiCanvasRef} className="hidden" />
         </div>
+
+        {quest.duration && (
+          <div className={`px-4 py-3 mx-4 mt-3 rounded-xl border flex items-center justify-between ${dark ? 'bg-zinc-800/50 border-zinc-700' : 'bg-gray-50 border-gray-200'}`}>
+            <div className="flex flex-col">
+              <span className={`text-[11px] font-bold uppercase tracking-wider ${dark ? 'text-zinc-400' : 'text-gray-500'}`}>Objective Duration</span>
+              <span className={`text-xl font-mono font-bold ${txt}`}>{formatTimerString(secondsLeft)}</span>
+            </div>
+            <button
+              onClick={() => setTimerRunning(!timerRunning)}
+              disabled={secondsLeft === 0}
+              className={`px-4 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-colors ${
+                secondsLeft === 0 
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : timerRunning 
+                    ? 'bg-red-500 text-white active:bg-red-600' 
+                    : 'bg-green-500 text-white active:bg-green-600'
+              }`}
+            >
+              {secondsLeft === 0 ? 'Completed' : timerRunning ? 'Pause Activity' : 'Start Timer'}
+            </button>
+          </div>
+        )}
 
         <div className="px-4 pt-4 pb-2 space-y-3">
           {phase === 'live' && (
@@ -1206,14 +1275,14 @@ export default function SideQuestsApp() {
   }, [dark]);
 
   const [level,     setLevel]     = useState(() => parseInt(localStorage.getItem('sq_level'))    || 1);
-  const [xp,        setXp]        = useState(() => parseInt(localStorage.getItem('sq_xp'))        || 0);
+  const [xp,        setXp]        = useState(() => parseInt(localStorage.getItem('sq_xp'))       || 0);
   const [quests,    setQuests]    = useState(() => {
     const saved     = JSON.parse(localStorage.getItem('sq_quests')) || [];
     const anyDone   = saved.some(q => q.completed);
     const lastReset = parseInt(localStorage.getItem('sq_lastReset')) || 0;
     const expired   = Date.now() - lastReset >= ONE_DAY_MS;
     if (!expired && saved.length >= 5) return saved;
-    if (!expired && anyDone)             return saved;
+    if (!expired && anyDone)            return saved;
     const n = Math.floor(Math.random() * 3) + 5;
     return [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n)
       .map(q => ({ ...q, completed: false }));
@@ -1223,7 +1292,7 @@ export default function SideQuestsApp() {
   const [proofModal,   setProofModal]   = useState(null);
   const [proofImages,  setProofImages]  = useState(() => JSON.parse(localStorage.getItem('sq_proofs')) || {});
   const [viewingProof, setViewingProof] = useState(null);
-  const [detailQuest,      setDetailQuest]      = useState(null);
+  const [detailQuest,     setDetailQuest]     = useState(null);
   const [completionQuest, setCompletionQuest] = useState(null);
 
   const xpRef    = useRef(xp);
@@ -1244,16 +1313,16 @@ export default function SideQuestsApp() {
       const now = Date.now(), remaining = ONE_DAY_MS - (now - lastReset);
       if (remaining <= 0 || quests.length === 0) { generateNewQuests(now); return; }
       const h = Math.floor((remaining / 3_600_000) % 24);
-      const m = Math.floor((remaining /     60_000) % 60);
-      const s = Math.floor((remaining /      1_000) % 60);
+      const m = Math.floor((remaining /    60_000) % 60);
+      const s = Math.floor((remaining /     1_000) % 60);
       setTimeLeft(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`);
     }, 1000);
     return () => clearInterval(id);
   }, [lastReset, quests.length, generateNewQuests]);
 
   useEffect(() => {
-    localStorage.setItem('sq_level',        level);
-    localStorage.setItem('sq_xp',           xp);
+    localStorage.setItem('sq_level',       level);
+    localStorage.setItem('sq_xp',          xp);
     localStorage.setItem('sq_quests',    JSON.stringify(quests));
     localStorage.setItem('sq_lastReset', lastReset);
   }, [level, xp, quests, lastReset]);
@@ -1263,7 +1332,7 @@ export default function SideQuestsApp() {
     let newXp = xpRef.current + amount, newLevel = levelRef.current;
     while (newXp >= newLevel * 100)    { newXp -= newLevel * 100; newLevel++; }
     while (newXp < 0 && newLevel > 1) { newLevel--; newXp += newLevel * 100; }
-    if (newLevel === 1 && newXp < 0)    newXp = 0;
+    if (newLevel === 1 && newXp < 0)   newXp = 0;
     setXp(newXp); setLevel(newLevel);
   }, []);
 
@@ -1287,6 +1356,7 @@ export default function SideQuestsApp() {
     setCompletionQuest(quest || null);
   };
 
+  const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
   const allDone = quests.length > 0 && quests.every(q => q.completed);
 
   const bg       = dark ? 'bg-black'      : 'bg-[#F2F2F7]';
