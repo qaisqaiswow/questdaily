@@ -1,58 +1,48 @@
-# ⚔️ Side Quests
+# Side Quests ⚡️
 
-**Side Quests** transforms your everyday life, fitness routine, and health habits into an immersive, real-world RPG. Complete your daily objectives, gain experience points (XP), and level up your character. 
+Side Quests is a gamified, mobile-first daily habit and fitness tracker built with **Next.js ("use client")** and **Hugging Face Transformers.js**. It turns your daily routines, workouts, and healthy habits into real RPG-style objectives verified entirely on-device by computer vision (CLIP). 
 
-Unlike typical habit trackers that rely purely on the honor system, **Side Quests** uses cutting-edge, **on-device computer vision AI** to dynamically track and verify your physical movements, meals, and workout logs in real time.
-
----
-
-## 🚀 Key Features
-
-*   **⚡ Intelligent Temporal Rep Counter**
-    Built with a highly responsive, debounced hysteresis state machine. The app tracks the exact contraction and extension phases of your body during exercises (Squats, Pushups, Pullups, Situps, Lunges) via a live camera feed—completely eliminating false increments or stuck rep loops.
-*   **📊 Strict Telemetry Map Validation**
-    No more spoofing maps. For running and cycling objectives, the built-in zero-shot vision model explicitly validates application dashboard telemetry (e.g., Strava, Nike Run Club, Garmin summaries) by analyzing route maps alongside actual distance metrics, pace records, and active duration logs.
-*   **🤖 Biometric Matrix HUD Overlay**
-    Experience a high-tech, sci-fi workout interface. The app overlays a dynamic tracking frame on your live video feed, visually mapping out and displaying the exact biometric muscle groups and skeletal focus points the AI is analyzing.
-*   **⏱ Integrated Session Timers**
-    Built-in countdown and count-up stopwatches are integrated right inside the verification modal for duration-heavy actions (e.g., planks, meditation, cycling, deep breathing).
-*   **🔒 100% Privacy-First Architecture**
-    Powered by `@huggingface/transformers` running a localized `CLIP` vision pipeline. All image processing and zero-shot classifications happen directly in your browser's memory sandbox. **No camera feeds, photos, or personal data ever leave your device.**
-*   **🌙 Seamless Native UI & Dark Mode**
-    A fluid, iOS-inspired responsive client engine featuring automatic system theme syncing, layout state persistence via local storage, and automated 24-hour daily objective pools.
+No backend servers, no cloud tracking—your data stays 100% private on your device.
 
 ---
 
-## 🛠️ Tech Stack
+## ✨ Features
 
-*   **Frontend Library:** React (Hooks, Context, Web Canvas API Integration)
-*   **Styling Engine:** Tailwind CSS (Fluid responsive utility design)
-*   **AI Inference Engine:** `@huggingface/transformers` (Xenova/clip-vit-base-patch32)
-*   **State & Storage:** LocalStorage API & Custom Application Persistent Refs
+- **AI-Powered Verification:** Uses `@huggingface/transformers` (`Xenova/clip-vit-base-patch32`) for zero-shot image classification and live biometric rep-tracking.
+- **Dynamic Quest Pools:** Automatically rolls randomized daily objectives ranging from pushups and runs to journaling and hydration.
+- **RPG Progression:** Level up your adventurer profile by earning XP as you complete your daily checklist.
+- **Live Camera & Upload Proofs:** Real-time feedback loops for exercise reps, GPS workout map screenshots, and meal tracking.
+- **PWA Ready:** Fully optimized mobile viewport layout with an interactive iOS "Add to Home Screen" guide for new users.
+- **Dark/Light Mode:** Seamlessly switch themes anytime across the main dashboard, detail views, and completion screens.
 
 ---
 
-## 📦 Installation & Local Setup
+## 🚀 Getting Started
 
-Get your local copy of the application up and running inside a standard React environment:
+### Prerequisites
 
-1. **Clone the repository:**
+Ensure you have **Node.js** (v18+) and npm installed on your machine.
+
+### Installation
+
+1. Clone the repository and install dependencies:
    ```bash
-   git clone [https://github.com/yourusername/side-quests.git](https://github.com/yourusername/side-quests.git)
+   git clone [https://github.com/your-username/side-quests.git](https://github.com/your-username/side-quests.git)
    cd side-quests
-Install dependencies:
+   npm install
 
-Bash
-npm install
-Install the HuggingFace Transformers package (if not bundled):
+ * Run the development server:
+   npm run dev
 
-Bash
-npm install @huggingface/transformers
-Boot up the local Vite development server:
+ * Open http://localhost:3000 in your browser. (Note: Camera-based quests require HTTPS or localhost access for browser media permissions).
+📱 How It Works
+ * Check Your Quests: Review your randomized objectives for the day.
+ * Launch Verification: Tap any quest to view details, then click Mark as Completed to open the AI viewfinder.
+ * AI Scan:
+   * For Reps (e.g., Pushups, Squats): Position your device for full-body frame visibility and complete your reps. The on-device model tracks movement phases.
+   * For Maps/Food: Upload a clear screenshot of your fitness tracker map or a photo of your meal.
+ * Level Up: Earn XP upon successful verification, watch your progress ring grow, and maintain your daily streak!
+🔒 Privacy & Licensing
+Side Quests processes all computer vision models locally inside your browser via WebAssembly and WebGL. No images, video streams, or personal health metrics ever leave your phone.
+Copyright © Side Quests. All rights reserved. This software is proprietary and not open source.
 
-Bash
-npm run dev
-🛡️ Privacy & Security Disclaimer
-Side Quests is completely decentralized. The application opens a fully sandbox-contained media capture context inside your browser window. No media assets, images, tracking maps, or metadata logs are transferred over the internet. Your workout records belong to you alone.
-
--Made By Qais Kurdieh 
