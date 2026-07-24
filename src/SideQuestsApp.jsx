@@ -121,8 +121,8 @@ const REP_CONFIG = {
 
 const MIN_REP_MS = 500;
 
-function createPoseRepState() {
-  return { phase: 'up', reps: 0, baselineY: null, lastRepAt: 0, smoothed: null };
+function createPoseRepState(initialReps = 0) {
+  return { phase: 'up', reps: initialReps, baselineY: null, lastRepAt: 0, smoothed: null };
 }
 
 function updatePoseRepState(state, questId, landmarks, now) {
@@ -189,6 +189,12 @@ const QUEST_LABELS = {
   q21: { type: 'action', activity: ['person breathing deeply eyes closed'], label: 'deep breathing' },
   q24: { type: 'action', activity: ['person sleeping in bed at night', 'sleeping in dark bedroom'], label: 'sleeping early' },
   q25: { type: 'action', activity: ['person in ice bath tub', 'cold plunge tub with ice'], label: 'in a cold plunge' },
+  q26: { type: 'action', activity: ['person doing a wall sit exercise against a wall'], label: 'holding a wall sit' },
+  q27: { type: 'action', activity: ['person doing a glute bridge exercise on floor'], label: 'holding a glute bridge' },
+  q28: { type: 'action', activity: ['person doing high knees exercise'], label: 'doing high knees' },
+  q29: { type: 'action', activity: ['person doing mountain climbers exercise'], label: 'doing mountain climbers' },
+  q30: { type: 'action', activity: ['person doing a superman back exercise lying face down'], label: 'holding a superman pose' },
+  q31: { type: 'action', activity: ['person doing burpees exercise'], label: 'doing burpees' },
 };
 
 const getNegativeLabels = (type) => {
@@ -198,33 +204,47 @@ const getNegativeLabels = (type) => {
   return [...base, 'phone or computer screen'];
 };
 
+// Every quest is either reps-based or duration-based so it can be timeboxed,
+// progress-saved, and given a randomized amount each time it's assigned.
+// textTemplate uses "{n}" as a placeholder for the randomized reps/minutes.
 const QUEST_POOL = [
-  { id: 'q1',  text: 'Do 20 pushups',                          xp: 50, reps: 20 },
-  { id: 'q2',  text: 'Do 30 squats',                           xp: 45, reps: 30 },
-  { id: 'q3',  text: 'Go for a 15-minute run',                 xp: 75, duration: 900 },
-  { id: 'q4',  text: 'Do 10 pullups',                          xp: 60, reps: 10 },
-  { id: 'q16', text: 'Do 15 minutes of cycling',               xp: 55, duration: 900 },
-  { id: 'q17', text: 'Do 50 jumping rope reps',                xp: 40, reps: 50 },
-  { id: 'q18', text: 'Take a cold shower',                     xp: 50 },
-  { id: 'q19', text: 'Eat no sugar today',                     xp: 65 },
-  { id: 'q20', text: 'Cook a meal from scratch',               xp: 45 },
-  { id: 'q21', text: 'Do 10 minutes of deep breathing',        xp: 30, duration: 600 },
-  { id: 'q22', text: 'Take 10,000 steps',                      xp: 70 },
-  { id: 'q23', text: 'Do 3 sets of lunges',                    xp: 40, reps: 30 },
-  { id: 'q24', text: 'Go to bed before 11pm',                  xp: 35 },
-  { id: 'q25', text: 'Do a 5-minute ice bath or cold plunge',  xp: 80, duration: 300 },
-  { id: 'q5',  text: 'Walk outside for 20 minutes',            xp: 35, duration: 1200 },
-  { id: 'q6',  text: 'Drink 2 liters of water today',          xp: 25 },
-  { id: 'q7',  text: 'Meditate for 10 minutes',                xp: 45, duration: 600 },
-  { id: 'q8',  text: 'Stretch for 10 minutes',                 xp: 35, duration: 600 },
-  { id: 'q9',  text: 'Eat a healthy meal',                     xp: 40 },
-  { id: 'q10', text: 'Get 8 hours of sleep',                   xp: 55 },
-  { id: 'q11', text: 'Do 3 minutes of jumping jacks',          xp: 30, duration: 180 },
-  { id: 'q12', text: 'Do 20 situps',                           xp: 40, reps: 20 },
-  { id: 'q13', text: 'Write in your journal',                  xp: 20 },
-  { id: 'q14', text: 'Drink a green smoothie',                 xp: 30 },
-  { id: 'q15', text: 'Hold a plank for 60 seconds',            xp: 50, duration: 60 },
+  { id: 'q1',  textTemplate: 'Do {n} pushups',                       xp: 50, reps: 20 },
+  { id: 'q2',  textTemplate: 'Do {n} squats',                        xp: 45, reps: 30 },
+  { id: 'q3',  textTemplate: 'Go for a {n}-minute run',              xp: 75, duration: 180 },
+  { id: 'q4',  textTemplate: 'Do {n} pullups',                       xp: 60, reps: 10 },
+  { id: 'q16', textTemplate: 'Do {n} minutes of cycling',            xp: 55, duration: 180 },
+  { id: 'q17', textTemplate: 'Do {n} jumping rope reps',             xp: 40, reps: 50 },
+  { id: 'q21', textTemplate: 'Do {n} minutes of deep breathing',     xp: 30, duration: 180 },
+  { id: 'q23', textTemplate: 'Do {n} lunges',                        xp: 40, reps: 30 },
+  { id: 'q25', textTemplate: 'Do a {n}-minute ice bath or cold plunge', xp: 80, duration: 180 },
+  { id: 'q5',  textTemplate: 'Walk outside for {n} minutes',         xp: 35, duration: 180 },
+  { id: 'q7',  textTemplate: 'Meditate for {n} minutes',             xp: 45, duration: 180 },
+  { id: 'q8',  textTemplate: 'Stretch for {n} minutes',              xp: 35, duration: 180 },
+  { id: 'q11', textTemplate: 'Do {n} minutes of jumping jacks',      xp: 30, duration: 180 },
+  { id: 'q12', textTemplate: 'Do {n} situps',                        xp: 40, reps: 20 },
+  { id: 'q15', textTemplate: 'Hold a plank for {n} minutes',         xp: 50, duration: 180 },
+  { id: 'q26', textTemplate: 'Hold a wall sit for {n} minutes',      xp: 40, duration: 180 },
+  { id: 'q27', textTemplate: 'Hold a glute bridge for {n} minutes',  xp: 35, duration: 180 },
+  { id: 'q28', textTemplate: 'Do {n} minutes of high knees',         xp: 35, duration: 180 },
+  { id: 'q29', textTemplate: 'Do {n} minutes of mountain climbers',  xp: 40, duration: 180 },
+  { id: 'q30', textTemplate: 'Hold a superman pose for {n} minutes', xp: 35, duration: 180 },
+  { id: 'q31', textTemplate: 'Do {n} minutes of burpees',            xp: 45, duration: 180 },
 ];
+
+// Randomizes a fresh copy of a pool quest: reps get a random count 1-55,
+// durations get a random length between 1 and 5 minutes, and the display
+// text is filled in with that same random number so they always match.
+function randomizeQuest(pool) {
+  if (pool.reps) {
+    const n = Math.floor(Math.random() * 55) + 1; // 1-55 reps
+    return { ...pool, reps: n, text: pool.textTemplate.replace('{n}', n), completed: false, progress: 0 };
+  }
+  if (pool.duration) {
+    const minutes = Math.floor(Math.random() * 5) + 1; // 1-5 minutes
+    return { ...pool, duration: minutes * 60, text: pool.textTemplate.replace('{n}', minutes), completed: false, progress: 0 };
+  }
+  return { ...pool, text: pool.textTemplate, completed: false, progress: 0 };
+}
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_PASSES = 2;
@@ -353,6 +373,9 @@ const QUEST_THEME = {
   q21: { icon: 'wind',     grad: 'from-cyan-300 to-teal-600' },      q22: { icon: 'footsteps',grad: 'from-violet-400 to-purple-600' },
   q23: { icon: 'legs',     grad: 'from-fuchsia-500 to-rose-600' },   q24: { icon: 'moon',     grad: 'from-indigo-400 to-blue-700' },
   q25: { icon: 'snowflake',grad: 'from-cyan-300 to-blue-600' },
+  q26: { icon: 'legs',     grad: 'from-amber-500 to-orange-600' },  q27: { icon: 'core',     grad: 'from-rose-400 to-pink-600' },
+  q28: { icon: 'bolt',     grad: 'from-yellow-400 to-red-500' },    q29: { icon: 'core',     grad: 'from-blue-500 to-cyan-600' },
+  q30: { icon: 'stretch',  grad: 'from-indigo-400 to-purple-600' }, q31: { icon: 'flame',    grad: 'from-orange-500 to-red-600' },
 };
 
 const QUEST_ABOUT = {
@@ -369,6 +392,12 @@ const QUEST_ABOUT = {
   q21: "A few minutes of deep breathing calms your nervous system and sharpens focus.", q22: "Hitting your step count keeps your body moving steadily throughout the day.",
   q23: "Lunges build single-leg strength and balance that squats alone don't cover.", q24: "An earlier bedtime compounds — better sleep tonight means a better day tomorrow.",
   q25: "Cold exposure trains resilience and gives your recovery a real boost.",
+  q26: "Wall sits build isometric leg strength without any equipment needed.",
+  q27: "Glute bridges wake up and strengthen the muscles that keep your hips stable.",
+  q28: "High knees spike your heart rate fast and sharpen coordination.",
+  q29: "Mountain climbers combine cardio and core work in one fluid movement.",
+  q30: "The superman hold strengthens your lower back and posterior chain.",
+  q31: "Burpees are a full-body blast that builds strength and conditioning together.",
 };
 
 const QUEST_QUOTES = ["Small steps every day lead to big changes.", "Discipline is choosing between what you want now and what you want most.", "Progress, not perfection.", "The body achieves what the mind believes.", "One quest at a time.", "Consistency beats intensity.", "You didn't come this far to only come this far."];
@@ -505,7 +534,7 @@ function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMar
         <button onClick={onMarkComplete}
           className={`w-full py-4 rounded-[16px] text-[15px] font-semibold text-white bg-gradient-to-r ${theme.grad} shadow-lg active:scale-[0.97] transition-transform`}
           style={{ boxShadow: '0 10px 30px -10px rgba(139,92,246,0.6)' }}>
-          Mark as Completed
+          Start Challenge
         </button>
       </div>
     </div>
@@ -589,7 +618,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const lastVideoTimeRef  = useRef(-1);
   const confirmedRef      = useRef(false);
   const passStreakRef     = useRef(0);
-  const poseStateRef      = useRef(createPoseRepState());
+  const poseStateRef      = useRef(createPoseRepState(quest.reps ? (quest.progress || 0) : 0));
   const poseRafRef        = useRef(null);
   const poseLastVideoTimeRef = useRef(-1);
 
@@ -604,18 +633,25 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const [poseReady,     setPoseReady]     = useState(false);
   const [poseError,     setPoseError]     = useState(null);
   const [repCue,        setRepCue]        = useState('Get in frame');
-  const [notice,        setNotice]        = useState(null);
+  const [notice,        setNotice]        = useState(() => {
+    if (quest.reps && quest.progress > 0) return `Resuming — you already logged ${quest.progress} of ${quest.reps} reps.`;
+    if (quest.duration && quest.progress != null && quest.progress < quest.duration) {
+      const m = Math.floor(quest.progress / 60), s = quest.progress % 60;
+      return `Resuming — ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')} left on the clock.`;
+    }
+    return null;
+  });
   const [scanning,      setScanning]      = useState(false);
   const [uploading,     setUploading]     = useState(false);
   const [liveScore,     setLiveScore]     = useState(0);
   const [passStreak,    setPassStreak]    = useState(0);
-  const [repsDone,      setRepsDone]      = useState(0);
+  const [repsDone,      setRepsDone]      = useState(quest.reps ? (quest.progress || 0) : 0);
   const [repPhase,      setRepPhase]      = useState('up');
   const [confirmed,     setConfirmed]     = useState(false);
   const [lastLabel,     setLastLabel]     = useState('');
   const [uploadedProof, setUploadedProof] = useState(null);
 
-  const [secondsLeft, setSecondsLeft] = useState(quest.duration || 0);
+  const [secondsLeft, setSecondsLeft] = useState(quest.duration ? (quest.progress ?? quest.duration) : 0);
   const [timerRunning, setTimerRunning] = useState(false);
 
   const labels = QUEST_LABELS[quest.id];
@@ -724,11 +760,12 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   }, [modelVersion, quest.reps]);
 
   const resetRepTracking = useCallback(() => {
-    poseStateRef.current = createPoseRepState();
-    setRepsDone(0);
+    const baseline = quest.reps ? (quest.progress || 0) : 0;
+    poseStateRef.current = createPoseRepState(baseline);
+    setRepsDone(baseline);
     setRepPhase('up');
     setRepCue('Get in frame');
-  }, []);
+  }, [quest.reps, quest.progress]);
 
   // CLIP scanning loop — food / map / action quests only. Reps use pose tracking below.
   useEffect(() => {
@@ -933,7 +970,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const retryCamera = () => { scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); };
   const retryModel = () => { setModelReady(false); setModelProgress(null); setModelError(null); setModelVersion(v => v + 1); };
   const flipCamera = () => { 
-    clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; resetRepTracking(); setConfirmed(false); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
+    clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; resetRepTracking(); setConfirmed(false); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
     if (skeletonCanvasRef.current) {
       const ctx = skeletonCanvasRef.current.getContext('2d');
       ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
@@ -961,6 +998,13 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       } catch (err) { } finally { setScanning(false); setUploading(false); if (!accepted) { setUploadedProof(null); retryCamera(); } }
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleCancel = () => {
+    stopCamera();
+    if (quest.reps) onCancel(repsDone > 0 ? repsDone : undefined);
+    else if (quest.duration) onCancel(secondsLeft < quest.duration ? secondsLeft : undefined);
+    else onCancel(undefined);
   };
 
   const captureAndConfirm = () => {
@@ -991,7 +1035,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         </div>
 
         <div className={`relative z-10 flex items-center justify-between px-6 py-2 pb-4`}>
-          <button onClick={onCancel} className="text-[#007AFF] text-[15px] font-semibold active:opacity-70 transition-opacity">Cancel</button>
+          <button onClick={handleCancel} className="text-[#007AFF] text-[15px] font-semibold active:opacity-70 transition-opacity">Cancel</button>
           <div className="text-center">
             <p className={`text-[15px] font-bold ${txt}`}>AI Verification</p>
             <p className={`text-[11px] font-medium ${sub} mt-0.5 max-w-[220px] truncate`}>{uiSubtext}</p>
@@ -1223,16 +1267,21 @@ export default function QuestDailyApp() {
     if (!expired && saved.length >= 5) return saved;
     if (!expired && anyDone) return saved;
     const n = Math.floor(Math.random() * 3) + 5;
-    return [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(q => ({ ...q, completed: false }));
+    return [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(randomizeQuest);
   });
   
   const [lastReset, setLastReset] = useState(() => parseInt(localStorage.getItem('sq_lastReset')) || 0);
   const [timeLeft,  setTimeLeft]  = useState('--:--:--');
-  const [proofModal,   setProofModal]   = useState(null);
+  const [proofModalId,   setProofModalId]   = useState(null);
   const [proofImages,  setProofImages]  = useState(() => JSON.parse(localStorage.getItem('sq_proofs')) || {});
   const [viewingProof, setViewingProof] = useState(null);
-  const [detailQuest,     setDetailQuest]     = useState(null);
+  const [detailQuestId,     setDetailQuestId]     = useState(null);
   const [completionQuest, setCompletionQuest] = useState(null);
+
+  // Always derive these from the live quests array so saved progress (or a
+  // completion) made while a modal is open is reflected the next time it opens.
+  const proofModal  = quests.find(q => q.id === proofModalId)  || null;
+  const detailQuest = quests.find(q => q.id === detailQuestId) || null;
 
   const xpRef    = useRef(xp);
   const levelRef = useRef(level);
@@ -1243,7 +1292,7 @@ export default function QuestDailyApp() {
 
   const generateNewQuests = useCallback((ts) => {
     const n = Math.floor(Math.random() * 3) + 5;
-    const selected = [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(q => ({ ...q, completed: false }));
+    const selected = [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(randomizeQuest);
     setQuests(selected); setLastReset(ts); setProofImages({});
   }, []);
 
@@ -1280,17 +1329,26 @@ export default function QuestDailyApp() {
     return;
   }
 
-  setDetailQuest(quest);
+  setDetailQuestId(quest.id);
 };
 
   const handleProofConfirm = (questId, img) => {
     const quest = quests.find(q => q.id === questId);
     setProofImages(prev => ({ ...prev, [questId]: img }));
-    setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true } : q));
+    setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true, progress: 0 } : q));
     applyXpChange(quest?.xp ?? 0);
-    setProofModal(null);
-    setDetailQuest(null);
+    setProofModalId(null);
+    setDetailQuestId(null);
     setCompletionQuest(quest || null);
+  };
+
+  // Saves how far along the quest was (reps done / seconds left) so the
+  // person can pick back up where they left off next time they open it.
+  const handleCancelProof = (progress) => {
+    if (proofModalId && progress !== undefined) {
+      setQuests(prev => prev.map(q => q.id === proofModalId ? { ...q, progress } : q));
+    }
+    setProofModalId(null);
   };
 
   const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
@@ -1316,7 +1374,7 @@ export default function QuestDailyApp() {
         {proofModal && (
           <CameraModal quest={proofModal} dark={dark}
             onConfirm={img => handleProofConfirm(proofModal.id, img)}
-            onCancel={() => setProofModal(null)} />
+            onCancel={handleCancelProof} />
         )}
 
         {viewingProof && (
@@ -1334,8 +1392,8 @@ export default function QuestDailyApp() {
         ) : detailQuest ? (
           <QuestDetailScreen quest={detailQuest} dark={dark} timeLeft={timeLeft}
             onToggleTheme={() => setDark(d => !d)}
-            onBack={() => setDetailQuest(null)}
-            onMarkComplete={() => setProofModal(detailQuest)} />
+            onBack={() => setDetailQuestId(null)}
+            onMarkComplete={() => setProofModalId(detailQuest.id)} />
         ) : (
           <>
             <div className={`relative z-10 safe-top px-3 pb-3 transition-colors duration-200`}>
@@ -1389,6 +1447,11 @@ export default function QuestDailyApp() {
                         </div>
                         <span className={`flex-1 text-[15px] font-semibold leading-snug transition-colors ${quest.completed ? (dark ? 'text-zinc-600 line-through' : 'text-gray-400 line-through') : txt}`}>
                           {quest.text}
+                          {!quest.completed && quest.progress > 0 && (
+                            <span className="ml-2 align-middle text-[10px] font-bold uppercase tracking-wide text-[#007AFF] bg-[#007AFF]/10 px-1.5 py-0.5 rounded-full">
+                              In progress
+                            </span>
+                          )}
                         </span>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           {quest.completed && proofImages[quest.id] && (
