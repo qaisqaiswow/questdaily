@@ -1034,20 +1034,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           <div className={`w-12 h-1.5 rounded-full ${dark ? 'bg-zinc-700' : 'bg-gray-300'}`} />
         </div>
 
-        <div className={`relative z-10 flex items-center justify-between px-4 py-2 pb-4`}>
-          <button onClick={handleCancel}
-            className={`flex items-center justify-center gap-1.5 pl-2.5 pr-3.5 py-2.5 rounded-full ${pill} ${txt} active:scale-95 transition-transform shadow-sm`}
-            aria-label="Cancel">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 6 6 18M6 6l12 12"/>
-            </svg>
-            <span className="text-[14px] font-bold">Cancel</span>
-          </button>
+        <div className={`relative z-10 flex items-center justify-center px-6 py-2 pb-4`}>
           <div className="text-center">
             <p className={`text-[15px] font-bold ${txt}`}>AI Verification</p>
             <p className={`text-[11px] font-medium ${sub} mt-0.5 max-w-[220px] truncate`}>{uiSubtext}</p>
           </div>
-          <div className="w-[84px]" />
         </div>
 
         <div className="relative flex-1 bg-black overflow-hidden mx-4 rounded-3xl shadow-inner border border-white/10">
@@ -1230,6 +1221,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
               <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
             </label>
           )}
+
+          <button onClick={handleCancel}
+            className={`w-full mt-3 py-4 rounded-[18px] text-[15px] font-bold tracking-wide ${pill} ${txt} active:scale-[0.98] transition-transform`}>
+            Cancel
+          </button>
         </div>
       </div>
     </div>
