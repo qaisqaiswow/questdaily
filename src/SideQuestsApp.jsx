@@ -1275,15 +1275,13 @@ export default function QuestDailyApp() {
     setXp(newXp); setLevel(newLevel);
   }, []);
 
-  const handleQuestClick = (quest) => {
-    if (quest.completed) {
-      setQuests(prev => prev.map(q => q.id === quest.id ? { ...q, completed: false } : q));
-      applyXpChange(-quest.xp);
-      setProofImages(prev => { const n = { ...prev }; delete n[quest.id]; return n; });
-    } else {
-      setDetailQuest(quest);
-    }
-  };
+ const handleQuestClick = (quest) => {
+  if (quest.completed) {
+    return;
+  }
+
+  setDetailQuest(quest);
+};
 
   const handleProofConfirm = (questId, img) => {
     const quest = quests.find(q => q.id === questId);
@@ -1382,7 +1380,9 @@ export default function QuestDailyApp() {
                   {quests.map((quest, i) => (
                     <div key={quest.id}>
                       {i > 0 && <div className={`border-t ${sep} ml-[58px]`} />}
-                      <button onClick={() => handleQuestClick(quest)}
+                      <button onClick={() => {
+  if (!quest.completed) handleQuestClick(quest);
+}}
                         className={`w-full flex items-center gap-3.5 px-4 py-[18px] text-left active:bg-black/5 transition-all`}>
                         <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-300 ${quest.completed ? 'bg-[#34C759] border-[#34C759] shadow-[0_0_10px_rgba(52,199,89,0.4)]' : dark ? 'border-zinc-600' : 'border-gray-300'}`}>
                           {quest.completed && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
