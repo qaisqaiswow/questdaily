@@ -55,6 +55,17 @@ const LM = {
   L_ANKLE: 27, R_ANKLE: 28,
 };
 
+const POSE_CONNECTIONS = [
+  [11, 12], [11, 23], [12, 24], [23, 24], // Torso
+  [11, 13], [13, 15],                     // Left Arm
+  [12, 14], [14, 16],                     // Right Arm
+  [23, 25], [25, 27], [27, 29], [27, 31], [29, 31], // Left Leg
+  [24, 26], [26, 28], [28, 30], [28, 32], [30, 32], // Right Leg
+  [0, 1], [1, 2], [2, 3], [3, 7],         // Left Face
+  [0, 4], [4, 5], [5, 6], [6, 8],         // Right Face
+  [9, 10]                                 // Mouth
+];
+
 function angleBetween(a, b, c) {
   if (!a || !b || !c) return null;
   const v1 = { x: a.x - b.x, y: a.y - b.y };
@@ -226,7 +237,7 @@ function getMaxLabelScore(results, candidates) {
 
 // ─── ICONS ───────────────────────────────────────────────────────────────────
 const LogoIcon = ({ size = 34, dark }) => (
-  <img src="/logo-transparent.png" alt="Side Quests" width={size} height={size}
+  <img src="/logo-transparent.png" alt="QuestDaily" width={size} height={size}
     style={{ filter: dark ? 'invert(0)' : 'invert(1)', opacity: 0.9 }} />
 );
 
@@ -323,7 +334,7 @@ const QuestSvg = {
   flame: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c4 0 7-2.7 7-6.5 0-3-2-5-3-7-.3 2-1.5 3-2.5 2.2.7-2.3-.2-4.7-2-6.2C11 7 8 9 8 13c-1-.6-1.5-1.8-1.5-3.2C5.3 11.2 5 13 5 15.2 5 19 8 22 12 22Z"/></svg>),
   pencil: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="M14 6l4 4"/></svg>),
   snowflake: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M4.5 7l15 10M19.5 7l-15 10"/></svg>),
-  wind: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 13h15a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 18h9a2 2 0 1 0-2-2"/></svg>),
+  wind: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 13h15a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 18h9a2 0 1 0-2-2"/></svg>),
   rope: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20c4-8 12-8 16 0"/><path d="M4 4c4 8 12 8 16 0"/></svg>),
   target: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.6" fill="currentColor"/></svg>),
 };
@@ -414,7 +425,7 @@ function IOSInstallPrompt({ onDismiss, dark }) {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
       <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-zinc-800' : 'border-gray-100'}`}>
-        <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install Side Quests</h3>
+        <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install QuestDaily</h3>
         <p className={`text-sm mb-6 ${sub}`}>Add this app to your home screen for the full experience.</p>
         
         <div className={`relative mb-8 ${pill} rounded-2xl p-5 flex flex-col items-center justify-center border ${dark ? 'border-white/5' : 'border-black/5'}`}>
@@ -567,18 +578,19 @@ function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack }) {
 
 // ─── CAMERA / AI MODAL ────────────────────────────────────────────────────────
 function CameraModal({ quest, onConfirm, onCancel, dark }) {
-  const videoRef     = useRef(null);
-  const aiCanvasRef  = useRef(null); 
-  const streamRef    = useRef(null);
-  const scanTimerRef = useRef(null);
-  const isScanningRef = useRef(false);
-  const scanRunRef = useRef(0);
-  const cameraSessionRef = useRef(0);
-  const lastVideoTimeRef = useRef(-1);
-  const confirmedRef = useRef(false);
-  const passStreakRef = useRef(0);
-  const poseStateRef = useRef(createPoseRepState());
-  const poseRafRef = useRef(null);
+  const videoRef          = useRef(null);
+  const aiCanvasRef       = useRef(null); 
+  const skeletonCanvasRef = useRef(null);
+  const streamRef         = useRef(null);
+  const scanTimerRef      = useRef(null);
+  const isScanningRef     = useRef(false);
+  const scanRunRef        = useRef(0);
+  const cameraSessionRef  = useRef(0);
+  const lastVideoTimeRef  = useRef(-1);
+  const confirmedRef      = useRef(false);
+  const passStreakRef     = useRef(0);
+  const poseStateRef      = useRef(createPoseRepState());
+  const poseRafRef        = useRef(null);
   const poseLastVideoTimeRef = useRef(-1);
 
   const [phase,         setPhase]         = useState('starting');
@@ -778,7 +790,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     return () => { disposed = true; scanRunRef.current += 1; clearTimeout(scanTimerRef.current); };
   }, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, activeNegatives]);
 
-  // Pose tracking loop — reps quests only. Uses real joint-angle detection to count reps.
+  // Pose tracking & Skeleton HUD loop — reps challenges only. Uses joint-angle detection and HUD drawing.
   useEffect(() => {
     if (!quest.reps || phase !== 'live' || confirmed) return undefined;
     let cancelled = false;
@@ -792,6 +804,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const loop = () => {
           if (cancelled) return;
           const video = videoRef.current;
+          const canvas = skeletonCanvasRef.current;
           if (video && video.readyState >= 2 && video.currentTime !== poseLastVideoTimeRef.current) {
             poseLastVideoTimeRef.current = video.currentTime;
             const now = performance.now();
@@ -812,6 +825,92 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
               } else {
                 setRepCue('Step back so your full body is visible');
               }
+
+              // ── SKELETON HUD OVERLAY ──
+              if (canvas && video) {
+                const ctx = canvas.getContext('2d');
+                if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
+                  canvas.width = canvas.clientWidth || 300;
+                  canvas.height = canvas.clientHeight || 300;
+                }
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                if (landmarks && !confirmedRef.current) {
+                  const Wc = canvas.width;
+                  const Hc = canvas.height;
+                  const Wv = video.videoWidth || 640;
+                  const Hv = video.videoHeight || 480;
+                  const scale = Math.max(Wc / Wv, Hc / Hv);
+                  const Wr = Wv * scale;
+                  const Hr = Hv * scale;
+                  const Ox = (Wc - Wr) / 2;
+                  const Oy = (Hc - Hr) / 2;
+
+                  const mapPt = (pt) => ({
+                    x: Ox + pt.x * Wr,
+                    y: Oy + pt.y * Hr,
+                    vis: pt.visibility ?? 1
+                  });
+
+                  const mapped = landmarks.map(mapPt);
+                  const currentPhase = poseStateRef.current.phase;
+                  const lineColor = currentPhase === 'down' ? '#4ade80' : '#38bdf8'; // Neon green when lowered into pushup/squat, cyan when up
+                  const shadowColor = currentPhase === 'down' ? 'rgba(74, 222, 128, 0.8)' : 'rgba(56, 189, 248, 0.8)';
+
+                  // Draw connecting skeleton rods
+                  ctx.save();
+                  ctx.lineWidth = 4;
+                  ctx.lineCap = 'round';
+                  ctx.lineJoin = 'round';
+                  ctx.shadowColor = shadowColor;
+                  ctx.shadowBlur = 10;
+                  ctx.strokeStyle = lineColor;
+
+                  POSE_CONNECTIONS.forEach(([i, j]) => {
+                    const p1 = mapped[i];
+                    const p2 = mapped[j];
+                    if (p1 && p2 && p1.vis > 0.4 && p2.vis > 0.4) {
+                      ctx.beginPath();
+                      ctx.moveTo(p1.x, p1.y);
+                      ctx.lineTo(p2.x, p2.y);
+                      ctx.stroke();
+                    }
+                  });
+                  ctx.restore();
+
+                  // Draw joint nodes and HUD accent rings
+                  ctx.save();
+                  mapped.forEach((pt, idx) => {
+                    if (pt.vis > 0.4 && (idx === 0 || (idx >= 11 && idx <= 32))) {
+                      const isMajorJoint = [11, 12, 13, 14, 23, 24, 25, 26].includes(idx);
+                      
+                      ctx.beginPath();
+                      ctx.arc(pt.x, pt.y, isMajorJoint ? 7 : 5, 0, 2 * Math.PI);
+                      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+                      ctx.fill();
+                      ctx.lineWidth = isMajorJoint ? 2.5 : 2;
+                      ctx.strokeStyle = lineColor;
+                      ctx.stroke();
+
+                      // Inner glowing dot
+                      ctx.beginPath();
+                      ctx.arc(pt.x, pt.y, isMajorJoint ? 3 : 2, 0, 2 * Math.PI);
+                      ctx.fillStyle = '#ffffff';
+                      ctx.fill();
+
+                      // Extra HUD crosshair ring on shoulders & hips
+                      if ([11, 12, 23, 24].includes(idx)) {
+                        ctx.beginPath();
+                        ctx.arc(pt.x, pt.y, 12, 0, 2 * Math.PI);
+                        ctx.lineWidth = 1;
+                        ctx.strokeStyle = shadowColor;
+                        ctx.stroke();
+                      }
+                    }
+                  });
+                  ctx.restore();
+                }
+              }
             } catch (err) { /* transient frame errors are fine, keep looping */ }
           }
           if (!cancelled) poseRafRef.current = requestAnimationFrame(loop);
@@ -824,12 +923,22 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     return () => {
       cancelled = true;
       if (poseRafRef.current) cancelAnimationFrame(poseRafRef.current);
+      if (skeletonCanvasRef.current) {
+        const ctx = skeletonCanvasRef.current.getContext('2d');
+        ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
+      }
     };
   }, [quest.reps, quest.id, phase, confirmed]);
 
   const retryCamera = () => { scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); };
   const retryModel = () => { setModelReady(false); setModelProgress(null); setModelError(null); setModelVersion(v => v + 1); };
-  const flipCamera = () => { clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; resetRepTracking(); setConfirmed(false); setFacingMode(m => m === 'environment' ? 'user' : 'environment'); };
+  const flipCamera = () => { 
+    clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; resetRepTracking(); setConfirmed(false); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
+    if (skeletonCanvasRef.current) {
+      const ctx = skeletonCanvasRef.current.getContext('2d');
+      ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
+    }
+  };
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0]; if (!file) return;
@@ -892,6 +1001,12 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
         <div className="relative flex-1 bg-black overflow-hidden mx-4 rounded-3xl shadow-inner border border-white/10">
           <video ref={videoRef} autoPlay playsInline muted className={`w-full h-full object-cover transition-opacity duration-500 ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
+
+          {/* Skeleton HUD Overlay for reps/challenges */}
+          <canvas
+            ref={skeletonCanvasRef}
+            className={`absolute inset-0 w-full h-full pointer-events-none object-cover z-10 transition-opacity duration-500 ${phase === 'live' && !uploadedProof && quest.reps ? 'opacity-100' : 'opacity-0'}`}
+          />
 
           {phase === 'live' && !uploadedProof && labels?.bodyParts && (
             <div className="absolute inset-0 pointer-events-none border-[2px] border-dashed border-violet-500/40 m-5 rounded-2xl animate-pulse z-10">
@@ -977,7 +1092,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             </div>
           )}
 
-          {/* ── FOOD / MAP / ACTION QUESTS: CLIP overlay (unchanged) ── */}
+          {/* ── FOOD / MAP / ACTION QUESTS: CLIP overlay ── */}
           {phase === 'live' && !quest.reps && modelReady && (
             <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)' }}>
               {confirmed ? (
@@ -1071,7 +1186,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 }
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
-export default function SideQuestsApp() {
+export default function QuestDailyApp() {
   const [dark, setDark] = useState(() => {
     const saved = localStorage.getItem('sq_dark');
     if (saved !== null) return saved === 'true';
@@ -1229,7 +1344,7 @@ export default function SideQuestsApp() {
               <div className="flex items-center justify-between pt-2">
                 <div className="flex items-center gap-2.5">
                   <LogoIcon size={34} dark={dark} />
-                  <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>Side Quests</h1>
+                  <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>QuestDaily</h1>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${dark ? 'bg-zinc-800/80' : 'bg-gray-100'}`}>
