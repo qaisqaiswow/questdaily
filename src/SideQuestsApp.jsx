@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { pipeline, env } from '@huggingface/transformers';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
+import { db } from './firebase';
+import { doc, setDoc, increment, serverTimestamp, collection, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
 
 // ─── AI SETUP ────────────────────────────────────────────────────────────────
 env.allowLocalModels = false;
@@ -530,16 +532,27 @@ function UsernamePrompt({ onSubmit, dark }) {
 }
 
 // ─── LEADERBOARD SCREEN ─────────────────────────────────────────────────────────
-function LeaderboardScreen({ dark, onBack, xpHistory, username }) {
+function LeaderboardScreen({ dark, onBack, username }) {
   const txt    = dark ? 'text-white' : 'text-gray-900';
   const sub    = dark ? 'text-zinc-400' : 'text-gray-500';
   const cardBg = dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100 shadow-sm';
   const pill   = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
 
-  const entries = Object.entries(xpHistory)
-    .map(([date, xp]) => ({ date, xp }))
-    .filter(e => e.xp > 0)
-    .sort((a, b) => b.xp - a.xp || a.date.localeCompare(b.date));
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [failed,  setFailed]  = useState(false);
+
+  // Subscribes to the shared "dailyXp" collection so every phone sees the
+  // same board and it updates the instant anyone completes a quest — no
+  // refresh needed.
+  useEffect(() => {
+    const q = query(collection(db, 'dailyXp'), orderBy('xp', 'desc'), limit(50));
+    const unsubscribe = onSnapshot(q,
+      snap => { setEntries(snap.docs.map(d => d.data())); setLoading(false); },
+      err  => { console.error('Leaderboard sync failed:', err); setFailed(true); setLoading(false); }
+    );
+    return () => unsubscribe();
+  }, []);
 
   const todayKey = new Date().toISOString().slice(0, 10);
   const yesterdayKey = new Date(Date.now() - ONE_DAY_MS).toISOString().slice(0, 10);
@@ -562,25 +575,34 @@ function LeaderboardScreen({ dark, onBack, xpHistory, username }) {
         </button>
         <div>
           <h2 className={`text-[19px] font-bold ${txt}`}>Leaderboard</h2>
-          <p className={`text-[12px] ${sub}`}>Most XP earned per day</p>
+          <p className={`text-[12px] ${sub}`}>Most XP earned per day · everyone</p>
         </div>
       </div>
 
       <div className="flex-1 scroll-ios px-4 pt-3 pb-8 space-y-2.5">
-        {entries.length === 0 ? (
+        {failed ? (
+          <div className={`${cardBg} rounded-[20px] px-5 py-10 text-center`}>
+            <p className={`text-[14px] font-semibold ${txt}`}>Couldn't reach the leaderboard</p>
+            <p className={`text-[12px] mt-1 ${sub}`}>Check your connection, or that Firebase is set up in firebase.js.</p>
+          </div>
+        ) : loading ? (
+          <div className={`${cardBg} rounded-[20px] px-5 py-10 text-center`}>
+            <p className={`text-[13px] font-medium ${sub}`}>Loading leaderboard…</p>
+          </div>
+        ) : entries.length === 0 ? (
           <div className={`${cardBg} rounded-[20px] px-5 py-10 text-center`}>
             <p className={`text-[14px] font-semibold ${txt}`}>No days on the board yet</p>
             <p className={`text-[12px] mt-1 ${sub}`}>Complete quests today to claim the top spot.</p>
           </div>
         ) : (
           entries.map((entry, i) => (
-            <div key={entry.date}
-              className={`${cardBg} rounded-[18px] px-4 py-3.5 flex items-center gap-3 ${entry.date === todayKey ? 'ring-2 ring-[#007AFF]/50' : ''}`}>
+            <div key={`${entry.username}_${entry.date}`}
+              className={`${cardBg} rounded-[18px] px-4 py-3.5 flex items-center gap-3 ${entry.username === username && entry.date === todayKey ? 'ring-2 ring-[#007AFF]/50' : ''}`}>
               <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-[16px] font-black ${dark ? 'bg-zinc-800 text-zinc-400' : 'bg-gray-100 text-gray-500'}`}>
                 {medal(i) || `#${i + 1}`}
               </div>
               <div className="flex-1 min-w-0">
-                <p className={`text-[14px] font-bold truncate ${txt}`}>{username || 'You'}</p>
+                <p className={`text-[14px] font-bold truncate ${txt}`}>{entry.username}{entry.username === username ? ' (you)' : ''}</p>
                 <p className={`text-[11px] ${sub}`}>{formatDate(entry.date)}</p>
               </div>
               <p className={`text-[15px] font-black ${dark ? 'text-indigo-400' : 'text-indigo-600'}`}>+{entry.xp} XP</p>
@@ -1351,7 +1373,6 @@ export default function QuestDailyApp() {
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [username, setUsernameState] = useState(() => localStorage.getItem('sq_username') || '');
   const [showLeaderboard, setShowLeaderboard] = useState(false);
-  const [xpHistory, setXpHistory] = useState(() => JSON.parse(localStorage.getItem('sq_xp_history')) || {});
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
@@ -1435,7 +1456,6 @@ export default function QuestDailyApp() {
     localStorage.setItem('sq_lastReset', lastReset);
   }, [level, xp, quests, lastReset]);
   useEffect(() => { localStorage.setItem('sq_proofs', JSON.stringify(proofImages)); }, [proofImages]);
-  useEffect(() => { localStorage.setItem('sq_xp_history', JSON.stringify(xpHistory)); }, [xpHistory]);
 
   const applyXpChange = useCallback((amount) => {
     let newXp = xpRef.current + amount, newLevel = levelRef.current;
@@ -1445,12 +1465,20 @@ export default function QuestDailyApp() {
     setXp(newXp); setLevel(newLevel);
   }, []);
 
-  // Tracks XP earned per calendar day so the leaderboard can rank days automatically.
+  // Writes XP earned per calendar day to a shared Firestore document keyed
+  // by date + username, so every phone sees the same leaderboard update in
+  // real time via the LeaderboardScreen's onSnapshot listener.
   const recordXpGain = useCallback((amount) => {
-    if (!amount) return;
-    const key = new Date().toISOString().slice(0, 10);
-    setXpHistory(prev => ({ ...prev, [key]: (prev[key] || 0) + amount }));
-  }, []);
+    if (!amount || !username) return;
+    const dateKey = new Date().toISOString().slice(0, 10);
+    const docId = `${dateKey}_${username}`;
+    setDoc(doc(db, 'dailyXp', docId), {
+      username,
+      date: dateKey,
+      xp: increment(amount),
+      updatedAt: serverTimestamp(),
+    }, { merge: true }).catch(err => console.error('Failed to sync XP to leaderboard:', err));
+  }, [username]);
 
  const handleQuestClick = (quest) => {
   if (quest.completed) {
@@ -1526,7 +1554,7 @@ export default function QuestDailyApp() {
             onBack={() => setDetailQuestId(null)}
             onMarkComplete={() => setProofModalId(detailQuest.id)} />
         ) : showLeaderboard ? (
-          <LeaderboardScreen dark={dark} onBack={() => setShowLeaderboard(false)} xpHistory={xpHistory} username={username} />
+          <LeaderboardScreen dark={dark} onBack={() => setShowLeaderboard(false)} username={username} />
         ) : (
           <>
             <div className={`relative z-10 safe-top px-3 pb-3 transition-colors duration-200`}>
