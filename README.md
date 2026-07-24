@@ -44,5 +44,4 @@ Ensure you have **Node.js** (v18+) and npm installed on your machine.
  * Level Up: Earn XP upon successful verification, watch your progress ring grow, and maintain your daily streak!
 🔒 Privacy & Licensing
 Side Quests processes all computer vision models locally inside your browser via WebAssembly and WebGL. No images, video streams, or personal health metrics ever leave your phone.
-Copyright © Side Quests. All rights reserved. This software is proprietary and not open source.
 
