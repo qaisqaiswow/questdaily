@@ -3,15 +3,21 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { pipeline, env } from '@huggingface/transformers';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
+import * as exifr from 'exifr';
 
 // ─── AI SETUP ────────────────────────────────────────────────────────────────
+// Switched from CLIP ViT-B/32 -> SigLIP base/16. SigLIP consistently scores
+// higher on zero-shot image classification benchmarks than CLIP of a similar
+// size, and its sigmoid (independent per-label) scoring is a better fit here
+// since we're comparing an "activity" label against a separate set of
+// "negative" labels rather than picking the single best class out of one list.
 env.allowLocalModels = false;
 let classifierPromise = null;
 function getClassifier(onProgress) {
   if (!classifierPromise) {
     classifierPromise = pipeline(
       'zero-shot-image-classification',
-      'Xenova/clip-vit-base-patch32',
+      'Xenova/siglip-base-patch16-224',
       onProgress ? { progress_callback: onProgress } : undefined
     ).catch(error => {
       classifierPromise = null;
@@ -20,6 +26,18 @@ function getClassifier(onProgress) {
   }
   return classifierPromise;
 }
+
+// ─── PHOTO SOURCE / AUTHENTICITY LABELS ─────────────────────────────────────
+// Used only for uploaded (non-live-capture) photos on food/action quests, to
+// flag images that look pulled from the internet rather than taken in person.
+// Map quests are exempt since a screenshot IS the expected proof there.
+const SOURCE_CAMERA_LABEL = 'a real unedited photo taken with a phone camera';
+const SOURCE_DOWNLOADED_LABELS = [
+  'a professional stock photography image',
+  'a screenshot or image saved from a website',
+  'an image downloaded from a search engine or social media',
+];
+const SOURCE_LABELS = [SOURCE_CAMERA_LABEL, ...SOURCE_DOWNLOADED_LABELS];
 
 // ─── POSE MODEL SETUP (real rep counting via joint tracking) ────────────────
 let landmarkerPromise = null;
@@ -180,22 +198,28 @@ const QUEST_LABELS = {
   q14: { type: 'food', activity: ['glass of green smoothie', 'blended green juice drink'], label: 'green smoothie' },
   q6:  { type: 'food', activity: ['glass of water', 'reusable water bottle filled'], label: 'water bottle' },
   q7:  { type: 'action', activity: ['person meditating cross-legged', 'mindfulness exercise'], label: 'meditating' },
-  q8:  { type: 'action', activity: ['person stretching muscles', 'yoga stretch pose'], label: 'stretching' },
+  q8:  { type: 'action', activity: ['person stretching muscles', 'yoga stretch pose'], label: 'stretching', bodyParts: ['Full Body', 'Flexibility'] },
   q10: { type: 'action', activity: ['person sleeping in bed', 'person resting in bed eyes closed'], label: 'getting good sleep' },
-  q11: { type: 'action', activity: ['person doing jumping jacks or burpees'], label: 'doing cardio' },
+  q11: { type: 'action', activity: ['person doing jumping jacks or burpees'], label: 'doing cardio', bodyParts: ['Cardio', 'Full Body'] },
   q13: { type: 'action', activity: ['handwriting in notebook or journal'], label: 'journaling' },
-  q15: { type: 'action', activity: ['person doing plank exercise', 'plank position core exercise'], label: 'holding a plank' },
+  q15: { type: 'action', activity: ['person doing plank exercise', 'plank position core exercise'], label: 'holding a plank', bodyParts: ['Core', 'Shoulders'] },
   q18: { type: 'action', activity: ['shower running water', 'bathroom shower head with water'], label: 'in the shower' },
   q21: { type: 'action', activity: ['person breathing deeply eyes closed'], label: 'deep breathing' },
   q24: { type: 'action', activity: ['person sleeping in bed at night', 'sleeping in dark bedroom'], label: 'sleeping early' },
   q25: { type: 'action', activity: ['person in ice bath tub', 'cold plunge tub with ice'], label: 'in a cold plunge' },
-  q26: { type: 'action', activity: ['person doing a wall sit exercise against a wall'], label: 'holding a wall sit' },
-  q27: { type: 'action', activity: ['person doing a glute bridge exercise on floor'], label: 'holding a glute bridge' },
-  q28: { type: 'action', activity: ['person doing high knees exercise'], label: 'doing high knees' },
-  q29: { type: 'action', activity: ['person doing mountain climbers exercise'], label: 'doing mountain climbers' },
-  q30: { type: 'action', activity: ['person doing a superman back exercise lying face down'], label: 'holding a superman pose' },
-  q31: { type: 'action', activity: ['person doing burpees exercise'], label: 'doing burpees' },
+  q26: { type: 'action', activity: ['person doing a wall sit exercise against a wall'], label: 'holding a wall sit', bodyParts: ['Quads', 'Core'] },
+  q27: { type: 'action', activity: ['person doing a glute bridge exercise on floor'], label: 'holding a glute bridge', bodyParts: ['Glutes', 'Core'] },
+  q28: { type: 'action', activity: ['person doing high knees exercise'], label: 'doing high knees', bodyParts: ['Cardio', 'Quads'] },
+  q29: { type: 'action', activity: ['person doing mountain climbers exercise'], label: 'doing mountain climbers', bodyParts: ['Core', 'Cardio'] },
+  q30: { type: 'action', activity: ['person doing a superman back exercise lying face down'], label: 'holding a superman pose', bodyParts: ['Lower Back', 'Glutes'] },
+  q31: { type: 'action', activity: ['person doing burpees exercise'], label: 'doing burpees', bodyParts: ['Full Body', 'Cardio'] },
 };
+
+// Action quests that involve a visible, tracked-body movement — these don't
+// have rep-counting logic (no fixed target count) but should still get the
+// live skeleton HUD overlay for feedback and as an extra "a person is
+// actually in frame moving" signal alongside the vision-model check.
+const MOVEMENT_ACTION_IDS = new Set(['q8', 'q11', 'q15', 'q26', 'q27', 'q28', 'q29', 'q30', 'q31']);
 
 const getNegativeLabels = (type) => {
   const base = ['person sitting doing nothing', 'person standing still straight', 'random everyday object'];
@@ -253,6 +277,35 @@ const PASS_THRESHOLD  = 0.35;
 function getMaxLabelScore(results, candidates) {
   if (!candidates?.length) return 0;
   return results.reduce((best, result) => (candidates.includes(result.label) ? Math.max(best, result.score) : best), 0);
+}
+
+// ─── PHOTO AUTHENTICITY CHECK (uploaded photos only) ────────────────────────
+// Two independent signals, combined:
+//  1. EXIF metadata — real camera photos (straight off a phone) almost always
+//     carry a Make/Model tag. Screenshots never do, and images saved off the
+//     web are re-encoded and have it stripped.
+//  2. The vision model's own opinion, scoring the image against "real phone
+//     photo" vs. stock/screenshot/downloaded-image phrasing.
+// Neither signal alone is reliable (e.g. photos forwarded through some chat
+// apps also lose EXIF), so an image is only flagged when BOTH agree.
+async function checkPhotoAuthenticity(file, dataUrl, classifierLabels) {
+  let hasCameraMetadata = false;
+  try {
+    const tags = await exifr.parse(file, ['Make', 'Model']);
+    hasCameraMetadata = Boolean(tags && (tags.Make || tags.Model));
+  } catch { /* no/unreadable EXIF — treated as absent, not fatal */ }
+
+  let cameraScore = 0, downloadedScore = 0;
+  try {
+    const classifier = await getClassifier();
+    const results = await classifier(dataUrl, classifierLabels);
+    cameraScore = getMaxLabelScore(results, [SOURCE_CAMERA_LABEL]);
+    downloadedScore = getMaxLabelScore(results, SOURCE_DOWNLOADED_LABELS);
+  } catch { /* if the model call fails, fall back to EXIF alone */ }
+
+  const modelThinksDownloaded = downloadedScore > cameraScore;
+  const suspicious = !hasCameraMetadata && modelThinksDownloaded;
+  return { hasCameraMetadata, cameraScore, downloadedScore, suspicious };
 }
 
 // ─── ICONS ───────────────────────────────────────────────────────────────────
@@ -656,12 +709,14 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
   const labels = QUEST_LABELS[quest.id];
   const questType = labels?.type || 'action';
+  const hasSkeletonTracking = Boolean(quest.reps) || MOVEMENT_ACTION_IDS.has(quest.id);
 
   const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
   const classifierLabels = useMemo(
     () => [...new Set([...(labels?.activity ?? []), ...activeNegatives])],
     [labels, activeNegatives]
   );
+  const [sourceWarning, setSourceWarning] = useState(null);
 
   let instructionText = `Show the camera you're ${labels?.label ?? 'doing it'}…`;
   let uiSubtext = quest.text;
@@ -827,9 +882,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     return () => { disposed = true; scanRunRef.current += 1; clearTimeout(scanTimerRef.current); };
   }, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, activeNegatives]);
 
-  // Pose tracking & Skeleton HUD loop — reps challenges only. Uses joint-angle detection and HUD drawing.
+  // Pose tracking & Skeleton HUD loop — runs for rep quests (counts reps) AND
+  // movement action quests like planks/wall-sits/burpees (skeleton HUD + "a
+  // person is visibly moving" signal only, no fixed rep target).
   useEffect(() => {
-    if (!quest.reps || phase !== 'live' || confirmed) return undefined;
+    if (!hasSkeletonTracking || phase !== 'live' || confirmed) return undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -848,7 +905,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             try {
               const result = landmarker.detectForVideo(video, now);
               const landmarks = result?.landmarks?.[0] ?? null;
-              if (landmarks) {
+              if (landmarks && quest.reps) {
                 const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, now);
                 setRepPhase(update.phase);
                 setRepCue(update.cue);
@@ -859,7 +916,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                     setConfirmed(true);
                   }
                 }
-              } else {
+              } else if (!landmarks && quest.reps) {
                 setRepCue('Step back so your full body is visible');
               }
 
@@ -965,12 +1022,12 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
       }
     };
-  }, [quest.reps, quest.id, phase, confirmed]);
+  }, [hasSkeletonTracking, quest.reps, quest.id, phase, confirmed]);
 
-  const retryCamera = () => { scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); };
+  const retryCamera = () => { scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); setSourceWarning(null); };
   const retryModel = () => { setModelReady(false); setModelProgress(null); setModelError(null); setModelVersion(v => v + 1); };
   const flipCamera = () => { 
-    clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; resetRepTracking(); setConfirmed(false); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
+    clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
     if (skeletonCanvasRef.current) {
       const ctx = skeletonCanvasRef.current.getContext('2d');
       ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
@@ -983,10 +1040,23 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     const reader = new FileReader();
     reader.onload = async (ev) => {
       let accepted = false; scanRunRef.current += 1; setUploading(true); stopCamera(); clearTimeout(scanTimerRef.current);
+      setSourceWarning(null);
       const dataUrl = ev.target.result; setUploadedProof(dataUrl);
       if (!labels) { onConfirm(dataUrl); return; }
       setPhase('live'); setScanning(true);
       try {
+        // Map quests are exempt — a screenshot IS the expected proof there.
+        if (questType !== 'map') {
+          const authCheck = await checkPhotoAuthenticity(file, dataUrl, SOURCE_LABELS);
+          if (authCheck.suspicious) {
+            setPassStreak(0);
+            setNotice("This looks like a stock photo, screenshot, or image pulled from the internet rather than one you took yourself. Please upload an original photo.");
+            return;
+          }
+          if (!authCheck.hasCameraMetadata) {
+            setSourceWarning("Heads up — this photo has no camera metadata, so we can't fully confirm it's an original. Live camera capture is the most reliable option.");
+          }
+        }
         const classifier = await getClassifier();
         const results = await classifier(dataUrl, classifierLabels);
         const actScore = getMaxLabelScore(results, labels.activity);
@@ -1047,7 +1117,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           {/* Skeleton HUD Overlay for reps/challenges */}
           <canvas
             ref={skeletonCanvasRef}
-            className={`absolute inset-0 w-full h-full pointer-events-none object-cover z-10 transition-opacity duration-500 ${phase === 'live' && !uploadedProof && quest.reps ? 'opacity-100' : 'opacity-0'}`}
+            className={`absolute inset-0 w-full h-full pointer-events-none object-cover z-10 transition-opacity duration-500 ${phase === 'live' && !uploadedProof && hasSkeletonTracking ? 'opacity-100' : 'opacity-0'}`}
           />
 
           {phase === 'live' && !uploadedProof && labels?.bodyParts && (
@@ -1100,6 +1170,13 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             <div className="absolute inset-x-4 top-4 rounded-xl bg-red-500/90 backdrop-blur border border-red-400 px-4 py-3 text-center shadow-2xl z-30">
               <p className="text-[13px] font-medium leading-relaxed text-white">{modelError || notice}</p>
               <button onClick={() => setNotice(null)} className="text-[11px] font-bold text-white/70 block w-full mt-2 uppercase tracking-wider">Dismiss</button>
+            </div>
+          )}
+
+          {!modelError && !notice && sourceWarning && (
+            <div className="absolute inset-x-4 top-4 rounded-xl bg-amber-500/90 backdrop-blur border border-amber-400 px-4 py-3 text-center shadow-2xl z-30">
+              <p className="text-[13px] font-medium leading-relaxed text-white">{sourceWarning}</p>
+              <button onClick={() => setSourceWarning(null)} className="text-[11px] font-bold text-white/70 block w-full mt-2 uppercase tracking-wider">Dismiss</button>
             </div>
           )}
 
