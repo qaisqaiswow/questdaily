@@ -1077,10 +1077,13 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     else onCancel(undefined);
   };
 
+  const confirmingRef = useRef(false);
   const captureAndConfirm = () => {
+    if (confirmingRef.current) return;
+    confirmingRef.current = true;
     if (uploadedProof) { onConfirm(uploadedProof); return; }
     const video = videoRef.current, canvas = aiCanvasRef.current;
-    if (!video || !canvas) return;
+    if (!video || !canvas) { confirmingRef.current = false; return; }
     canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
     canvas.getContext('2d').drawImage(video, 0, 0);
     onConfirm(canvas.toDataURL('image/jpeg', 0.82));
@@ -1401,6 +1404,11 @@ export default function QuestDailyApp() {
     while (newXp >= newLevel * 100) { newXp -= newLevel * 100; newLevel++; }
     while (newXp < 0 && newLevel > 1) { newLevel--; newXp += newLevel * 100; }
     if (newLevel === 1 && newXp < 0) newXp = 0;
+    // Update the refs immediately (not just via the useEffect below) so that
+    // if this fires twice back-to-back — e.g. a double-tap before the modal
+    // closes — the second call adds on top of the first instead of both
+    // reading the same stale xp/level and silently overwriting each other.
+    xpRef.current = newXp; levelRef.current = newLevel;
     setXp(newXp); setLevel(newLevel);
   }, []);
 
@@ -1414,6 +1422,10 @@ export default function QuestDailyApp() {
 
   const handleProofConfirm = (questId, img) => {
     const quest = quests.find(q => q.id === questId);
+    // Guard against the confirm callback firing twice for the same quest
+    // (e.g. a double-tap before the modal finishes closing) — without this,
+    // XP would either get applied twice or, depending on timing, lost.
+    if (!quest || quest.completed) { setProofModalId(null); setDetailQuestId(null); return; }
     setProofImages(prev => ({ ...prev, [questId]: img }));
     setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true, progress: 0 } : q));
     applyXpChange(quest?.xp ?? 0);
