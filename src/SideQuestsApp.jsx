@@ -3,8 +3,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { pipeline, env } from '@huggingface/transformers';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
-import { db } from './firebase';
-import { doc, setDoc, increment, serverTimestamp, collection, query, orderBy, limit, onSnapshot } from 'firebase/firestore';
 
 // ─── AI SETUP ────────────────────────────────────────────────────────────────
 env.allowLocalModels = false;
@@ -273,12 +271,6 @@ const MoonIcon = () => (
     <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
   </svg>
 );
-const TrophyIcon = () => (
-  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M8 21h8M12 17v4M7 4h10v4a5 5 0 0 1-10 0V4Z"/>
-    <path d="M17 5h3a4 4 0 0 1-4 4M7 5H4a4 4 0 0 0 4 4"/>
-  </svg>
-);
 const CheckIcon = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="20 6 9 17 4 12"/>
@@ -487,128 +479,6 @@ function IOSInstallPrompt({ onDismiss, dark }) {
             {step === 1 ? 'Next' : 'Got it!'}
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── USERNAME ONBOARDING MODAL ────────────────────────────────────────────────
-function UsernamePrompt({ onSubmit, dark }) {
-  const [value, setValue] = useState('');
-  const txt   = dark ? 'text-white' : 'text-gray-900';
-  const sub   = dark ? 'text-zinc-400' : 'text-gray-500';
-  const cardBg = dark ? 'bg-zinc-900' : 'bg-white';
-  const inputBg = dark ? 'bg-zinc-800 border-zinc-700 text-white' : 'bg-gray-50 border-gray-200 text-gray-900';
-
-  const trimmed = value.trim();
-  const submit = () => { if (trimmed) onSubmit(trimmed.slice(0, 20)); };
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-5 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }}>
-      <div className={`w-full max-w-sm rounded-[26px] ${cardBg} shadow-2xl p-6 border ${dark ? 'border-zinc-800' : 'border-gray-100'}`}>
-        <div className="flex justify-center mb-3">
-          <LogoIcon size={44} dark={dark} />
-        </div>
-        <h3 className={`text-xl font-bold text-center ${txt}`}>Welcome to QuestDaily</h3>
-        <p className={`text-sm text-center mt-1.5 mb-5 ${sub}`}>Pick a username — it's how you'll show up on the leaderboard.</p>
-
-        <input
-          value={value}
-          onChange={e => setValue(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') submit(); }}
-          maxLength={20}
-          autoFocus
-          placeholder="Your username"
-          className={`w-full px-4 py-3.5 rounded-[16px] border text-[15px] font-semibold outline-none focus:ring-2 focus:ring-[#007AFF] ${inputBg}`}
-        />
-
-        <button onClick={submit} disabled={!trimmed}
-          className={`w-full mt-4 py-4 rounded-[16px] text-[15px] font-bold text-white transition-all ${trimmed ? 'bg-gradient-to-r from-indigo-500 to-purple-600 shadow-lg active:scale-[0.98]' : 'bg-zinc-300 cursor-not-allowed'}`}>
-          Let's Go
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── LEADERBOARD SCREEN ─────────────────────────────────────────────────────────
-function LeaderboardScreen({ dark, onBack, username }) {
-  const txt    = dark ? 'text-white' : 'text-gray-900';
-  const sub    = dark ? 'text-zinc-400' : 'text-gray-500';
-  const cardBg = dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100 shadow-sm';
-  const pill   = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
-
-  const [entries, setEntries] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [failed,  setFailed]  = useState(false);
-
-  // Subscribes to the shared "dailyXp" collection so every phone sees the
-  // same board and it updates the instant anyone completes a quest — no
-  // refresh needed.
-  useEffect(() => {
-    const q = query(collection(db, 'dailyXp'), orderBy('xp', 'desc'), limit(50));
-    const unsubscribe = onSnapshot(q,
-      snap => { setEntries(snap.docs.map(d => d.data())); setLoading(false); },
-      err  => { console.error('Leaderboard sync failed:', err); setFailed(true); setLoading(false); }
-    );
-    return () => unsubscribe();
-  }, []);
-
-  const todayKey = new Date().toISOString().slice(0, 10);
-  const yesterdayKey = new Date(Date.now() - ONE_DAY_MS).toISOString().slice(0, 10);
-
-  const formatDate = (dateStr) => {
-    if (dateStr === todayKey) return 'Today';
-    if (dateStr === yesterdayKey) return 'Yesterday';
-    const d = new Date(`${dateStr}T00:00:00`);
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-  };
-
-  const medal = (i) => (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : null);
-
-  return (
-    <div className="relative z-10 flex-1 flex flex-col min-h-screen">
-      <div className="safe-top flex items-center gap-3 px-4 pt-4 pb-2">
-        <button onClick={onBack}
-          className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${pill} ${txt} active:opacity-70 transition-opacity`}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
-        </button>
-        <div>
-          <h2 className={`text-[19px] font-bold ${txt}`}>Leaderboard</h2>
-          <p className={`text-[12px] ${sub}`}>Most XP earned per day · everyone</p>
-        </div>
-      </div>
-
-      <div className="flex-1 scroll-ios px-4 pt-3 pb-8 space-y-2.5">
-        {failed ? (
-          <div className={`${cardBg} rounded-[20px] px-5 py-10 text-center`}>
-            <p className={`text-[14px] font-semibold ${txt}`}>Couldn't reach the leaderboard</p>
-            <p className={`text-[12px] mt-1 ${sub}`}>Check your connection, or that Firebase is set up in firebase.js.</p>
-          </div>
-        ) : loading ? (
-          <div className={`${cardBg} rounded-[20px] px-5 py-10 text-center`}>
-            <p className={`text-[13px] font-medium ${sub}`}>Loading leaderboard…</p>
-          </div>
-        ) : entries.length === 0 ? (
-          <div className={`${cardBg} rounded-[20px] px-5 py-10 text-center`}>
-            <p className={`text-[14px] font-semibold ${txt}`}>No days on the board yet</p>
-            <p className={`text-[12px] mt-1 ${sub}`}>Complete quests today to claim the top spot.</p>
-          </div>
-        ) : (
-          entries.map((entry, i) => (
-            <div key={`${entry.username}_${entry.date}`}
-              className={`${cardBg} rounded-[18px] px-4 py-3.5 flex items-center gap-3 ${entry.username === username && entry.date === todayKey ? 'ring-2 ring-[#007AFF]/50' : ''}`}>
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-[16px] font-black ${dark ? 'bg-zinc-800 text-zinc-400' : 'bg-gray-100 text-gray-500'}`}>
-                {medal(i) || `#${i + 1}`}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className={`text-[14px] font-bold truncate ${txt}`}>{entry.username}{entry.username === username ? ' (you)' : ''}</p>
-                <p className={`text-[11px] ${sub}`}>{formatDate(entry.date)}</p>
-              </div>
-              <p className={`text-[15px] font-black ${dark ? 'text-indigo-400' : 'text-indigo-600'}`}>+{entry.xp} XP</p>
-            </div>
-          ))
-        )}
       </div>
     </div>
   );
@@ -1371,8 +1241,6 @@ export default function QuestDailyApp() {
   });
 
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
-  const [username, setUsernameState] = useState(() => localStorage.getItem('sq_username') || '');
-  const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark);
@@ -1380,22 +1248,16 @@ export default function QuestDailyApp() {
   }, [dark]);
 
   useEffect(() => {
-    // Show install prompt once per user session, after a username is set
-    if (!username) return;
+    // Show install prompt once per user session
     const hasSeen = localStorage.getItem('sq_has_seen_install');
     if (!hasSeen) {
       setShowInstallPrompt(true);
     }
-  }, [username]);
+  }, []);
 
   const handleDismissInstall = () => {
     localStorage.setItem('sq_has_seen_install', 'true');
     setShowInstallPrompt(false);
-  };
-
-  const handleSetUsername = (name) => {
-    localStorage.setItem('sq_username', name);
-    setUsernameState(name);
   };
 
   const [level,     setLevel]     = useState(() => parseInt(localStorage.getItem('sq_level'))    || 1);
@@ -1465,21 +1327,6 @@ export default function QuestDailyApp() {
     setXp(newXp); setLevel(newLevel);
   }, []);
 
-  // Writes XP earned per calendar day to a shared Firestore document keyed
-  // by date + username, so every phone sees the same leaderboard update in
-  // real time via the LeaderboardScreen's onSnapshot listener.
-  const recordXpGain = useCallback((amount) => {
-    if (!amount || !username) return;
-    const dateKey = new Date().toISOString().slice(0, 10);
-    const docId = `${dateKey}_${username}`;
-    setDoc(doc(db, 'dailyXp', docId), {
-      username,
-      date: dateKey,
-      xp: increment(amount),
-      updatedAt: serverTimestamp(),
-    }, { merge: true }).catch(err => console.error('Failed to sync XP to leaderboard:', err));
-  }, [username]);
-
  const handleQuestClick = (quest) => {
   if (quest.completed) {
     return;
@@ -1493,7 +1340,6 @@ export default function QuestDailyApp() {
     setProofImages(prev => ({ ...prev, [questId]: img }));
     setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true, progress: 0 } : q));
     applyXpChange(quest?.xp ?? 0);
-    recordXpGain(quest?.xp ?? 0);
     setProofModalId(null);
     setDetailQuestId(null);
     setCompletionQuest(quest || null);
@@ -1526,9 +1372,7 @@ export default function QuestDailyApp() {
         
         <AnimatedBackground dark={dark} />
 
-        {!username && <UsernamePrompt dark={dark} onSubmit={handleSetUsername} />}
-
-        {username && showInstallPrompt && <IOSInstallPrompt onDismiss={handleDismissInstall} dark={dark} />}
+        {showInstallPrompt && <IOSInstallPrompt onDismiss={handleDismissInstall} dark={dark} />}
 
         {proofModal && (
           <CameraModal quest={proofModal} dark={dark}
@@ -1553,8 +1397,6 @@ export default function QuestDailyApp() {
             onToggleTheme={() => setDark(d => !d)}
             onBack={() => setDetailQuestId(null)}
             onMarkComplete={() => setProofModalId(detailQuest.id)} />
-        ) : showLeaderboard ? (
-          <LeaderboardScreen dark={dark} onBack={() => setShowLeaderboard(false)} username={username} />
         ) : (
           <>
             <div className={`relative z-10 safe-top px-3 pb-3 transition-colors duration-200`}>
@@ -1568,11 +1410,6 @@ export default function QuestDailyApp() {
                     <span className="text-[10px]">⏱</span>
                     <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
                   </div>
-                  <button onClick={() => setShowLeaderboard(true)}
-                    className={`w-8 h-8 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}
-                    aria-label="Leaderboard">
-                    <TrophyIcon />
-                  </button>
                   <button onClick={() => setDark(d => !d)}
                     className={`w-8 h-8 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
                     {dark ? <SunIcon /> : <MoonIcon />}
@@ -1581,7 +1418,7 @@ export default function QuestDailyApp() {
               </div>
               <div className="mt-3 flex items-center gap-1.5">
                 <span className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Lv {level}</span>
-                <span className={`text-[11px] font-medium ${sub}`}>{username || 'Novice Adventurer'}</span>
+                <span className={`text-[11px] font-medium ${sub}`}>Novice Adventurer</span>
                 <span className={`ml-auto text-[11px] font-semibold ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{xp} / {xpRequired} XP</span>
               </div>
             </div>
