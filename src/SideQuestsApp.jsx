@@ -6,11 +6,6 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as exifr from 'exifr';
 
 // ─── AI SETUP ────────────────────────────────────────────────────────────────
-// Switched from CLIP ViT-B/32 -> SigLIP base/16. SigLIP consistently scores
-// higher on zero-shot image classification benchmarks than CLIP of a similar
-// size, and its sigmoid (independent per-label) scoring is a better fit here
-// since we're comparing an "activity" label against a separate set of
-// "negative" labels rather than picking the single best class out of one list.
 env.allowLocalModels = false;
 let classifierPromise = null;
 function getClassifier(onProgress) {
@@ -28,9 +23,6 @@ function getClassifier(onProgress) {
 }
 
 // ─── PHOTO SOURCE / AUTHENTICITY LABELS ─────────────────────────────────────
-// Used only for uploaded (non-live-capture) photos on food/action quests, to
-// flag images that look pulled from the internet rather than taken in person.
-// Map quests are exempt since a screenshot IS the expected proof there.
 const SOURCE_CAMERA_LABEL = 'a real unedited photo taken with a phone camera';
 const SOURCE_DOWNLOADED_LABELS = [
   'a professional stock photography image',
@@ -117,8 +109,6 @@ function pickSide(lms, leftKeys, rightKeys) {
   return null;
 }
 
-// Metric extractors: return an angle (degrees) or normalized position we track
-// through a down/up state machine per exercise.
 const REP_METRICS = {
   q1: (lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
   q2: (lms) => { const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
@@ -215,10 +205,6 @@ const QUEST_LABELS = {
   q31: { type: 'action', activity: ['person doing burpees exercise'], label: 'doing burpees', bodyParts: ['Full Body', 'Cardio'] },
 };
 
-// Action quests that involve a visible, tracked-body movement — these don't
-// have rep-counting logic (no fixed target count) but should still get the
-// live skeleton HUD overlay for feedback and as an extra "a person is
-// actually in frame moving" signal alongside the vision-model check.
 const MOVEMENT_ACTION_IDS = new Set(['q8', 'q11', 'q15', 'q26', 'q27', 'q28', 'q29', 'q30', 'q31']);
 
 const getNegativeLabels = (type) => {
@@ -228,9 +214,6 @@ const getNegativeLabels = (type) => {
   return [...base, 'phone or computer screen'];
 };
 
-// Every quest is either reps-based or duration-based so it can be timeboxed,
-// progress-saved, and given a randomized amount each time it's assigned.
-// textTemplate uses "{n}" as a placeholder for the randomized reps/minutes.
 const QUEST_POOL = [
   { id: 'q1',  textTemplate: 'Do {n} pushups',                       xp: 50, reps: 20 },
   { id: 'q2',  textTemplate: 'Do {n} squats',                        xp: 45, reps: 30 },
@@ -255,9 +238,6 @@ const QUEST_POOL = [
   { id: 'q31', textTemplate: 'Do {n} minutes of burpees',            xp: 45, duration: 180 },
 ];
 
-// Randomizes a fresh copy of a pool quest: reps get a random count 1-55,
-// durations get a random length between 1 and 5 minutes, and the display
-// text is filled in with that same random number so they always match.
 function randomizeQuest(pool) {
   if (pool.reps) {
     const n = Math.floor(Math.random() * 55) + 1; // 1-55 reps
@@ -279,15 +259,6 @@ function getMaxLabelScore(results, candidates) {
   return results.reduce((best, result) => (candidates.includes(result.label) ? Math.max(best, result.score) : best), 0);
 }
 
-// ─── PHOTO AUTHENTICITY CHECK (uploaded photos only) ────────────────────────
-// Two independent signals, combined:
-//  1. EXIF metadata — real camera photos (straight off a phone) almost always
-//     carry a Make/Model tag. Screenshots never do, and images saved off the
-//     web are re-encoded and have it stripped.
-//  2. The vision model's own opinion, scoring the image against "real phone
-//     photo" vs. stock/screenshot/downloaded-image phrasing.
-// Neither signal alone is reliable (e.g. photos forwarded through some chat
-// apps also lose EXIF), so an image is only flagged when BOTH agree.
 async function checkPhotoAuthenticity(file, dataUrl, classifierLabels) {
   let hasCameraMetadata = false;
   try {
@@ -343,6 +314,23 @@ const IOSAddIcon = () => (
     <rect x="3" y="3" width="18" height="18" rx="4" ry="4"/>
     <line x1="12" y1="8" x2="12" y2="16"/>
     <line x1="8" y1="12" x2="16" y2="12"/>
+  </svg>
+);
+
+const AndroidMenuIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+    <circle cx="12" cy="5" r="2.5"/>
+    <circle cx="12" cy="12" r="2.5"/>
+    <circle cx="12" cy="19" r="2.5"/>
+  </svg>
+);
+
+const AndroidAddIcon = () => (
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
+    <line x1="12" y1="18" x2="12.01" y2="18"/>
+    <line x1="9" y1="11" x2="15" y2="11"/>
+    <line x1="12" y1="8" x2="12" y2="14"/>
   </svg>
 );
 
@@ -492,8 +480,10 @@ const ProgressRing = ({ pct, size = 56, stroke = 5, dark }) => {
 };
 
 // ─── INSTALL PROMPT ONBOARDING MODAL ──────────────────────────────────────────
-function IOSInstallPrompt({ onDismiss, dark }) {
-  const [step, setStep] = useState(1);
+function DeviceInstallPrompt({ onDismiss, dark }) {
+  const [step, setStep] = useState(0);
+  const [os, setOs] = useState(null); // 'ios' or 'android'
+  
   const cardBg = dark ? 'bg-zinc-900' : 'bg-white';
   const txt = dark ? 'text-white' : 'text-gray-900';
   const sub = dark ? 'text-zinc-400' : 'text-gray-500';
@@ -507,31 +497,76 @@ function IOSInstallPrompt({ onDismiss, dark }) {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
       <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-zinc-800' : 'border-gray-100'}`}>
-        <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install QuestDaily</h3>
-        <p className={`text-sm mb-6 ${sub}`}>Add this app to your home screen for the full experience.</p>
         
-        <div className={`relative mb-8 ${pill} rounded-2xl p-5 flex flex-col items-center justify-center border ${dark ? 'border-white/5' : 'border-black/5'}`}>
-          <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-[#007AFF] text-white shadow-lg mb-3">
-            {step === 1 ? <IOSShareIcon /> : <IOSAddIcon />}
-          </div>
-          <p className={`text-sm font-semibold ${txt} mb-1`}>
-            {step === 1 ? 'Step 1: Tap the Share button' : 'Step 2: Add to Home Screen'}
-          </p>
-          <p className={`text-xs ${sub}`}>
-            {step === 1 ? 'Look for the share icon in your Safari menu bar below.' : 'Scroll down the share menu and select this option.'}
-          </p>
-        </div>
+        {step === 0 && (
+          <>
+            <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install QuestDaily</h3>
+            <p className={`text-sm mb-6 ${sub}`}>Which device are you using?</p>
+            <div className="flex flex-col gap-3">
+              <button onClick={() => { setOs('ios'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#007AFF] text-white shadow-lg active:scale-95 transition-transform">
+                Apple (iOS)
+              </button>
+              <button onClick={() => { setOs('android'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#34C759] text-white shadow-lg active:scale-95 transition-transform">
+                Android
+              </button>
+              <button onClick={onDismiss} className={`w-full mt-2 py-3 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>
+                Maybe Later
+              </button>
+            </div>
+          </>
+        )}
 
-        <div className="flex gap-3">
-          {step === 2 && (
-            <button onClick={() => setStep(1)} className={`flex-1 py-3.5 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>
-              Back
-            </button>
-          )}
-          <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#007AFF] text-white shadow-lg active:scale-95 transition-transform">
-            {step === 1 ? 'Next' : 'Got it!'}
-          </button>
-        </div>
+        {step > 0 && os === 'ios' && (
+          <>
+            <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install on iOS</h3>
+            <p className={`text-sm mb-6 ${sub}`}>Add this app to your home screen.</p>
+            <div className={`relative mb-8 ${pill} rounded-2xl p-5 flex flex-col items-center justify-center border ${dark ? 'border-white/5' : 'border-black/5'}`}>
+              <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-[#007AFF] text-white shadow-lg mb-3">
+                {step === 1 ? <IOSShareIcon /> : <IOSAddIcon />}
+              </div>
+              <p className={`text-sm font-semibold ${txt} mb-1`}>
+                {step === 1 ? 'Step 1: Tap the Share button' : 'Step 2: Add to Home Screen'}
+              </p>
+              <p className={`text-xs ${sub}`}>
+                {step === 1 ? 'Look for the share icon in your Safari menu bar below.' : 'Scroll down the share menu and select this option.'}
+              </p>
+            </div>
+            <div className="flex gap-3">
+              {step === 2 && (
+                <button onClick={() => setStep(1)} className={`flex-1 py-3.5 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>Back</button>
+              )}
+              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#007AFF] text-white shadow-lg active:scale-95 transition-transform">
+                {step === 1 ? 'Next' : 'Got it!'}
+              </button>
+            </div>
+          </>
+        )}
+
+        {step > 0 && os === 'android' && (
+          <>
+            <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install on Android</h3>
+            <p className={`text-sm mb-6 ${sub}`}>Add this app to your home screen.</p>
+            <div className={`relative mb-8 ${pill} rounded-2xl p-5 flex flex-col items-center justify-center border ${dark ? 'border-white/5' : 'border-black/5'}`}>
+              <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-[#34C759] text-white shadow-lg mb-3">
+                {step === 1 ? <AndroidMenuIcon /> : <AndroidAddIcon />}
+              </div>
+              <p className={`text-sm font-semibold ${txt} mb-1`}>
+                {step === 1 ? 'Step 1: Tap the menu icon' : 'Step 2: Add to Home Screen'}
+              </p>
+              <p className={`text-xs ${sub}`}>
+                {step === 1 ? 'Look for the 3 vertical dots (usually top right in Chrome).' : 'Select "Add to Home screen" or "Install app" from the menu.'}
+              </p>
+            </div>
+            <div className="flex gap-3">
+              {step === 2 && (
+                <button onClick={() => setStep(1)} className={`flex-1 py-3.5 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>Back</button>
+              )}
+              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#34C759] text-white shadow-lg active:scale-95 transition-transform">
+                {step === 1 ? 'Next' : 'Got it!'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -795,7 +830,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     return () => { cameraSessionRef.current += 1; stopCamera(); };
   }, [facingMode, cameraVersion, startCamera, stopCamera]);
 
-  // CLIP model — only needed for food / map / action verification, not reps.
   useEffect(() => {
     if (quest.reps) { setModelReady(true); return undefined; }
     let cancelled = false;
@@ -822,7 +856,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     setRepCue('Get in frame');
   }, [quest.reps, quest.progress]);
 
-  // CLIP scanning loop — food / map / action quests only. Reps use pose tracking below.
   useEffect(() => {
     if (quest.reps) return undefined;
     if (phase !== 'live' || !modelReady || confirmed || uploading || !labels || !classifierLabels.length) return undefined;
@@ -847,7 +880,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const context = canvas.getContext('2d');
         if (!context) throw new Error('Canvas 2D context unavailable');
         
-        // Strict letterbox cropping for full body frame capturing
         const scale = Math.min(224 / video.videoWidth, 224 / video.videoHeight);
         const width = video.videoWidth * scale;
         const height = video.videoHeight * scale;
@@ -882,9 +914,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     return () => { disposed = true; scanRunRef.current += 1; clearTimeout(scanTimerRef.current); };
   }, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, activeNegatives]);
 
-  // Pose tracking & Skeleton HUD loop — runs for rep quests (counts reps) AND
-  // movement action quests like planks/wall-sits/burpees (skeleton HUD + "a
-  // person is visibly moving" signal only, no fixed rep target).
   useEffect(() => {
     if (!hasSkeletonTracking || phase !== 'live' || confirmed) return undefined;
     let cancelled = false;
@@ -920,7 +949,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                 setRepCue('Step back so your full body is visible');
               }
 
-              // ── SKELETON HUD OVERLAY ──
               if (canvas && video) {
                 const ctx = canvas.getContext('2d');
                 if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
@@ -948,10 +976,9 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
                   const mapped = landmarks.map(mapPt);
                   const currentPhase = poseStateRef.current.phase;
-                  const lineColor = currentPhase === 'down' ? '#4ade80' : '#38bdf8'; // Neon green when lowered into pushup/squat, cyan when up
+                  const lineColor = currentPhase === 'down' ? '#4ade80' : '#38bdf8'; 
                   const shadowColor = currentPhase === 'down' ? 'rgba(74, 222, 128, 0.8)' : 'rgba(56, 189, 248, 0.8)';
 
-                  // Draw connecting skeleton rods
                   ctx.save();
                   ctx.lineWidth = 4;
                   ctx.lineCap = 'round';
@@ -972,7 +999,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   });
                   ctx.restore();
 
-                  // Draw joint nodes and HUD accent rings
                   ctx.save();
                   mapped.forEach((pt, idx) => {
                     if (pt.vis > 0.4 && (idx === 0 || (idx >= 11 && idx <= 32))) {
@@ -986,13 +1012,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                       ctx.strokeStyle = lineColor;
                       ctx.stroke();
 
-                      // Inner glowing dot
                       ctx.beginPath();
                       ctx.arc(pt.x, pt.y, isMajorJoint ? 3 : 2, 0, 2 * Math.PI);
                       ctx.fillStyle = '#ffffff';
                       ctx.fill();
 
-                      // Extra HUD crosshair ring on shoulders & hips
                       if ([11, 12, 23, 24].includes(idx)) {
                         ctx.beginPath();
                         ctx.arc(pt.x, pt.y, 12, 0, 2 * Math.PI);
@@ -1025,7 +1049,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   }, [hasSkeletonTracking, quest.reps, quest.id, phase, confirmed]);
 
   const retryCamera = () => { scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); setSourceWarning(null); };
-  const retryModel = () => { setModelReady(false); setModelProgress(null); setModelError(null); setModelVersion(v => v + 1); };
   const flipCamera = () => { 
     clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
     if (skeletonCanvasRef.current) {
@@ -1045,7 +1068,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       if (!labels) { onConfirm(dataUrl); return; }
       setPhase('live'); setScanning(true);
       try {
-        // Map quests are exempt — a screenshot IS the expected proof there.
         if (questType !== 'map') {
           const authCheck = await checkPhotoAuthenticity(file, dataUrl, SOURCE_LABELS);
           if (authCheck.suspicious) {
@@ -1091,7 +1113,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
   const meterColor = liveScore >= PASS_THRESHOLD * 100 ? 'bg-emerald-500' : liveScore >= 15 ? 'bg-amber-400' : 'bg-rose-500';
   const bg = dark ? 'bg-zinc-950' : 'bg-white';
-  const border = dark ? 'border-white/10' : 'border-gray-200';
   const txt = dark ? 'text-white' : 'text-gray-900';
   const sub = dark ? 'text-zinc-400' : 'text-gray-500';
   const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
@@ -1117,7 +1138,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         <div className="relative flex-1 bg-black overflow-hidden mx-4 rounded-3xl shadow-inner border border-white/10">
           <video ref={videoRef} autoPlay playsInline muted className={`w-full h-full object-cover transition-opacity duration-500 ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
 
-          {/* Skeleton HUD Overlay for reps/challenges */}
           <canvas
             ref={skeletonCanvasRef}
             className={`absolute inset-0 w-full h-full pointer-events-none object-cover z-10 transition-opacity duration-500 ${phase === 'live' && !uploadedProof && hasSkeletonTracking ? 'opacity-100' : 'opacity-0'}`}
@@ -1183,7 +1203,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             </div>
           )}
 
-          {/* ── REP QUESTS: pose-tracking overlay ── */}
           {phase === 'live' && quest.reps && (
             <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)' }}>
               {confirmed ? (
@@ -1214,7 +1233,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             </div>
           )}
 
-          {/* ── FOOD / MAP / ACTION QUESTS: CLIP overlay ── */}
           {phase === 'live' && !quest.reps && modelReady && (
             <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)' }}>
               {confirmed ? (
@@ -1314,55 +1332,61 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function QuestDailyApp() {
-  const [dark, setDark] = useState(() => {
-    const saved = localStorage.getItem('sq_dark');
-    if (saved !== null) return saved === 'true';
-    return window.matchMedia('(prefers-color-scheme: dark)').matches;
-  });
+  const [isMounted, setIsMounted] = useState(false);
 
+  const [dark, setDark] = useState(true);
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  const [level, setLevel] = useState(1);
+  const [xp, setXp] = useState(0);
+  const [quests, setQuests] = useState([]);
+  const [lastReset, setLastReset] = useState(0);
+  const [proofImages, setProofImages] = useState({});
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', dark);
-    localStorage.setItem('sq_dark', dark);
-  }, [dark]);
-
-  useEffect(() => {
-    // Show install prompt once per user session
-    const hasSeen = localStorage.getItem('sq_has_seen_install');
-    if (!hasSeen) {
+    setIsMounted(true);
+    const savedDark = localStorage.getItem('sq_dark');
+    setDark(savedDark !== null ? savedDark === 'true' : window.matchMedia('(prefers-color-scheme: dark)').matches);
+    
+    if (!localStorage.getItem('sq_has_seen_install')) {
       setShowInstallPrompt(true);
     }
+
+    setLevel(parseInt(localStorage.getItem('sq_level')) || 1);
+    setXp(parseInt(localStorage.getItem('sq_xp')) || 0);
+    setLastReset(parseInt(localStorage.getItem('sq_lastReset')) || 0);
+    setProofImages(JSON.parse(localStorage.getItem('sq_proofs')) || {});
+
+    const savedQuests = JSON.parse(localStorage.getItem('sq_quests')) || [];
+    const anyDone = savedQuests.some(q => q.completed);
+    const lastResetTs = parseInt(localStorage.getItem('sq_lastReset')) || 0;
+    const expired = Date.now() - lastResetTs >= ONE_DAY_MS;
+
+    if (!expired && savedQuests.length >= 5) setQuests(savedQuests);
+    else if (!expired && anyDone) setQuests(savedQuests);
+    else {
+      const n = Math.floor(Math.random() * 3) + 5;
+      setQuests([...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(randomizeQuest));
+    }
   }, []);
+
+  useEffect(() => {
+    if (isMounted) {
+      document.documentElement.classList.toggle('dark', dark);
+      localStorage.setItem('sq_dark', dark);
+    }
+  }, [dark, isMounted]);
 
   const handleDismissInstall = () => {
     localStorage.setItem('sq_has_seen_install', 'true');
     setShowInstallPrompt(false);
   };
-
-  const [level,     setLevel]     = useState(() => parseInt(localStorage.getItem('sq_level'))    || 1);
-  const [xp,        setXp]        = useState(() => parseInt(localStorage.getItem('sq_xp'))       || 0);
-  const [quests,    setQuests]    = useState(() => {
-    const saved     = JSON.parse(localStorage.getItem('sq_quests')) || [];
-    const anyDone   = saved.some(q => q.completed);
-    const lastReset = parseInt(localStorage.getItem('sq_lastReset')) || 0;
-    const expired   = Date.now() - lastReset >= ONE_DAY_MS;
-    if (!expired && saved.length >= 5) return saved;
-    if (!expired && anyDone) return saved;
-    const n = Math.floor(Math.random() * 3) + 5;
-    return [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(randomizeQuest);
-  });
   
-  const [lastReset, setLastReset] = useState(() => parseInt(localStorage.getItem('sq_lastReset')) || 0);
   const [timeLeft,  setTimeLeft]  = useState('--:--:--');
   const [proofModalId,   setProofModalId]   = useState(null);
-  const [proofImages,  setProofImages]  = useState(() => JSON.parse(localStorage.getItem('sq_proofs')) || {});
   const [viewingProof, setViewingProof] = useState(null);
   const [detailQuestId,     setDetailQuestId]     = useState(null);
   const [completionQuest, setCompletionQuest] = useState(null);
 
-  // Always derive these from the live quests array so saved progress (or a
-  // completion) made while a modal is open is reflected the next time it opens.
   const proofModal  = quests.find(q => q.id === proofModalId)  || null;
   const detailQuest = quests.find(q => q.id === detailQuestId) || null;
 
@@ -1380,6 +1404,7 @@ export default function QuestDailyApp() {
   }, []);
 
   useEffect(() => {
+    if (!isMounted) return;
     const id = setInterval(() => {
       const now = Date.now(), remaining = ONE_DAY_MS - (now - lastReset);
       if (remaining <= 0 || quests.length === 0) { generateNewQuests(now); return; }
@@ -1389,42 +1414,34 @@ export default function QuestDailyApp() {
       setTimeLeft(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`);
     }, 1000);
     return () => clearInterval(id);
-  }, [lastReset, quests.length, generateNewQuests]);
+  }, [lastReset, quests.length, generateNewQuests, isMounted]);
 
   useEffect(() => {
-    localStorage.setItem('sq_level', level);
-    localStorage.setItem('sq_xp', xp);
-    localStorage.setItem('sq_quests', JSON.stringify(quests));
-    localStorage.setItem('sq_lastReset', lastReset);
-  }, [level, xp, quests, lastReset]);
-  useEffect(() => { localStorage.setItem('sq_proofs', JSON.stringify(proofImages)); }, [proofImages]);
+    if (isMounted) {
+      localStorage.setItem('sq_level', level);
+      localStorage.setItem('sq_xp', xp);
+      localStorage.setItem('sq_quests', JSON.stringify(quests));
+      localStorage.setItem('sq_lastReset', lastReset);
+      localStorage.setItem('sq_proofs', JSON.stringify(proofImages));
+    }
+  }, [level, xp, quests, lastReset, proofImages, isMounted]);
 
   const applyXpChange = useCallback((amount) => {
     let newXp = xpRef.current + amount, newLevel = levelRef.current;
     while (newXp >= newLevel * 100) { newXp -= newLevel * 100; newLevel++; }
     while (newXp < 0 && newLevel > 1) { newLevel--; newXp += newLevel * 100; }
     if (newLevel === 1 && newXp < 0) newXp = 0;
-    // Update the refs immediately (not just via the useEffect below) so that
-    // if this fires twice back-to-back — e.g. a double-tap before the modal
-    // closes — the second call adds on top of the first instead of both
-    // reading the same stale xp/level and silently overwriting each other.
     xpRef.current = newXp; levelRef.current = newLevel;
     setXp(newXp); setLevel(newLevel);
   }, []);
 
  const handleQuestClick = (quest) => {
-  if (quest.completed) {
-    return;
-  }
-
+  if (quest.completed) return;
   setDetailQuestId(quest.id);
 };
 
   const handleProofConfirm = (questId, img) => {
     const quest = quests.find(q => q.id === questId);
-    // Guard against the confirm callback firing twice for the same quest
-    // (e.g. a double-tap before the modal finishes closing) — without this,
-    // XP would either get applied twice or, depending on timing, lost.
     if (!quest || quest.completed) { setProofModalId(null); setDetailQuestId(null); return; }
     setProofImages(prev => ({ ...prev, [questId]: img }));
     setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true, progress: 0 } : q));
@@ -1434,14 +1451,15 @@ export default function QuestDailyApp() {
     setCompletionQuest(quest || null);
   };
 
-  // Saves how far along the quest was (reps done / seconds left) so the
-  // person can pick back up where they left off next time they open it.
   const handleCancelProof = (progress) => {
     if (proofModalId && progress !== undefined) {
       setQuests(prev => prev.map(q => q.id === proofModalId ? { ...q, progress } : q));
     }
     setProofModalId(null);
   };
+
+  // If the component hasn't safely mounted yet, return null so server/client HTML match identically (prevents crashes).
+  if (!isMounted) return null;
 
   const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
   const allDone = quests.length > 0 && quests.every(q => q.completed);
@@ -1461,7 +1479,7 @@ export default function QuestDailyApp() {
         
         <AnimatedBackground dark={dark} />
 
-        {showInstallPrompt && <IOSInstallPrompt onDismiss={handleDismissInstall} dark={dark} />}
+        {showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} dark={dark} />}
 
         {proofModal && (
           <CameraModal quest={proofModal} dark={dark}
@@ -1530,9 +1548,7 @@ export default function QuestDailyApp() {
                   {quests.map((quest, i) => (
                     <div key={quest.id}>
                       {i > 0 && <div className={`border-t ${sep} ml-[58px]`} />}
-                      <button onClick={() => {
-  if (!quest.completed) handleQuestClick(quest);
-}}
+                      <button onClick={() => { if (!quest.completed) handleQuestClick(quest); }}
                         className={`w-full flex items-center gap-3.5 px-4 py-[18px] text-left active:bg-black/5 transition-all`}>
                         <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-300 ${quest.completed ? 'bg-[#34C759] border-[#34C759] shadow-[0_0_10px_rgba(52,199,89,0.4)]' : dark ? 'border-zinc-600' : 'border-gray-300'}`}>
                           {quest.completed && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
