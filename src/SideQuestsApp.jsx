@@ -1347,7 +1347,8 @@ export default function QuestDailyApp() {
     const savedDark = localStorage.getItem('sq_dark');
     setDark(savedDark !== null ? savedDark === 'true' : window.matchMedia('(prefers-color-scheme: dark)').matches);
     
-    if (!localStorage.getItem('sq_has_seen_install')) {
+    // Using "_v2" here guarantees it will pop up for everyone again
+    if (!localStorage.getItem('sq_has_seen_install_v2')) {
       setShowInstallPrompt(true);
     }
 
@@ -1377,7 +1378,7 @@ export default function QuestDailyApp() {
   }, [dark, isMounted]);
 
   const handleDismissInstall = () => {
-    localStorage.setItem('sq_has_seen_install', 'true');
+    localStorage.setItem('sq_has_seen_install_v2', 'true');
     setShowInstallPrompt(false);
   };
   
@@ -1458,7 +1459,6 @@ export default function QuestDailyApp() {
     setProofModalId(null);
   };
 
-  // If the component hasn't safely mounted yet, return null so server/client HTML match identically (prevents crashes).
   if (!isMounted) return null;
 
   const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
