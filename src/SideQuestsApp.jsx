@@ -454,7 +454,7 @@ const QUEST_ABOUT = {
   q5: "A brisk walk outside boosts circulation, mood, and gives your eyes a break.", q6: "Staying hydrated helps your body perform better and keeps your mind sharp.",
   q7: "A short meditation resets your focus and lowers stress before it builds up.", q8: "Stretching keeps your muscles loose and your joints moving.",
   q9: "A balanced, whole-food meal fuels recovery and keeps your energy steady.", q10: "Consistent, sufficient sleep is the single biggest lever for recovery.",
-  q11: "A quick cardio burst spikes your heart rate and wakes up your whole body fast.", q12: "Situps target your core and build the stability everything else is built on.",
+  q11: "A quick cardio burst spikes gaps in your heart rate and wakes up your whole body fast.", q12: "Situps target your core and build the stability everything else is built on.",
   q13: "Journaling for a few minutes helps you process the day and plan the next one.", q14: "A green smoothie is an easy way to pack in nutrients when short on time.",
   q15: "Holding a plank builds isometric core strength that carries over to everything else.", q16: "Cycling is easy on the joints while still building serious cardio endurance.",
   q17: "Jump rope sharpens coordination and torches calories in a small amount of time.", q18: "A cold shower is a quick way to train discipline and wake up your nervous system.",
@@ -1321,67 +1321,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   );
 }
 
-// ─── CUSTOM QUEST CREATION MODAL ──────────────────────────────────────────────
-function CustomQuestModal({ onClose, onAdd, dark }) {
-  const [title, setTitle] = useState('');
-  const [type, setType] = useState('reps');
-  const [target, setTarget] = useState(20);
-
-  const cardBg = dark ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-gray-100';
-  const txt = dark ? 'text-white' : 'text-gray-900';
-  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
-  const pill = dark ? 'bg-zinc-800 text-white' : 'bg-gray-100 text-gray-800';
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!title.trim()) return;
-    const newQuest = {
-      id: 'custom_' + Date.now(),
-      text: title.trim(),
-      xp: 40,
-      completed: false,
-      progress: type === 'duration' ? target * 60 : 0,
-      [type === 'duration' ? 'duration' : 'reps']: type === 'duration' ? target * 60 : target
-    };
-    onAdd(newQuest);
-    onClose();
-  };
-
-  return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
-      <form onSubmit={handleSubmit} className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 border`}>
-        <h3 className={`text-xl font-bold mb-2 ${txt}`}>Create Custom Quest</h3>
-        <p className={`text-xs mb-4 ${sub}`}>Add a personalized daily fitness goal.</p>
-        
-        <input type="text" placeholder="e.g. Do 50 kettlebell swings" value={title} onChange={e => setTitle(e.target.value)}
-          className={`w-full px-4 py-3 rounded-xl text-sm mb-4 border outline-none ${dark ? 'bg-zinc-950 border-zinc-800 text-white focus:border-indigo-500' : 'bg-gray-50 border-gray-200 text-gray-900 focus:border-indigo-500'}`} required />
-        
-        <div className="flex gap-2 mb-4">
-          <button type="button" onClick={() => { setType('reps'); setTarget(20); }}
-            className={`flex-1 py-2.5 rounded-xl text-xs font-bold border transition-colors ${type === 'reps' ? 'bg-indigo-600 text-white border-indigo-600' : dark ? 'border-zinc-800 text-zinc-400' : 'border-gray-200 text-gray-600'}`}>
-            Reps-based
-          </button>
-          <button type="button" onClick={() => { setType('duration'); setTarget(3); }}
-            className={`flex-1 py-2.5 rounded-xl text-xs font-bold border transition-colors ${type === 'duration' ? 'bg-indigo-600 text-white border-indigo-600' : dark ? 'border-zinc-800 text-zinc-400' : 'border-gray-200 text-gray-600'}`}>
-            Time-based (Mins)
-          </button>
-        </div>
-
-        <div className="mb-6">
-          <label className={`block text-xs font-semibold mb-1.5 ${sub}`}>Target {type === 'duration' ? 'Minutes' : 'Count'}: {target}</label>
-          <input type="range" min={type === 'duration' ? 1 : 5} max={type === 'duration' ? 15 : 100} step={type === 'duration' ? 1 : 5} value={target} onChange={e => setTarget(Number(e.target.value))}
-            className="w-full accent-indigo-500" />
-        </div>
-
-        <div className="flex gap-3">
-          <button type="button" onClick={onClose} className={`flex-1 py-3 rounded-[14px] text-sm font-semibold ${pill}`}>Cancel</button>
-          <button type="submit" className="flex-[2] py-3 rounded-[14px] text-sm font-semibold bg-indigo-600 text-white shadow-lg active:scale-95 transition-transform">Add Objective</button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function QuestDailyApp() {
   const [isMounted, setIsMounted] = useState(false);
@@ -1394,7 +1333,6 @@ export default function QuestDailyApp() {
   const [lastReset, setLastReset] = useState(0);
   const [proofImages, setProofImages] = useState({});
   const [activeTab, setActiveTab] = useState('all');
-  const [showCustomModal, setShowCustomModal] = useState(false);
 
   useEffect(() => {
     setIsMounted(true);
@@ -1541,7 +1479,6 @@ export default function QuestDailyApp() {
       <div className="relative w-full max-w-[430px] flex flex-col min-h-screen overflow-hidden shadow-2xl bg-inherit">
         <AnimatedBackground dark={dark} />
         {showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} dark={dark} />}
-        {showCustomModal && <CustomQuestModal onClose={() => setShowCustomModal(false)} onAdd={q => setQuests(p => [q, ...p])} dark={dark} />}
         {proofModal && <CameraModal quest={proofModal} dark={dark} onConfirm={img => handleProofConfirm(proofModal.id, img)} onCancel={handleCancelProof} />}
         
         {viewingProof && (
@@ -1560,7 +1497,7 @@ export default function QuestDailyApp() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <LogoIcon size={34} dark={dark} />
-                  <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>QuestDaily</h1>
+                  <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>QuestDaily[cite: 1]</h1>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20 font-bold text-xs shadow-sm">
@@ -1608,9 +1545,6 @@ export default function QuestDailyApp() {
 
               <div className="flex items-center justify-between px-1">
                 <p className={`text-[11px] font-bold uppercase tracking-widest ${sub}`}>Today's Objectives</p>
-                <button onClick={() => setShowCustomModal(true)} className="text-[11px] font-bold text-indigo-500 hover:text-indigo-400">
-                  + Add Goal
-                </button>
               </div>
 
               {/* Complete Render Loop */}
