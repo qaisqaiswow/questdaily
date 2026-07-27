@@ -31,6 +31,49 @@ const SOURCE_DOWNLOADED_LABELS = [
 ];
 const SOURCE_LABELS = [SOURCE_CAMERA_LABEL, ...SOURCE_DOWNLOADED_LABELS];
 
+// ─── AUDIO FEEDBACK (WEB AUDIO API) ──────────────────────────────────────────
+const playAudioCue = (type) => {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+
+    if (type === 'rep') {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, now); // D5
+      osc.frequency.exponentialRampToValueAtTime(880, now + 0.12); // A5
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(now); osc.stop(now + 0.15);
+    } else if (type === 'complete') {
+      const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+      notes.forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+        gain.gain.setValueAtTime(0.2, now + idx * 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.35);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(now + idx * 0.08); osc.stop(now + idx * 0.08 + 0.35);
+      });
+    } else if (type === 'tick') {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(800, now);
+      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(now); osc.stop(now + 0.05);
+    }
+  } catch (e) { /* ignore audio errors on restricted browsers */ }
+};
+
 // ─── POSE MODEL SETUP (real rep counting via joint tracking) ────────────────
 let landmarkerPromise = null;
 function getPoseLandmarker() {
@@ -172,37 +215,37 @@ function updatePoseRepState(state, questId, landmarks, now) {
 
 // ─── QUEST LABELS & PROFILES ─────────────────────────────────────────────────
 const QUEST_LABELS = {
-  q1:  { type: 'reps', activity: ['person doing pushups on floor', 'pushup exercise'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
-  q2:  { type: 'reps', activity: ['person doing squats exercise', 'squat workout legs bent'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
-  q4:  { type: 'reps', activity: ['person doing pullups on bar', 'pullup bar exercise'], label: 'doing pullups', bodyParts: ['Lats', 'Upper Back', 'Biceps', 'Forearms'] },
-  q12: { type: 'reps', activity: ['person doing situps or crunches', 'abdominal exercise on floor'], label: 'doing situps', bodyParts: ['Abs', 'Obliques', 'Hip Flexors'] },
-  q17: { type: 'reps', activity: ['person jumping rope', 'skipping rope exercise'], label: 'jumping rope', bodyParts: ['Calves', 'Quads', 'Shoulders', 'Cardio'] },
-  q23: { type: 'reps', activity: ['person doing lunges exercise', 'lunge workout legs split stance'], label: 'doing lunges', bodyParts: ['Quads', 'Glutes', 'Hamstrings'] },
-  q3:  { type: 'map', activity: ['gps tracking map route screenshot', 'fitness tracker map running route'], label: 'running map screenshot' },
-  q16: { type: 'map', activity: ['gps tracking map route screenshot', 'cycling route map on phone screen'], label: 'cycling map screenshot' },
-  q5:  { type: 'map', activity: ['gps tracking map route screenshot', 'walking route map tracker'], label: 'walking map screenshot' },
-  q22: { type: 'map', activity: ['gps tracking map route screenshot', 'step counter fitness app screenshot'], label: 'step tracking map' },
-  q9:  { type: 'food', activity: ['healthy food meal salad vegetables on a plate', 'nutritious meal in a bowl'], label: 'plate of healthy food' },
-  q19: { type: 'food', activity: ['clean healthy meal on plate', 'plate of vegetables and whole foods'], label: 'plate of clean food' },
-  q20: { type: 'food', activity: ['cooked food on a plate', 'homemade meal in a bowl or plate'], label: 'cooked meal' },
-  q14: { type: 'food', activity: ['glass of green smoothie', 'blended green juice drink'], label: 'green smoothie' },
-  q6:  { type: 'food', activity: ['glass of water', 'reusable water bottle filled'], label: 'water bottle' },
-  q7:  { type: 'action', activity: ['person meditating cross-legged', 'mindfulness exercise'], label: 'meditating' },
-  q8:  { type: 'action', activity: ['person stretching muscles', 'yoga stretch pose'], label: 'stretching', bodyParts: ['Full Body', 'Flexibility'] },
-  q10: { type: 'action', activity: ['person sleeping in bed', 'person resting in bed eyes closed'], label: 'getting good sleep' },
-  q11: { type: 'action', activity: ['person doing jumping jacks or burpees'], label: 'doing cardio', bodyParts: ['Cardio', 'Full Body'] },
-  q13: { type: 'action', activity: ['handwriting in notebook or journal'], label: 'journaling' },
-  q15: { type: 'action', activity: ['person doing plank exercise', 'plank position core exercise'], label: 'holding a plank', bodyParts: ['Core', 'Shoulders'] },
-  q18: { type: 'action', activity: ['shower running water', 'bathroom shower head with water'], label: 'in the shower' },
-  q21: { type: 'action', activity: ['person breathing deeply eyes closed'], label: 'deep breathing' },
-  q24: { type: 'action', activity: ['person sleeping in bed at night', 'sleeping in dark bedroom'], label: 'sleeping early' },
-  q25: { type: 'action', activity: ['person in ice bath tub', 'cold plunge tub with ice'], label: 'in a cold plunge' },
-  q26: { type: 'action', activity: ['person doing a wall sit exercise against a wall'], label: 'holding a wall sit', bodyParts: ['Quads', 'Core'] },
-  q27: { type: 'action', activity: ['person doing a glute bridge exercise on floor'], label: 'holding a glute bridge', bodyParts: ['Glutes', 'Core'] },
-  q28: { type: 'action', activity: ['person doing high knees exercise'], label: 'doing high knees', bodyParts: ['Cardio', 'Quads'] },
-  q29: { type: 'action', activity: ['person doing mountain climbers exercise'], label: 'doing mountain climbers', bodyParts: ['Core', 'Cardio'] },
-  q30: { type: 'action', activity: ['person doing a superman back exercise lying face down'], label: 'holding a superman pose', bodyParts: ['Lower Back', 'Glutes'] },
-  q31: { type: 'action', activity: ['person doing burpees exercise'], label: 'doing burpees', bodyParts: ['Full Body', 'Cardio'] },
+  q1:  { type: 'reps', category: 'strength', activity: ['person doing pushups on floor', 'pushup exercise'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
+  q2:  { type: 'reps', category: 'strength', activity: ['person doing squats exercise', 'squat workout legs bent'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
+  q4:  { type: 'reps', category: 'strength', activity: ['person doing pullups on bar', 'pullup bar exercise'], label: 'doing pullups', bodyParts: ['Lats', 'Upper Back', 'Biceps', 'Forearms'] },
+  q12: { type: 'reps', category: 'strength', activity: ['person doing situps or crunches', 'abdominal exercise on floor'], label: 'doing situps', bodyParts: ['Abs', 'Obliques', 'Hip Flexors'] },
+  q17: { type: 'reps', category: 'cardio', activity: ['person jumping rope', 'skipping rope exercise'], label: 'jumping rope', bodyParts: ['Calves', 'Quads', 'Shoulders', 'Cardio'] },
+  q23: { type: 'reps', category: 'strength', activity: ['person doing lunges exercise', 'lunge workout legs split stance'], label: 'doing lunges', bodyParts: ['Quads', 'Glutes', 'Hamstrings'] },
+  q3:  { type: 'map', category: 'cardio', activity: ['gps tracking map route screenshot', 'fitness tracker map running route'], label: 'running map screenshot' },
+  q16: { type: 'map', category: 'cardio', activity: ['gps tracking map route screenshot', 'cycling route map on phone screen'], label: 'cycling map screenshot' },
+  q5:  { type: 'map', category: 'cardio', activity: ['gps tracking map route screenshot', 'walking route map tracker'], label: 'walking map screenshot' },
+  q22: { type: 'map', category: 'cardio', activity: ['gps tracking map route screenshot', 'step counter fitness app screenshot'], label: 'step tracking map' },
+  q9:  { type: 'food', category: 'nutrition', activity: ['healthy food meal salad vegetables on a plate', 'nutritious meal in a bowl'], label: 'plate of healthy food' },
+  q19: { type: 'food', category: 'nutrition', activity: ['clean healthy meal on plate', 'plate of vegetables and whole foods'], label: 'plate of clean food' },
+  q20: { type: 'food', category: 'nutrition', activity: ['cooked food on a plate', 'homemade meal in a bowl or plate'], label: 'cooked meal' },
+  q14: { type: 'food', category: 'nutrition', activity: ['glass of green smoothie', 'blended green juice drink'], label: 'green smoothie' },
+  q6:  { type: 'food', category: 'nutrition', activity: ['glass of water', 'reusable water bottle filled'], label: 'water bottle' },
+  q7:  { type: 'action', category: 'recovery', activity: ['person meditating cross-legged', 'mindfulness exercise'], label: 'meditating' },
+  q8:  { type: 'action', category: 'recovery', activity: ['person stretching muscles', 'yoga stretch pose'], label: 'stretching', bodyParts: ['Full Body', 'Flexibility'] },
+  q10: { type: 'action', category: 'recovery', activity: ['person sleeping in bed', 'person resting in bed eyes closed'], label: 'getting good sleep' },
+  q11: { type: 'action', category: 'cardio', activity: ['person doing jumping jacks or burpees'], label: 'doing cardio', bodyParts: ['Cardio', 'Full Body'] },
+  q13: { type: 'action', category: 'recovery', activity: ['handwriting in notebook or journal'], label: 'journaling' },
+  q15: { type: 'action', category: 'strength', activity: ['person doing plank exercise', 'plank position core exercise'], label: 'holding a plank', bodyParts: ['Core', 'Shoulders'] },
+  q18: { type: 'action', category: 'recovery', activity: ['shower running water', 'bathroom shower head with water'], label: 'in the shower' },
+  q21: { type: 'action', category: 'recovery', activity: ['person breathing deeply eyes closed'], label: 'deep breathing' },
+  q24: { type: 'action', category: 'recovery', activity: ['person sleeping in bed at night', 'sleeping in dark bedroom'], label: 'sleeping early' },
+  q25: { type: 'action', category: 'recovery', activity: ['person in ice bath tub', 'cold plunge tub with ice'], label: 'in a cold plunge' },
+  q26: { type: 'action', category: 'strength', activity: ['person doing a wall sit exercise against a wall'], label: 'holding a wall sit', bodyParts: ['Quads', 'Core'] },
+  q27: { type: 'action', category: 'strength', activity: ['person doing a glute bridge exercise on floor'], label: 'holding a glute bridge', bodyParts: ['Glutes', 'Core'] },
+  q28: { type: 'action', category: 'cardio', activity: ['person doing high knees exercise'], label: 'doing high knees', bodyParts: ['Cardio', 'Quads'] },
+  q29: { type: 'action', category: 'cardio', activity: ['person doing mountain climbers exercise'], label: 'doing mountain climbers', bodyParts: ['Core', 'Cardio'] },
+  q30: { type: 'action', category: 'strength', activity: ['person doing a superman back exercise lying face down'], label: 'holding a superman pose', bodyParts: ['Lower Back', 'Glutes'] },
+  q31: { type: 'action', category: 'cardio', activity: ['person doing burpees exercise'], label: 'doing burpees', bodyParts: ['Full Body', 'Cardio'] },
 };
 
 const MOVEMENT_ACTION_IDS = new Set(['q8', 'q11', 'q15', 'q26', 'q27', 'q28', 'q29', 'q30', 'q31']);
@@ -240,12 +283,14 @@ const QUEST_POOL = [
 
 function randomizeQuest(pool) {
   if (pool.reps) {
-    const n = Math.floor(Math.random() * 55) + 1; // 1-55 reps
+    const n = Math.floor(Math.random() * 35) + 10; // 10-45 reps
     return { ...pool, reps: n, text: pool.textTemplate.replace('{n}', n), completed: false, progress: 0 };
   }
   if (pool.duration) {
-    const minutes = Math.floor(Math.random() * 5) + 1; // 1-5 minutes
-    return { ...pool, duration: minutes * 60, text: pool.textTemplate.replace('{n}', minutes), completed: false, progress: 0 };
+    const minutes = Math.floor(Math.random() * 3) + 1; // 1-3 minutes
+    const dur = minutes * 60;
+    // FIX: Initialize duration quests with full remaining time so `0 ?? dur` doesn't break timers
+    return { ...pool, duration: dur, text: pool.textTemplate.replace('{n}', minutes), completed: false, progress: dur };
   }
   return { ...pool, text: pool.textTemplate, completed: false, progress: 0 };
 }
@@ -281,8 +326,9 @@ async function checkPhotoAuthenticity(file, dataUrl, classifierLabels) {
 
 // ─── ICONS ───────────────────────────────────────────────────────────────────
 const LogoIcon = ({ size = 34, dark }) => (
-  <img src="/logo-transparent.png" alt="QuestDaily" width={size} height={size}
-    style={{ filter: dark ? 'invert(0)' : 'invert(1)', opacity: 0.9 }} />
+  <div className="flex items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 text-white font-black text-lg shadow-md" style={{ width: size, height: size }}>
+    Q
+  </div>
 );
 
 const SunIcon = () => (
@@ -296,77 +342,60 @@ const MoonIcon = () => (
   </svg>
 );
 const CheckIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="20 6 9 17 4 12"/>
   </svg>
 );
-
 const IOSShareIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
-    <polyline points="16 6 12 2 8 6"/>
-    <line x1="12" y1="2" x2="12" y2="15"/>
+    <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>
   </svg>
 );
-
 const IOSAddIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="3" width="18" height="18" rx="4" ry="4"/>
-    <line x1="12" y1="8" x2="12" y2="16"/>
-    <line x1="8" y1="12" x2="16" y2="12"/>
+    <rect x="3" y="3" width="18" height="18" rx="4" ry="4"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
   </svg>
 );
-
 const AndroidMenuIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-    <circle cx="12" cy="5" r="2.5"/>
-    <circle cx="12" cy="12" r="2.5"/>
-    <circle cx="12" cy="19" r="2.5"/>
+    <circle cx="12" cy="5" r="2.5"/><circle cx="12" cy="12" r="2.5"/><circle cx="12" cy="19" r="2.5"/>
   </svg>
 );
-
 const AndroidAddIcon = () => (
   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
-    <line x1="12" y1="18" x2="12.01" y2="18"/>
-    <line x1="9" y1="11" x2="15" y2="11"/>
-    <line x1="12" y1="8" x2="12" y2="14"/>
+    <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/><line x1="9" y1="11" x2="15" y2="11"/><line x1="12" y1="8" x2="12" y2="14"/>
   </svg>
 );
 
 // ─── AMBIENT ANIMATED BACKGROUND ───────────────────────────────────────────────
 const AnimatedBackground = ({ dark }) => {
   const vars = {
-    '--sq-streak-c1': dark ? 'rgba(139,92,246,0.55)' : 'rgba(99,102,241,0.30)',
-    '--sq-streak-c2': dark ? 'rgba(99,102,241,0.35)' : 'rgba(168,85,247,0.20)',
+    '--sq-streak-c1': dark ? 'rgba(139,92,246,0.45)' : 'rgba(99,102,241,0.20)',
+    '--sq-streak-c2': dark ? 'rgba(99,102,241,0.30)' : 'rgba(168,85,247,0.15)',
     '--sq-glow-1':    dark ? '#7c3aed' : '#c7d2fe',
     '--sq-glow-2':    dark ? '#4f46e5' : '#e0d4fc',
-    '--sq-glow-o':    dark ? 0.28 : 0.55,
+    '--sq-glow-o':    dark ? 0.22 : 0.45,
   };
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden z-0" style={vars}>
       <div className="sq-streak sq-streak-1" />
       <div className="sq-streak sq-streak-2" />
-      <div className="sq-streak sq-streak-3" />
       <div className="sq-glow sq-glow-1" />
       <div className="sq-glow sq-glow-2" />
       <style>{`
         .sq-streak { position: absolute; width: 180%; height: 1.5px; left: -40%; background: linear-gradient(90deg, transparent, var(--sq-streak-c1), var(--sq-streak-c2), transparent); transform-origin: center; filter: blur(0.5px); opacity: 0.7; }
         .sq-streak-1 { top: 14%;  transform: rotate(-18deg); animation: sq-drift-a 9s ease-in-out infinite; }
         .sq-streak-2 { top: 42%;  transform: rotate(-12deg); animation: sq-drift-b 13s ease-in-out infinite; opacity: 0.45; }
-        .sq-streak-3 { top: 68%;  transform: rotate(-22deg); animation: sq-drift-a 11s ease-in-out infinite reverse; opacity: 0.35; }
         @keyframes sq-drift-a { 0% { transform: translateX(-6%) rotate(-18deg); opacity: 0.35; } 50% { transform: translateX(6%)  rotate(-16deg); opacity: 0.8; } 100% { transform: translateX(-6%) rotate(-18deg); opacity: 0.35; } }
         @keyframes sq-drift-b { 0% { transform: translateX(5%)  rotate(-12deg); opacity: 0.25; } 50% { transform: translateX(-5%) rotate(-10deg); opacity: 0.55; } 100% { transform: translateX(5%)  rotate(-12deg); opacity: 0.25; } }
         .sq-glow { position: absolute; width: 260px; height: 260px; border-radius: 999px; filter: blur(70px); opacity: var(--sq-glow-o); }
         .sq-glow-1 { top: -60px; left: -60px; background: var(--sq-glow-1); animation: sq-float 10s ease-in-out infinite; }
         .sq-glow-2 { bottom: -80px; right: -60px; background: var(--sq-glow-2); animation: sq-float 12s ease-in-out infinite reverse; }
         @keyframes sq-float { 0%, 100% { transform: translate(0,0) scale(1); } 50% { transform: translate(20px, -15px) scale(1.15); } }
-        @keyframes sq-pop-in { 0% { opacity: 0; transform: scale(0.9) translateY(8px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
+        @keyframes sq-pop-in { 0% { opacity: 0; transform: scale(0.95) translateY(6px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
         @keyframes sq-check-in { 0% { opacity: 0; transform: scale(0.4); } 60% { opacity: 1; transform: scale(1.15); } 100% { opacity: 1; transform: scale(1); } }
-        @keyframes sq-icon-float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-4px); } }
-        .sq-anim-pop { animation: sq-pop-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
-        .sq-anim-check { animation: sq-check-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
-        .sq-anim-float { animation: sq-icon-float 3.2s ease-in-out infinite; }
+        .sq-anim-pop { animation: sq-pop-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+        .sq-anim-check { animation: sq-check-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
       `}</style>
     </div>
   );
@@ -442,16 +471,14 @@ const QUEST_ABOUT = {
 };
 
 const QUEST_QUOTES = ["Small steps every day lead to big changes.", "Discipline is choosing between what you want now and what you want most.", "Progress, not perfection.", "The body achieves what the mind believes.", "One quest at a time.", "Consistency beats intensity.", "You didn't come this far to only come this far."];
-const QUEST_QUOTE = { q1: "Strength grows one rep at a time.", q2: "Every squat builds a stronger foundation.", q3: "Miles don't lie — you earned this one.", q4: "Small steps every day lead to big changes.", q5: "One step at a time is still progress.", q6: "Small steps every day lead to big changes.", q7: "A quiet mind carries the loudest strength.", q8: "Flexibility today, resilience tomorrow.", q9: "You fueled the body that carries you.", q10: "Rest is where the real gains happen.", q11: "Energy in motion stays in motion.", q12: "A strong core holds everything else together.", q13: "The pen remembers what the mind forgets.", q14: "Good fuel, good day.", q15: "Stillness can be the hardest work of all.", q16: "Every mile ridden is a mile earned.", q17: "Rhythm builds more than just your legs.", q18: "Discomfort today, discipline for life.", q19: "Progress, not perfection.", q20: "What you cook is what you become.", q21: "Breathe in control, breathe out doubt.", q22: "One step at a time is still progress.", q23: "Balance is built one side at a time.", q24: "Tonight's rest is tomorrow's edge.", q25: "You didn't come this far to only come this far." };
 
 const QuestIconBadge = ({ questId, size = 96, dark, floating = false }) => {
   const theme = QUEST_THEME[questId] || { icon: 'target', grad: 'from-indigo-500 to-purple-600' };
   const Icon = QuestSvg[theme.icon] || QuestSvg.target;
   return (
-    <div className={`relative flex items-center justify-center rounded-full bg-gradient-to-br ${theme.grad} ${floating ? 'sq-anim-float' : ''}`}
-      style={{ width: size, height: size, boxShadow: `0 0 0 1px rgba(255,255,255,0.15) inset, 0 8px 30px -8px rgba(139,92,246,0.65)` }}>
-      <div className="absolute inset-[3px] rounded-full border border-white/25" />
-      <Icon width={Math.round(size * 0.42)} height={Math.round(size * 0.42)} className="text-white relative z-10" />
+    <div className={`relative flex items-center justify-center rounded-2xl bg-gradient-to-br ${theme.grad} shadow-lg`}
+      style={{ width: size, height: size }}>
+      <Icon width={Math.round(size * 0.45)} height={Math.round(size * 0.45)} className="text-white relative z-10" />
     </div>
   );
 };
@@ -482,8 +509,7 @@ const ProgressRing = ({ pct, size = 56, stroke = 5, dark }) => {
 // ─── INSTALL PROMPT ONBOARDING MODAL ──────────────────────────────────────────
 function DeviceInstallPrompt({ onDismiss, dark }) {
   const [step, setStep] = useState(0);
-  const [os, setOs] = useState(null); // 'ios' or 'android'
-  
+  const [os, setOs] = useState(null);
   const cardBg = dark ? 'bg-zinc-900' : 'bg-white';
   const txt = dark ? 'text-white' : 'text-gray-900';
   const sub = dark ? 'text-zinc-400' : 'text-gray-500';
@@ -497,7 +523,6 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
       <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-zinc-800' : 'border-gray-100'}`}>
-        
         {step === 0 && (
           <>
             <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install QuestDaily</h3>
@@ -515,7 +540,6 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
             </div>
           </>
         )}
-
         {step > 0 && os === 'ios' && (
           <>
             <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install on iOS</h3>
@@ -541,7 +565,6 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
             </div>
           </>
         )}
-
         {step > 0 && os === 'android' && (
           <>
             <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install on Android</h3>
@@ -602,9 +625,9 @@ function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMar
         <div className={`relative overflow-hidden rounded-[26px] px-6 pt-10 pb-8 flex flex-col items-center text-center bg-gradient-to-b ${dark ? 'from-[#1c1530] to-[#0d0a17]' : 'from-indigo-50 to-white'} border ${dark ? 'border-white/10' : 'border-gray-100'}`}>
           <AnimatedBackground dark={dark} />
           <div className="relative z-10 flex flex-col items-center">
-            <QuestIconBadge questId={quest.id} size={92} dark={dark} floating />
+            <QuestIconBadge questId={quest.id} size={92} dark={dark} />
             <h2 className={`mt-5 text-[22px] font-bold leading-tight max-w-[240px] ${txt}`}>{quest.text}</h2>
-            <span className={`mt-3 px-3 py-1 rounded-full text-xs font-semibold bg-gradient-to-r ${theme.grad} text-white`}>
+            <span className={`mt-3 px-3 py-1 rounded-full text-xs font-semibold bg-gradient-to-r ${theme.grad} text-white shadow-sm`}>
               +{quest.xp} XP
             </span>
           </div>
@@ -635,7 +658,7 @@ function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack }) {
   const sub = dark ? 'text-zinc-400' : 'text-gray-500';
   const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
   const cardBg = dark ? 'bg-zinc-900/70' : 'bg-white';
-  const quote = useMemo(() => QUEST_QUOTE[quest?.id] || QUEST_QUOTES[Math.floor(Math.random() * QUEST_QUOTES.length)], [quest?.id]);
+  const quote = useMemo(() => QUEST_QUOTES[Math.floor(Math.random() * QUEST_QUOTES.length)], []);
 
   return (
     <div className="sq-anim-pop relative z-10 min-h-screen flex flex-col">
@@ -656,13 +679,8 @@ function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack }) {
 
       <div className="px-4">
         <div className={`relative overflow-hidden rounded-[26px] px-6 pt-12 pb-10 flex flex-col items-center text-center bg-gradient-to-b ${dark ? 'from-[#0e2318] to-[#081712]' : 'from-emerald-50 to-white'} border ${dark ? 'border-emerald-500/20' : 'border-emerald-100'}`}>
-          <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-emerald-500/25 blur-3xl" />
-            <div className="absolute -bottom-14 -right-10 w-48 h-48 rounded-full bg-green-400/20 blur-3xl" />
-          </div>
           <div className="relative z-10 flex flex-col items-center">
-            <div className="sq-anim-check w-24 h-24 rounded-full flex items-center justify-center border-2 border-emerald-400"
-              style={{ boxShadow: '0 0 40px -6px rgba(52,211,153,0.55)' }}>
+            <div className="sq-anim-check w-24 h-24 rounded-full flex items-center justify-center border-2 border-emerald-400 shadow-[0_0_40px_-6px_rgba(52,211,153,0.55)]">
               <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
@@ -721,14 +739,17 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const [poseReady,     setPoseReady]     = useState(false);
   const [poseError,     setPoseError]     = useState(null);
   const [repCue,        setRepCue]        = useState('Get in frame');
-  const [notice,        setNotice]        = useState(() => {
-    if (quest.reps && quest.progress > 0) return `Resuming — you already logged ${quest.progress} of ${quest.reps} reps.`;
-    if (quest.duration && quest.progress != null && quest.progress < quest.duration) {
+  
+  // FIX: Accurate notice calculation handling remaining duration
+  const [notice, setNotice] = useState(() => {
+    if (quest.reps && quest.progress > 0) return `Resuming — you logged ${quest.progress} of ${quest.reps} reps.`;
+    if (quest.duration && typeof quest.progress === 'number' && quest.progress < quest.duration && quest.progress > 0) {
       const m = Math.floor(quest.progress / 60), s = quest.progress % 60;
       return `Resuming — ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')} left on the clock.`;
     }
     return null;
   });
+
   const [scanning,      setScanning]      = useState(false);
   const [uploading,     setUploading]     = useState(false);
   const [liveScore,     setLiveScore]     = useState(0);
@@ -739,8 +760,14 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const [lastLabel,     setLastLabel]     = useState('');
   const [uploadedProof, setUploadedProof] = useState(null);
 
-  const [secondsLeft, setSecondsLeft] = useState(quest.duration ? (quest.progress ?? quest.duration) : 0);
+  // FIX: Properly initialize timer state without fallback to 0
+  const [secondsLeft, setSecondsLeft] = useState(() => {
+    if (!quest.duration) return 0;
+    if (typeof quest.progress === 'number' && quest.progress > 0) return quest.progress;
+    return quest.duration;
+  });
   const [timerRunning, setTimerRunning] = useState(false);
+  const targetTimeRef = useRef(null);
 
   const labels = QUEST_LABELS[quest.id];
   const questType = labels?.type || 'action';
@@ -755,30 +782,34 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
   let instructionText = `Show the camera you're ${labels?.label ?? 'doing it'}…`;
   let uiSubtext = quest.text;
+  if (questType === 'map') { instructionText = "Upload metric screenshot (Strava, Nike, Garmin etc.)"; uiSubtext = "Must clearly state distance & active duration summary logs."; }
+  else if (questType === 'food') { instructionText = "Take a clear picture of the food on your plate."; uiSubtext = "Must be a real photo of a prepared meal."; }
+  else if (questType === 'reps') { instructionText = `Position camera for full-body tracking: ${quest.reps} reps.`; uiSubtext = "Keep your entire working frame visible to log movements."; }
 
-  if (questType === 'map') { instructionText = "Upload a metric summary screenshot (Strava, Nike, Garmin etc.)"; uiSubtext = "Must clearly state distance metrics & active time duration summary logs."; }
-  else if (questType === 'food') { instructionText = "Take a clear picture of the food on your plate."; uiSubtext = "Must be a real photo of a prepared meal or plate."; }
-  else if (questType === 'reps') { instructionText = `Position the camera for full-body tracking: ${quest.reps} reps.`; uiSubtext = "Keep your entire working frame visible to log movements."; }
-
+  // FIX: Accurate timestamp-based timer that prevents mobile sleep / background drift
   useEffect(() => {
     let intervalId = null;
     if (timerRunning && secondsLeft > 0) {
+      targetTimeRef.current = Date.now() + secondsLeft * 1000;
       intervalId = setInterval(() => {
-        setSecondsLeft(prev => {
-          if (prev <= 1) {
-            setTimerRunning(false);
-            if (!quest.reps && questType === 'action') {
-              setConfirmed(true);
-              confirmedRef.current = true;
-            }
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
+        const rem = Math.round((targetTimeRef.current - Date.now()) / 1000);
+        if (rem <= 3 && rem > 0) {
+          playAudioCue('tick');
+        }
+        if (rem <= 0) {
+          setSecondsLeft(0);
+          setTimerRunning(false);
+          setConfirmed(true);
+          confirmedRef.current = true;
+          playAudioCue('complete');
+          if (navigator.vibrate) navigator.vibrate([100, 50, 100, 50, 200]);
+        } else {
+          setSecondsLeft(rem);
+        }
+      }, 250);
     }
     return () => clearInterval(intervalId);
-  }, [timerRunning, secondsLeft, questType, quest.reps]);
+  }, [timerRunning]);
 
   const formatTimerString = (secs) => `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 
@@ -856,6 +887,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     setRepCue('Get in frame');
   }, [quest.reps, quest.progress]);
 
+  // AI Classification Scan Loop
   useEffect(() => {
     if (quest.reps) return undefined;
     if (phase !== 'live' || !modelReady || confirmed || uploading || !labels || !classifierLabels.length) return undefined;
@@ -901,7 +933,14 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const passed = actScore > negScore && actScore >= PASS_THRESHOLD;
         passStreakRef.current = passed ? passStreakRef.current + 1 : 0;
         setPassStreak(passStreakRef.current);
-        if (passStreakRef.current >= REQUIRED_PASSES) { confirmedRef.current = true; setConfirmed(true); }
+
+        // FIX: For duration quests, vision scan acts as feedback; timer completion unlocks the quest!
+        if (!quest.duration && passStreakRef.current >= REQUIRED_PASSES) { 
+          confirmedRef.current = true; 
+          setConfirmed(true);
+          playAudioCue('complete');
+          if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+        }
       } catch (err) { 
         consecutiveErrors += 1;
         if (consecutiveErrors >= 3 && isCurrentRun()) setModelError('AI analysis is temporarily unavailable. Try closing and reopening the camera.');
@@ -912,8 +951,9 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     };
     scanLoop();
     return () => { disposed = true; scanRunRef.current += 1; clearTimeout(scanTimerRef.current); };
-  }, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, activeNegatives]);
+  }, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, quest.duration, activeNegatives]);
 
+  // Pose Skeleton Tracking Loop
   useEffect(() => {
     if (!hasSkeletonTracking || phase !== 'live' || confirmed) return undefined;
     let cancelled = false;
@@ -940,9 +980,13 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                 setRepCue(update.cue);
                 if (update.counted) {
                   setRepsDone(update.reps);
+                  playAudioCue('rep');
+                  if (navigator.vibrate) navigator.vibrate(40);
                   if (update.reps >= quest.reps) {
                     confirmedRef.current = true;
                     setConfirmed(true);
+                    playAudioCue('complete');
+                    if (navigator.vibrate) navigator.vibrate([100, 50, 100, 50, 200]);
                   }
                 }
               } else if (!landmarks && quest.reps) {
@@ -958,22 +1002,13 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
                 if (landmarks && !confirmedRef.current) {
-                  const Wc = canvas.width;
-                  const Hc = canvas.height;
-                  const Wv = video.videoWidth || 640;
-                  const Hv = video.videoHeight || 480;
+                  const Wc = canvas.width, Hc = canvas.height;
+                  const Wv = video.videoWidth || 640, Hv = video.videoHeight || 480;
                   const scale = Math.max(Wc / Wv, Hc / Hv);
-                  const Wr = Wv * scale;
-                  const Hr = Hv * scale;
-                  const Ox = (Wc - Wr) / 2;
-                  const Oy = (Hc - Hr) / 2;
+                  const Wr = Wv * scale, Hr = Hv * scale;
+                  const Ox = (Wc - Wr) / 2, Oy = (Hc - Hr) / 2;
 
-                  const mapPt = (pt) => ({
-                    x: Ox + pt.x * Wr,
-                    y: Oy + pt.y * Hr,
-                    vis: pt.visibility ?? 1
-                  });
-
+                  const mapPt = (pt) => ({ x: Ox + pt.x * Wr, y: Oy + pt.y * Hr, vis: pt.visibility ?? 1 });
                   const mapped = landmarks.map(mapPt);
                   const currentPhase = poseStateRef.current.phase;
                   const lineColor = currentPhase === 'down' ? '#4ade80' : '#38bdf8'; 
@@ -988,8 +1023,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   ctx.strokeStyle = lineColor;
 
                   POSE_CONNECTIONS.forEach(([i, j]) => {
-                    const p1 = mapped[i];
-                    const p2 = mapped[j];
+                    const p1 = mapped[i], p2 = mapped[j];
                     if (p1 && p2 && p1.vis > 0.4 && p2.vis > 0.4) {
                       ctx.beginPath();
                       ctx.moveTo(p1.x, p1.y);
@@ -1003,7 +1037,6 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   mapped.forEach((pt, idx) => {
                     if (pt.vis > 0.4 && (idx === 0 || (idx >= 11 && idx <= 32))) {
                       const isMajorJoint = [11, 12, 13, 14, 23, 24, 25, 26].includes(idx);
-                      
                       ctx.beginPath();
                       ctx.arc(pt.x, pt.y, isMajorJoint ? 7 : 5, 0, 2 * Math.PI);
                       ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
@@ -1016,26 +1049,18 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                       ctx.arc(pt.x, pt.y, isMajorJoint ? 3 : 2, 0, 2 * Math.PI);
                       ctx.fillStyle = '#ffffff';
                       ctx.fill();
-
-                      if ([11, 12, 23, 24].includes(idx)) {
-                        ctx.beginPath();
-                        ctx.arc(pt.x, pt.y, 12, 0, 2 * Math.PI);
-                        ctx.lineWidth = 1;
-                        ctx.strokeStyle = shadowColor;
-                        ctx.stroke();
-                      }
                     }
                   });
                   ctx.restore();
                 }
               }
-            } catch (err) { /* transient frame errors are fine, keep looping */ }
+            } catch (err) { /* transient frame errors are fine */ }
           }
           if (!cancelled) poseRafRef.current = requestAnimationFrame(loop);
         };
         poseRafRef.current = requestAnimationFrame(loop);
       } catch (err) {
-        if (!cancelled) setPoseError('Could not load the pose tracking model. Check your connection and try again.');
+        if (!cancelled) setPoseError('Could not load pose tracking. Check your connection.');
       }
     })();
     return () => {
@@ -1072,11 +1097,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           const authCheck = await checkPhotoAuthenticity(file, dataUrl, SOURCE_LABELS);
           if (authCheck.suspicious) {
             setPassStreak(0);
-            setNotice("This looks like a stock photo, screenshot, or image pulled from the internet rather than one you took yourself. Please upload an original photo.");
+            setNotice("This looks like a stock photo or screenshot. Please upload an original photo.");
             return;
           }
           if (!authCheck.hasCameraMetadata) {
-            setSourceWarning("Heads up — this photo has no camera metadata, so we can't fully confirm it's an original. Live camera capture is the most reliable option.");
+            setSourceWarning("Heads up — this photo has no EXIF metadata, so we can't fully verify it's original.");
           }
         }
         const classifier = await getClassifier();
@@ -1086,7 +1111,8 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         setLiveScore(Math.round(actScore * 100)); setLastLabel(results[0]?.label ?? '');
         if (actScore > negScore && actScore >= (PASS_THRESHOLD - 0.05)) {
           setPassStreak(REQUIRED_PASSES); confirmedRef.current = true; accepted = true; setConfirmed(true);
-        } else { setPassStreak(0); setNotice("Verification failed. Please make sure you upload a clear activity summary log showing distance and elapsed time metrics."); }
+          playAudioCue('complete');
+        } else { setPassStreak(0); setNotice("Verification failed. Make sure your upload shows clear activity logs or subject."); }
       } catch (err) { } finally { setScanning(false); setUploading(false); if (!accepted) { setUploadedProof(null); retryCamera(); } }
     };
     reader.readAsDataURL(file);
@@ -1095,7 +1121,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const handleCancel = () => {
     stopCamera();
     if (quest.reps) onCancel(repsDone > 0 ? repsDone : undefined);
-    else if (quest.duration) onCancel(secondsLeft < quest.duration ? secondsLeft : undefined);
+    else if (quest.duration) onCancel(secondsLeft < quest.duration && secondsLeft > 0 ? secondsLeft : quest.duration);
     else onCancel(undefined);
   };
 
@@ -1137,34 +1163,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
         <div className="relative flex-1 bg-black overflow-hidden mx-4 rounded-3xl shadow-inner border border-white/10">
           <video ref={videoRef} autoPlay playsInline muted className={`w-full h-full object-cover transition-opacity duration-500 ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
-
-          <canvas
-            ref={skeletonCanvasRef}
-            className={`absolute inset-0 w-full h-full pointer-events-none object-cover z-10 transition-opacity duration-500 ${phase === 'live' && !uploadedProof && hasSkeletonTracking ? 'opacity-100' : 'opacity-0'}`}
-          />
-
-          {phase === 'live' && !uploadedProof && labels?.bodyParts && (
-            <div className="absolute inset-0 pointer-events-none border-[2px] border-dashed border-violet-500/40 m-5 rounded-2xl animate-pulse z-10">
-              <div className="absolute top-4 left-4 bg-black/75 backdrop-blur-md px-3 py-2 rounded-xl border border-violet-500/50 shadow-2xl">
-                <div className="flex items-center gap-2 mb-1.5 text-white uppercase font-bold text-[10px] tracking-wider">
-                  <span className="w-2 h-2 rounded-full bg-violet-400 animate-ping inline-block" />
-                  Biometric Engine
-                </div>
-                <div className="text-white/60 text-[9px] mb-1 font-mono">Tracking Nodes Active:</div>
-                <div className="flex flex-wrap gap-1.5 max-w-[160px]">
-                  {labels.bodyParts.map((part) => (
-                    <span key={part} className="bg-violet-950/80 text-violet-300 px-1.5 py-0.5 rounded text-[9px] border border-violet-800/60 font-semibold tracking-wide">
-                      {part}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-violet-500/80 rounded-tl-xl" />
-              <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-violet-500/80 rounded-tr-xl" />
-              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-violet-500/80 rounded-bl-xl" />
-              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-violet-500/80 rounded-br-xl" />
-            </div>
-          )}
+          <canvas ref={skeletonCanvasRef} className={`absolute inset-0 w-full h-full pointer-events-none object-cover z-10 transition-opacity duration-500 ${phase === 'live' && !uploadedProof && hasSkeletonTracking ? 'opacity-100' : 'opacity-0'}`} />
 
           {uploadedProof && (
             <img src={uploadedProof} alt="Uploaded verification" className="absolute inset-0 w-full h-full object-cover" />
@@ -1181,10 +1180,10 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center bg-zinc-900">
               <p className="text-white font-bold text-[15px]">{camError === 'permission' ? 'Camera Access Blocked' : 'No Camera Found'}</p>
               <p className="text-white/60 text-[13px] leading-relaxed mb-2">
-                {camError === 'permission' ? 'Open this app in a new tab and allow camera access when prompted.' : quest.reps ? 'This quest needs a live camera. Check your camera and try again.' : 'Upload a photo instead.'}
+                {camError === 'permission' ? 'Allow camera access in browser settings.' : quest.reps ? 'This quest requires live camera tracking.' : 'Upload a photo instead.'}
               </p>
               <button onClick={retryCamera} className="bg-[#007AFF] text-white text-[13px] font-semibold px-6 py-2.5 rounded-full active:scale-95 transition-transform">
-                Try Camera Again
+                Try Again
               </button>
             </div>
           )}
@@ -1207,9 +1206,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)' }}>
               {confirmed ? (
                 <div className="flex items-center gap-2.5 bg-green-500/20 w-max px-4 py-2 rounded-full border border-green-500/30 backdrop-blur-md">
-                  <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
-                    <CheckIcon />
-                  </div>
+                  <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0"><CheckIcon /></div>
                   <p className="text-green-50 text-[13px] font-bold tracking-wide">Verified & Locked!</p>
                 </div>
               ) : poseError ? (
@@ -1220,14 +1217,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                 <>
                   <div className="flex items-end justify-between mb-2">
                     <p className="text-white/90 text-[13px] font-semibold tracking-wide drop-shadow-md">{repCue}</p>
-                    <p className="text-white text-[13px] font-black tracking-widest bg-[#007AFF] px-3 py-1 rounded-lg shadow-lg">
-                      {repsDone} / {quest.reps} REPS
-                    </p>
+                    <p className="text-white text-[13px] font-black tracking-widest bg-[#007AFF] px-3 py-1 rounded-lg shadow-lg">{repsDone} / {quest.reps} REPS</p>
                   </div>
                   <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden shadow-inner">
                     <div className="h-full bg-green-400 transition-all duration-300 ease-out rounded-full" style={{ width: `${Math.min(100, (repsDone / quest.reps) * 100)}%` }} />
                   </div>
-                  <p className="text-white/40 text-[9px] font-mono mt-1.5 truncate uppercase tracking-widest">{repPhase === 'up' ? 'Ready position' : 'Mid-rep'}</p>
                 </>
               )}
             </div>
@@ -1237,24 +1231,21 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)' }}>
               {confirmed ? (
                 <div className="flex items-center gap-2.5 bg-green-500/20 w-max px-4 py-2 rounded-full border border-green-500/30 backdrop-blur-md">
-                  <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
-                    <CheckIcon />
-                  </div>
+                  <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0"><CheckIcon /></div>
                   <p className="text-green-50 text-[13px] font-bold tracking-wide">Verified & Locked!</p>
                 </div>
               ) : (
                 <>
                   <div className="flex items-end justify-between mb-2">
-                    <p className="text-white/90 text-[13px] font-semibold tracking-wide drop-shadow-md">
-                      {scanning ? 'Scanning environment…' : `${liveScore}% confidence`}
-                    </p>
-                    <div className="flex items-center gap-1.5">
-                      {Array.from({ length: REQUIRED_PASSES }).map((_, i) => (
+                    <p className="text-white/90 text-[13px] font-semibold tracking-wide drop-shadow-md">{scanning ? 'Scanning environment…' : `${liveScore}% confidence`}</p>
+                    {!quest.duration && (
+                      <div className="flex items-center gap-1.5">
+                        {Array.from({ length: REQUIRED_PASSES }).map((_, i) => (
                           <div key={i} className={`w-2 h-2 rounded-full transition-all duration-300 ${i < passStreak ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)]' : 'bg-white/30'}`} />
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  
                   <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden shadow-inner">
                     <div className={`h-full ${meterColor} transition-all duration-700 ease-out rounded-full`} style={{ width: `${liveScore}%` }} />
                   </div>
@@ -1268,7 +1259,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)' }}>
               <p className="text-white/80 text-[11px] font-bold tracking-widest uppercase mb-2">Loading Vision Model… {modelProgress ?? 0}%</p>
               <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden">
-                <div className="h-full bg-[#007AFF] transition-all duration-300 rounded-full shadow-[0_0_10px_rgba(0,122,255,0.8)]" style={{ width: `${modelProgress ?? 0}%` }} />
+                <div className="h-full bg-[#007AFF] transition-all duration-300 rounded-full" style={{ width: `${modelProgress ?? 0}%` }} />
               </div>
             </div>
           )}
@@ -1285,7 +1276,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
               className={`px-5 py-2.5 rounded-[12px] text-[13px] font-bold tracking-wide transition-colors shadow-sm ${
                 secondsLeft === 0 ? 'bg-zinc-200 text-zinc-400 cursor-not-allowed' : timerRunning ? 'bg-rose-500 text-white active:bg-rose-600' : 'bg-[#34C759] text-white active:bg-green-600'
               }`}>
-              {secondsLeft === 0 ? 'Completed' : timerRunning ? 'Pause Activity' : 'Start Timer'}
+              {secondsLeft === 0 ? 'Completed' : timerRunning ? 'Pause Timer' : 'Start Timer'}
             </button>
           </div>
         )}
@@ -1330,30 +1321,90 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   );
 }
 
+// ─── CUSTOM QUEST CREATION MODAL ──────────────────────────────────────────────
+function CustomQuestModal({ onClose, onAdd, dark }) {
+  const [title, setTitle] = useState('');
+  const [type, setType] = useState('reps');
+  const [target, setTarget] = useState(20);
+
+  const cardBg = dark ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-gray-100';
+  const txt = dark ? 'text-white' : 'text-gray-900';
+  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
+  const pill = dark ? 'bg-zinc-800 text-white' : 'bg-gray-100 text-gray-800';
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!title.trim()) return;
+    const newQuest = {
+      id: 'custom_' + Date.now(),
+      text: title.trim(),
+      xp: 40,
+      completed: false,
+      progress: type === 'duration' ? target * 60 : 0,
+      [type === 'duration' ? 'duration' : 'reps']: type === 'duration' ? target * 60 : target
+    };
+    onAdd(newQuest);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
+      <form onSubmit={handleSubmit} className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 border`}>
+        <h3 className={`text-xl font-bold mb-2 ${txt}`}>Create Custom Quest</h3>
+        <p className={`text-xs mb-4 ${sub}`}>Add a personalized daily fitness goal.</p>
+        
+        <input type="text" placeholder="e.g. Do 50 kettlebell swings" value={title} onChange={e => setTitle(e.target.value)}
+          className={`w-full px-4 py-3 rounded-xl text-sm mb-4 border outline-none ${dark ? 'bg-zinc-950 border-zinc-800 text-white focus:border-indigo-500' : 'bg-gray-50 border-gray-200 text-gray-900 focus:border-indigo-500'}`} required />
+        
+        <div className="flex gap-2 mb-4">
+          <button type="button" onClick={() => { setType('reps'); setTarget(20); }}
+            className={`flex-1 py-2.5 rounded-xl text-xs font-bold border transition-colors ${type === 'reps' ? 'bg-indigo-600 text-white border-indigo-600' : dark ? 'border-zinc-800 text-zinc-400' : 'border-gray-200 text-gray-600'}`}>
+            Reps-based
+          </button>
+          <button type="button" onClick={() => { setType('duration'); setTarget(3); }}
+            className={`flex-1 py-2.5 rounded-xl text-xs font-bold border transition-colors ${type === 'duration' ? 'bg-indigo-600 text-white border-indigo-600' : dark ? 'border-zinc-800 text-zinc-400' : 'border-gray-200 text-gray-600'}`}>
+            Time-based (Mins)
+          </button>
+        </div>
+
+        <div className="mb-6">
+          <label className={`block text-xs font-semibold mb-1.5 ${sub}`}>Target {type === 'duration' ? 'Minutes' : 'Count'}: {target}</label>
+          <input type="range" min={type === 'duration' ? 1 : 5} max={type === 'duration' ? 15 : 100} step={type === 'duration' ? 1 : 5} value={target} onChange={e => setTarget(Number(e.target.value))}
+            className="w-full accent-indigo-500" />
+        </div>
+
+        <div className="flex gap-3">
+          <button type="button" onClick={onClose} className={`flex-1 py-3 rounded-[14px] text-sm font-semibold ${pill}`}>Cancel</button>
+          <button type="submit" className="flex-[2] py-3 rounded-[14px] text-sm font-semibold bg-indigo-600 text-white shadow-lg active:scale-95 transition-transform">Add Objective</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function QuestDailyApp() {
   const [isMounted, setIsMounted] = useState(false);
-
   const [dark, setDark] = useState(true);
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [level, setLevel] = useState(1);
   const [xp, setXp] = useState(0);
+  const [streak, setStreak] = useState(1);
   const [quests, setQuests] = useState([]);
   const [lastReset, setLastReset] = useState(0);
   const [proofImages, setProofImages] = useState({});
+  const [activeTab, setActiveTab] = useState('all');
+  const [showCustomModal, setShowCustomModal] = useState(false);
 
   useEffect(() => {
     setIsMounted(true);
     const savedDark = localStorage.getItem('sq_dark');
     setDark(savedDark !== null ? savedDark === 'true' : window.matchMedia('(prefers-color-scheme: dark)').matches);
-    
-    // Using "_v2" here guarantees it will pop up for everyone again
-    if (!localStorage.getItem('sq_has_seen_install_v2')) {
-      setShowInstallPrompt(true);
-    }
+    if (!localStorage.getItem('sq_has_seen_install_v3')) setShowInstallPrompt(true);
 
     setLevel(parseInt(localStorage.getItem('sq_level')) || 1);
     setXp(parseInt(localStorage.getItem('sq_xp')) || 0);
+    setStreak(parseInt(localStorage.getItem('sq_streak')) || 1);
     setLastReset(parseInt(localStorage.getItem('sq_lastReset')) || 0);
     setProofImages(JSON.parse(localStorage.getItem('sq_proofs')) || {});
 
@@ -1378,7 +1429,7 @@ export default function QuestDailyApp() {
   }, [dark, isMounted]);
 
   const handleDismissInstall = () => {
-    localStorage.setItem('sq_has_seen_install_v2', 'true');
+    localStorage.setItem('sq_has_seen_install_v3', 'true');
     setShowInstallPrompt(false);
   };
   
@@ -1421,11 +1472,12 @@ export default function QuestDailyApp() {
     if (isMounted) {
       localStorage.setItem('sq_level', level);
       localStorage.setItem('sq_xp', xp);
+      localStorage.setItem('sq_streak', streak);
       localStorage.setItem('sq_quests', JSON.stringify(quests));
       localStorage.setItem('sq_lastReset', lastReset);
       localStorage.setItem('sq_proofs', JSON.stringify(proofImages));
     }
-  }, [level, xp, quests, lastReset, proofImages, isMounted]);
+  }, [level, xp, streak, quests, lastReset, proofImages, isMounted]);
 
   const applyXpChange = useCallback((amount) => {
     let newXp = xpRef.current + amount, newLevel = levelRef.current;
@@ -1436,10 +1488,10 @@ export default function QuestDailyApp() {
     setXp(newXp); setLevel(newLevel);
   }, []);
 
- const handleQuestClick = (quest) => {
-  if (quest.completed) return;
-  setDetailQuestId(quest.id);
-};
+  const handleQuestClick = (quest) => {
+    if (quest.completed) return;
+    setDetailQuestId(quest.id);
+  };
 
   const handleProofConfirm = (questId, img) => {
     const quest = quests.find(q => q.id === questId);
@@ -1447,6 +1499,17 @@ export default function QuestDailyApp() {
     setProofImages(prev => ({ ...prev, [questId]: img }));
     setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true, progress: 0 } : q));
     applyXpChange(quest?.xp ?? 0);
+    
+    // Streak logic update
+    const todayStr = new Date().toISOString().split('T')[0];
+    const lastDate = localStorage.getItem('sq_last_comp_date');
+    if (lastDate !== todayStr) {
+      const yesterdayStr = new Date(Date.now() - ONE_DAY_MS).toISOString().split('T')[0];
+      const newStreak = lastDate === yesterdayStr ? streak + 1 : (lastDate ? 1 : streak);
+      setStreak(newStreak);
+      localStorage.setItem('sq_last_comp_date', todayStr);
+    }
+
     setProofModalId(null);
     setDetailQuestId(null);
     setCompletionQuest(quest || null);
@@ -1461,141 +1524,139 @@ export default function QuestDailyApp() {
 
   if (!isMounted) return null;
 
-  const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
-  const allDone = quests.length > 0 && quests.every(q => q.completed);
+  const filteredQuests = quests.filter(q => {
+    if (activeTab === 'all') return true;
+    const cat = QUEST_LABELS[q.id]?.category || 'recovery';
+    return cat === activeTab;
+  });
 
-  const bg       = dark ? 'bg-black'      : 'bg-[#F2F2F7]';
-  const cardBg   = dark ? 'bg-zinc-900'   : 'bg-white';
-  const txt      = dark ? 'text-white'    : 'text-gray-900';
-  const sub      = dark ? 'text-zinc-400' : 'text-gray-500';
-  const sep      = dark ? 'border-zinc-800' : 'border-gray-100';
-  const secLabel = dark ? 'text-zinc-500' : 'text-gray-400';
   const completedCount = quests.filter(q => q.completed).length;
   const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
+  const bg = dark ? 'bg-black' : 'bg-[#F2F2F7]';
+  const txt = dark ? 'text-white' : 'text-gray-900';
+  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
 
   return (
     <div className={`${bg} min-h-screen flex flex-col items-center transition-colors duration-200`}>
       <div className="relative w-full max-w-[430px] flex flex-col min-h-screen overflow-hidden shadow-2xl bg-inherit">
-        
         <AnimatedBackground dark={dark} />
-
         {showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} dark={dark} />}
-
-        {proofModal && (
-          <CameraModal quest={proofModal} dark={dark}
-            onConfirm={img => handleProofConfirm(proofModal.id, img)}
-            onCancel={handleCancelProof} />
-        )}
-
+        {showCustomModal && <CustomQuestModal onClose={() => setShowCustomModal(false)} onAdd={q => setQuests(p => [q, ...p])} dark={dark} />}
+        {proofModal && <CameraModal quest={proofModal} dark={dark} onConfirm={img => handleProofConfirm(proofModal.id, img)} onCancel={handleCancelProof} />}
+        
         {viewingProof && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 sq-anim-pop"
-            style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
-            onClick={() => setViewingProof(null)}>
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)' }} onClick={() => setViewingProof(null)}>
             <img src={viewingProof} alt="proof" className="max-w-full max-h-full rounded-[24px] shadow-2xl" />
           </div>
         )}
 
         {completionQuest ? (
-          <CompletionScreen quest={completionQuest} dark={dark} timeLeft={timeLeft}
-            onToggleTheme={() => setDark(d => !d)}
-            onBack={() => setCompletionQuest(null)} />
+          <CompletionScreen quest={completionQuest} dark={dark} timeLeft={timeLeft} onToggleTheme={() => setDark(d => !d)} onBack={() => setCompletionQuest(null)} />
         ) : detailQuest ? (
-          <QuestDetailScreen quest={detailQuest} dark={dark} timeLeft={timeLeft}
-            onToggleTheme={() => setDark(d => !d)}
-            onBack={() => setDetailQuestId(null)}
-            onMarkComplete={() => setProofModalId(detailQuest.id)} />
+          <QuestDetailScreen quest={detailQuest} dark={dark} timeLeft={timeLeft} onToggleTheme={() => setDark(d => !d)} onBack={() => setDetailQuestId(null)} onMarkComplete={() => setProofModalId(detailQuest.id)} />
         ) : (
           <>
-            <div className={`relative z-10 safe-top px-3 pb-3 transition-colors duration-200`}>
-              <div className="flex items-center justify-between pt-2">
+            <div className="relative z-10 safe-top px-4 pt-4 pb-2 transition-colors duration-200">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <LogoIcon size={34} dark={dark} />
                   <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>QuestDaily</h1>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${dark ? 'bg-zinc-800/80' : 'bg-gray-100'}`}>
-                    <span className="text-[10px]">⏱</span>
-                    <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
+                  <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20 font-bold text-xs shadow-sm">
+                    🔥 {streak}
                   </div>
-                  <button onClick={() => setDark(d => !d)}
-                    className={`w-8 h-8 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
+                  <button onClick={() => setDark(d => !d)} className={`w-8 h-8 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800 text-zinc-300' : 'bg-gray-100 text-gray-600'}`}>
                     {dark ? <SunIcon /> : <MoonIcon />}
                   </button>
                 </div>
               </div>
-              <div className="mt-3 flex items-center gap-1.5">
-                <span className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Lv {level}</span>
-                <span className={`text-[11px] font-medium ${sub}`}>Novice Adventurer</span>
-                <span className={`ml-auto text-[11px] font-semibold ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{xp} / {xpRequired} XP</span>
+              
+              <div className="mt-3 flex items-center gap-2">
+                <span className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">Lv {level}</span>
+                <span className={`text-xs font-medium ${sub}`}>Adventurer</span>
+                <span className={`ml-auto text-xs font-mono font-semibold ${sub}`}>{xp} / {xpRequired} XP</span>
               </div>
             </div>
 
-            <div className="relative z-10 flex-1 scroll-ios px-3 pt-1 pb-8 space-y-5">
-              <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100'} rounded-[20px] px-4 py-4 flex items-center justify-between sq-anim-pop shadow-sm`}>
+            <div className="relative z-10 flex-1 px-4 pt-2 pb-8 space-y-5 overflow-y-auto">
+              <div className={`${dark ? 'bg-zinc-900/80 border border-white/5' : 'bg-white border border-gray-100'} rounded-[20px] p-4 flex items-center justify-between shadow-sm`}>
                 <div>
                   <p className={`text-[14px] font-bold ${txt}`}>Daily Progress</p>
-                  <p className={`text-[12px] mt-0.5 font-medium ${sub}`}>{completedCount} / {quests.length} completed</p>
+                  <p className={`text-[12px] mt-0.5 font-medium ${sub}`}>{completedCount} of {quests.length} objectives done</p>
                 </div>
                 <ProgressRing pct={dailyPct} dark={dark} />
               </div>
 
-              <div>
-                <p className={`text-[11px] font-bold uppercase tracking-widest ${secLabel} mb-2.5 px-1`}>
-                  Today's Objectives
-                </p>
-
-                <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100 shadow-sm'} rounded-[20px] overflow-hidden`}>
-                  {quests.map((quest, i) => (
-                    <div key={quest.id}>
-                      {i > 0 && <div className={`border-t ${sep} ml-[58px]`} />}
-                      <button onClick={() => { if (!quest.completed) handleQuestClick(quest); }}
-                        className={`w-full flex items-center gap-3.5 px-4 py-[18px] text-left active:bg-black/5 transition-all`}>
-                        <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-300 ${quest.completed ? 'bg-[#34C759] border-[#34C759] shadow-[0_0_10px_rgba(52,199,89,0.4)]' : dark ? 'border-zinc-600' : 'border-gray-300'}`}>
-                          {quest.completed && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
-                        </div>
-                        <span className={`flex-1 text-[15px] font-semibold leading-snug transition-colors ${quest.completed ? (dark ? 'text-zinc-600 line-through' : 'text-gray-400 line-through') : txt}`}>
-                          {quest.text}
-                          {!quest.completed && quest.progress > 0 && (
-                            <span className="ml-2 align-middle text-[10px] font-bold uppercase tracking-wide text-[#007AFF] bg-[#007AFF]/10 px-1.5 py-0.5 rounded-full">
-                              In progress
-                            </span>
-                          )}
-                        </span>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {quest.completed && proofImages[quest.id] && (
-                            <button onClick={e => { e.stopPropagation(); setViewingProof(proofImages[quest.id]); }}
-                              className="w-7 h-7 rounded-md overflow-hidden flex-shrink-0 ring-1 ring-black/10 shadow-sm active:scale-95 transition-transform">
-                              <img src={proofImages[quest.id]} alt="proof" className="w-full h-full object-cover" />
-                            </button>
-                          )}
-                          <span className={`text-[13px] font-bold ${quest.completed ? 'text-[#34C759]' : dark ? 'text-zinc-500' : 'text-gray-400'}`}>+{quest.xp}</span>
-                          {quest.completed ? (
-                            <span className={`text-[10px] font-bold ${dark ? 'text-zinc-600' : 'text-gray-300'}`}>XP</span>
-                          ) : (
-                            <span className={`text-[11px] ${dark ? 'text-zinc-600' : 'text-gray-300'}`}>
-                              <svg width="8" height="14" viewBox="0 0 8 14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1 7 7 1 13"/></svg>
-                            </span>
-                          )}
-                        </div>
-                      </button>
-                    </div>
-                  ))}
-                </div>
+              {/* Category Filter Tabs */}
+              <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                {[
+                  { id: 'all', label: 'All' },
+                  { id: 'strength', label: '💪 Strength' },
+                  { id: 'cardio', label: '🏃 Cardio' },
+                  { id: 'recovery', label: '🧘 Recovery' },
+                  { id: 'nutrition', label: '🥗 Nutrition' },
+                ].map(tab => (
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all ${
+                      activeTab === tab.id ? 'bg-indigo-600 text-white shadow-md' : dark ? 'bg-zinc-900/80 text-zinc-400 border border-white/5' : 'bg-white text-gray-600 border border-gray-200'
+                    }`}>
+                    {tab.label}
+                  </button>
+                ))}
               </div>
 
-              {allDone && (
-                <div className={`${cardBg} rounded-[20px] p-6 text-center border ${dark ? 'border-white/5' : 'border-gray-100 shadow-sm'}`}>
-                  <p className="text-3xl mb-3">🏆</p>
-                  <p className={`font-bold text-[16px] ${txt}`}>All Quests Complete</p>
-                  <p className={`text-sm mt-1.5 font-medium ${sub}`}>Rest up. New quests when the timer hits zero.</p>
-                </div>
-              )}
+              <div className="flex items-center justify-between px-1">
+                <p className={`text-[11px] font-bold uppercase tracking-widest ${sub}`}>Today's Objectives</p>
+                <button onClick={() => setShowCustomModal(true)} className="text-[11px] font-bold text-indigo-500 hover:text-indigo-400">
+                  + Add Goal
+                </button>
+              </div>
 
-              {quests.length > 0 && (
-                <p className={`text-[11px] font-medium text-center ${secLabel} px-4 pb-2 uppercase tracking-wide`}>
-                  All quests verified by on-device AI <br/> no data leaves your phone
-                </p>
-              )}
+              {/* Complete Render Loop */}
+              <div className="space-y-3">
+                {filteredQuests.length === 0 ? (
+                  <div className={`text-center py-10 rounded-[20px] ${dark ? 'bg-zinc-900/40' : 'bg-gray-50'}`}>
+                    <p className={`text-sm ${sub}`}>No objectives found in this category.</p>
+                  </div>
+                ) : (
+                  filteredQuests.map(q => {
+                    const theme = QUEST_THEME[q.id] || { grad: 'from-indigo-500 to-purple-600' };
+                    const isDuration = Boolean(q.duration);
+                    const hasStarted = typeof q.progress === 'number' && q.progress > 0 && q.progress !== q.duration;
+
+                    return (
+                      <div key={q.id} onClick={() => handleQuestClick(q)}
+                        className={`group relative overflow-hidden rounded-[20px] p-4 flex items-center justify-between border transition-all cursor-pointer ${
+                          q.completed
+                            ? dark ? 'bg-zinc-900/40 border-zinc-800/60 opacity-60' : 'bg-gray-50 border-gray-200/60 opacity-70'
+                            : dark ? 'bg-zinc-900/90 border-white/5 hover:border-white/10 shadow-lg' : 'bg-white border-gray-100 hover:border-gray-200 shadow-sm'
+                        }`}>
+                        
+                        <div className="flex items-center gap-3.5 flex-1 min-w-0">
+                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 bg-gradient-to-br ${theme.grad} text-white shadow-md`}>
+                            {q.completed ? <CheckIcon /> : <span className="font-black text-xs">+{q.xp}</span>}
+                          </div>
+                          
+                          <div className="flex-1 min-w-0 pr-2">
+                            <p className={`text-sm font-bold truncate ${q.completed ? 'line-through ' + sub : txt}`}>{q.text}</p>
+                            <p className={`text-[11px] mt-0.5 font-medium ${sub}`}>
+                              {q.completed ? 'Completed' : hasStarted ? (isDuration ? `Resuming (${Math.floor(q.progress / 60)}m left)` : `In progress (${q.progress} / ${q.reps})`) : 'Tap to start objective'}
+                            </p>
+                          </div>
+                        </div>
+
+                        {!q.completed && (
+                          <button onClick={(e) => { e.stopPropagation(); setProofModalId(q.id); }}
+                            className={`px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r ${theme.grad} shadow-sm active:scale-95 transition-transform`}>
+                            {hasStarted ? 'Resume' : 'Start'}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </>
         )}
