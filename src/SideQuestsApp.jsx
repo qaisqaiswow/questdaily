@@ -10,6 +10,14 @@ function haptic(pattern = 10) {
   try { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(pattern); } catch { /* unsupported */ }
 }
 
+function getLevelTitle(level) {
+  if (level < 5)  return 'Novice Adventurer';
+  if (level < 10) return 'Apprentice Adventurer';
+  if (level < 20) return 'Skilled Adventurer';
+  if (level < 35) return 'Veteran Adventurer';
+  return 'Legendary Adventurer';
+}
+
 // ─── AI SETUP ────────────────────────────────────────────────────────────────
 env.allowLocalModels = false;
 
@@ -513,6 +521,15 @@ const ProgressRing = ({ pct, size = 56, stroke = 5, dark }) => {
     </div>
   );
 };
+
+// ─── STAT CHIP (mini dashboard tile) ───────────────────────────────────────────
+const StatChip = ({ icon, label, value, dark, accent }) => (
+  <div className={`rounded-[16px] px-2 py-3 flex flex-col items-center justify-center text-center gap-0.5 ${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100 shadow-sm'}`}>
+    <span className="text-[17px] leading-none">{icon}</span>
+    <span className={`text-[15px] font-extrabold leading-tight ${accent || (dark ? 'text-white' : 'text-gray-900')}`}>{value}</span>
+    <span className={`text-[9px] font-bold uppercase tracking-wider ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{label}</span>
+  </div>
+);
 
 // ─── CONFETTI BURST ───────────────────────────────────────────────────────────
 const CONFETTI_COLORS = ['#818cf8', '#c084fc', '#34d399', '#fbbf24', '#f472b6', '#38bdf8'];
@@ -1524,6 +1541,7 @@ export default function QuestDailyApp() {
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [level, setLevel] = useState(1);
   const [xp, setXp] = useState(0);
+  const [streak, setStreak] = useState(0);
   const [quests, setQuests] = useState([]);
   const [lastReset, setLastReset] = useState(0);
   const [proofImages, setProofImages] = useState({});
@@ -1540,6 +1558,7 @@ export default function QuestDailyApp() {
 
     setLevel(parseInt(localStorage.getItem('sq_level')) || 1);
     setXp(parseInt(localStorage.getItem('sq_xp')) || 0);
+    setStreak(parseInt(localStorage.getItem('sq_streak')) || 0);
     setLastReset(parseInt(localStorage.getItem('sq_lastReset')) || 0);
     setProofImages(JSON.parse(localStorage.getItem('sq_proofs')) || {});
 
@@ -1607,11 +1626,12 @@ export default function QuestDailyApp() {
     if (isMounted) {
       localStorage.setItem('sq_level', level);
       localStorage.setItem('sq_xp', xp);
+      localStorage.setItem('sq_streak', streak);
       localStorage.setItem('sq_quests', JSON.stringify(quests));
       localStorage.setItem('sq_lastReset', lastReset);
       localStorage.setItem('sq_proofs', JSON.stringify(proofImages));
     }
-  }, [level, xp, quests, lastReset, proofImages, isMounted]);
+  }, [level, xp, streak, quests, lastReset, proofImages, isMounted]);
 
   const applyXpChange = useCallback((amount) => {
     const startLevel = levelRef.current;
@@ -1636,6 +1656,16 @@ export default function QuestDailyApp() {
     setProofImages(prev => ({ ...prev, [questId]: img }));
     setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true, progress: 0 } : q));
     const leveledUp = applyXpChange(quest?.xp ?? 0);
+
+    // Bump the daily streak once per calendar day, the first time a quest is completed that day.
+    const todayStr = new Date().toDateString();
+    const lastStreakDate = localStorage.getItem('sq_streak_date');
+    if (lastStreakDate !== todayStr) {
+      const yesterdayStr = new Date(Date.now() - ONE_DAY_MS).toDateString();
+      setStreak(prev => (lastStreakDate === yesterdayStr ? prev + 1 : 1));
+      localStorage.setItem('sq_streak_date', todayStr);
+    }
+
     setProofModalId(null);
     setDetailQuestId(null);
     setCompletionQuest(quest ? { ...quest, leveledUp } : null);
@@ -1652,6 +1682,11 @@ export default function QuestDailyApp() {
 
   const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
   const allDone = quests.length > 0 && quests.every(q => q.completed);
+  const greetingHour = new Date().getHours();
+  const greeting = greetingHour < 5 ? 'Late night grind 🌙'
+    : greetingHour < 12 ? 'Good morning, Adventurer'
+    : greetingHour < 18 ? 'Good afternoon, Adventurer'
+    : 'Good evening, Adventurer';
 
   const bg       = dark ? 'bg-black'      : 'bg-[#F2F2F7]';
   const cardBg   = dark ? 'bg-zinc-900'   : 'bg-white';
@@ -1699,9 +1734,18 @@ export default function QuestDailyApp() {
               <div className="flex items-center justify-between pt-2">
                 <div className="flex items-center gap-2.5">
                   <LogoIcon size={34} dark={dark} />
-                  <h1 className={`text-[22px] font-bold tracking-tight ${txt}`}>QuestDaily</h1>
+                  <div>
+                    <h1 className={`text-[22px] font-bold tracking-tight leading-none ${txt}`}>QuestDaily</h1>
+                    <p className={`text-[11px] font-medium mt-1 ${secLabel}`}>{greeting}</p>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {streak > 0 && (
+                    <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${dark ? 'bg-orange-500/15' : 'bg-orange-50'}`}>
+                      <span className="text-[11px]">🔥</span>
+                      <span className={`text-[11px] font-bold ${dark ? 'text-orange-300' : 'text-orange-600'}`}>{streak}</span>
+                    </div>
+                  )}
                   <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${dark ? 'bg-zinc-800/80' : 'bg-gray-100'}`}>
                     <span className="text-[10px]">⏱</span>
                     <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
@@ -1714,7 +1758,7 @@ export default function QuestDailyApp() {
               </div>
               <div className="mt-3 flex items-center gap-1.5">
                 <span className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Lv {level}</span>
-                <span className={`text-[11px] font-medium ${sub}`}>Novice Adventurer</span>
+                <span className={`text-[11px] font-medium ${sub}`}>{getLevelTitle(level)}</span>
                 <span className={`ml-auto text-[11px] font-semibold ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{xp} / {xpRequired} XP</span>
               </div>
               <div className={`mt-2 h-1.5 w-full rounded-full overflow-hidden ${dark ? 'bg-zinc-800' : 'bg-gray-200'}`}>
@@ -1726,6 +1770,12 @@ export default function QuestDailyApp() {
             </div>
 
             <div className="relative z-10 flex-1 scroll-ios px-3 pt-1 pb-8 space-y-5">
+              <div className="grid grid-cols-3 gap-2 sq-anim-pop">
+                <StatChip icon="⚡" label="Level" value={level} dark={dark} />
+                <StatChip icon="🔥" label="Streak" value={`${streak}d`} dark={dark} accent={streak > 0 ? (dark ? 'text-orange-300' : 'text-orange-600') : undefined} />
+                <StatChip icon="✅" label="Today" value={`${completedCount}/${quests.length || 0}`} dark={dark} accent={allDone ? (dark ? 'text-emerald-400' : 'text-emerald-600') : undefined} />
+              </div>
+
               <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100'} rounded-[20px] px-4 py-4 flex items-center justify-between sq-anim-pop shadow-sm`}>
                 <div>
                   <p className={`text-[14px] font-bold ${txt}`}>Daily Progress</p>
@@ -1740,13 +1790,23 @@ export default function QuestDailyApp() {
                 </p>
 
                 <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100 shadow-sm'} rounded-[20px] overflow-hidden`}>
-                  {quests.map((quest, i) => (
+                  {quests.map((quest, i) => {
+                    const qTheme = QUEST_THEME[quest.id] || { icon: 'target', grad: 'from-indigo-500 to-purple-600' };
+                    const QIcon = QuestSvg[qTheme.icon] || QuestSvg.target;
+                    return (
                     <div key={quest.id}>
-                      {i > 0 && <div className={`border-t ${sep} ml-[58px]`} />}
+                      {i > 0 && <div className={`border-t ${sep} ml-[66px]`} />}
                       <button onClick={() => { if (!quest.completed) handleQuestClick(quest); }}
                         className={`w-full flex items-center gap-3.5 px-4 py-[18px] text-left active:bg-black/5 active:scale-[0.99] transition-all`}>
-                        <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-300 ${quest.completed ? 'bg-[#34C759] border-[#34C759] shadow-[0_0_10px_rgba(52,199,89,0.4)]' : dark ? 'border-zinc-600' : 'border-gray-300'}`}>
-                          {quest.completed && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
+                        <div className="relative flex-shrink-0">
+                          <div className={`w-9 h-9 rounded-full flex items-center justify-center bg-gradient-to-br ${qTheme.grad} transition-all duration-300 ${quest.completed ? 'opacity-40 saturate-50' : 'shadow-[0_4px_14px_-4px_rgba(139,92,246,0.55)]'}`}>
+                            <QIcon width={16} height={16} className="text-white" />
+                          </div>
+                          {quest.completed && (
+                            <div className={`absolute -bottom-1 -right-1 rounded-full bg-[#34C759] border-2 ${dark ? 'border-zinc-900' : 'border-white'} flex items-center justify-center shadow-[0_0_8px_rgba(52,199,89,0.6)]`} style={{ width: 18, height: 18 }}>
+                              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            </div>
+                          )}
                         </div>
                         <span className={`flex-1 text-[15px] font-semibold leading-snug transition-colors ${quest.completed ? (dark ? 'text-zinc-600 line-through' : 'text-gray-400 line-through') : txt}`}>
                           {quest.text}
@@ -1774,7 +1834,8 @@ export default function QuestDailyApp() {
                         </div>
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
