@@ -5,21 +5,51 @@ import { pipeline, env } from '@huggingface/transformers';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as exifr from 'exifr';
 
+// ─── HAPTICS ─────────────────────────────────────────────────────────────────
+function haptic(pattern = 10) {
+  try { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(pattern); } catch { /* unsupported */ }
+}
+
 // ─── AI SETUP ────────────────────────────────────────────────────────────────
 env.allowLocalModels = false;
+
+// FAST MODEL — used by the real-time live scan loop (runs every ~1.2s while the
+// camera is open). Quantized (int8) for low latency on-device; the live loop
+// compensates for the small accuracy trade-off with multi-frame smoothing and a
+// required streak (see SCORE_SMOOTHING / REQUIRED_PASSES below).
 let classifierPromise = null;
 function getClassifier(onProgress) {
   if (!classifierPromise) {
     classifierPromise = pipeline(
       'zero-shot-image-classification',
       'Xenova/siglip-base-patch16-224',
-      onProgress ? { progress_callback: onProgress } : undefined
+      { dtype: 'q8', ...(onProgress ? { progress_callback: onProgress } : {}) }
     ).catch(error => {
       classifierPromise = null;
       throw error;
     });
   }
   return classifierPromise;
+}
+
+// ACCURATE MODEL — a larger SigLIP checkpoint at full precision, used only for
+// one-shot checks where latency doesn't matter: uploaded proof photos, photo
+// authenticity screening, and the final confirmation frame that locks in a live
+// quest. This gives the live loop's fast reads a high-accuracy second opinion
+// before anything actually counts as verified.
+let staticClassifierPromise = null;
+function getStaticClassifier(onProgress) {
+  if (!staticClassifierPromise) {
+    staticClassifierPromise = pipeline(
+      'zero-shot-image-classification',
+      'Xenova/siglip-large-patch16-256',
+      onProgress ? { progress_callback: onProgress } : undefined
+    ).catch(error => {
+      staticClassifierPromise = null;
+      throw error;
+    });
+  }
+  return staticClassifierPromise;
 }
 
 // ─── PHOTO SOURCE / AUTHENTICITY LABELS ─────────────────────────────────────
@@ -251,8 +281,9 @@ function randomizeQuest(pool) {
 }
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const REQUIRED_PASSES = 2;
+const REQUIRED_PASSES = 3;
 const PASS_THRESHOLD  = 0.35;
+const SCORE_SMOOTHING = 0.45; // weight given to each new frame when smoothing confidence
 
 function getMaxLabelScore(results, candidates) {
   if (!candidates?.length) return 0;
@@ -268,15 +299,19 @@ async function checkPhotoAuthenticity(file, dataUrl, classifierLabels) {
 
   let cameraScore = 0, downloadedScore = 0;
   try {
-    const classifier = await getClassifier();
+    const classifier = await getStaticClassifier();
     const results = await classifier(dataUrl, classifierLabels);
     cameraScore = getMaxLabelScore(results, [SOURCE_CAMERA_LABEL]);
     downloadedScore = getMaxLabelScore(results, SOURCE_DOWNLOADED_LABELS);
   } catch { /* if the model call fails, fall back to EXIF alone */ }
 
-  const modelThinksDownloaded = downloadedScore > cameraScore;
+  // Require a clear margin (not just a coin-flip edge) before flagging, so a real
+  // photo that scores close to 50/50 isn't wrongly rejected.
+  const margin = downloadedScore - cameraScore;
+  const modelThinksDownloaded = margin > 0.08;
   const suspicious = !hasCameraMetadata && modelThinksDownloaded;
-  return { hasCameraMetadata, cameraScore, downloadedScore, suspicious };
+  const confidence = Math.round(Math.max(cameraScore, downloadedScore) * 100);
+  return { hasCameraMetadata, cameraScore, downloadedScore, suspicious, confidence };
 }
 
 // ─── ICONS ───────────────────────────────────────────────────────────────────
@@ -479,6 +514,50 @@ const ProgressRing = ({ pct, size = 56, stroke = 5, dark }) => {
   );
 };
 
+// ─── CONFETTI BURST ───────────────────────────────────────────────────────────
+const CONFETTI_COLORS = ['#818cf8', '#c084fc', '#34d399', '#fbbf24', '#f472b6', '#38bdf8'];
+const Confetti = ({ count = 24, big = false }) => {
+  const pieces = useMemo(() => {
+    const total = big ? Math.round(count * 1.7) : count;
+    return Array.from({ length: total }).map((_, i) => ({
+      id: i,
+      left: Math.random() * 100,
+      delay: Math.random() * 0.35,
+      duration: 1.5 + Math.random() * 1.3,
+      color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+      w: 5 + Math.random() * 6,
+      h: 3 + Math.random() * 5,
+      rot: Math.round(Math.random() * 360),
+      drift: Math.round((Math.random() - 0.5) * 160),
+    }));
+  }, [count, big]);
+
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden z-20" aria-hidden="true">
+      {pieces.map(p => (
+        <span key={p.id} className="sq-confetti-piece" style={{
+          left: `${p.left}%`,
+          '--sq-drift': `${p.drift}px`,
+          '--sq-rot': `${p.rot}deg`,
+          animationDelay: `${p.delay}s`,
+          animationDuration: `${p.duration}s`,
+          background: p.color,
+          width: p.w,
+          height: p.h,
+        }} />
+      ))}
+      <style>{`
+        .sq-confetti-piece { position: absolute; top: -6%; border-radius: 2px; opacity: 0.95; animation-name: sq-confetti-fall; animation-timing-function: cubic-bezier(0.35,0,0.65,1); animation-fill-mode: forwards; }
+        @keyframes sq-confetti-fall {
+          0%   { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+          85%  { opacity: 1; }
+          100% { transform: translate(var(--sq-drift), 115vh) rotate(var(--sq-rot)); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+};
+
 // ─── INSTALL PROMPT ONBOARDING MODAL ──────────────────────────────────────────
 function DeviceInstallPrompt({ onDismiss, dark }) {
   const [step, setStep] = useState(0);
@@ -636,6 +715,9 @@ function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack }) {
   const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
   const cardBg = dark ? 'bg-zinc-900/70' : 'bg-white';
   const quote = useMemo(() => QUEST_QUOTE[quest?.id] || QUEST_QUOTES[Math.floor(Math.random() * QUEST_QUOTES.length)], [quest?.id]);
+  const leveledUp = Boolean(quest?.leveledUp);
+
+  useEffect(() => { haptic(leveledUp ? [25, 40, 25, 40, 70] : [15, 30, 15]); }, [leveledUp]);
 
   return (
     <div className="sq-anim-pop relative z-10 min-h-screen flex flex-col">
@@ -655,20 +737,35 @@ function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack }) {
       </div>
 
       <div className="px-4">
-        <div className={`relative overflow-hidden rounded-[26px] px-6 pt-12 pb-10 flex flex-col items-center text-center bg-gradient-to-b ${dark ? 'from-[#0e2318] to-[#081712]' : 'from-emerald-50 to-white'} border ${dark ? 'border-emerald-500/20' : 'border-emerald-100'}`}>
+        <div className={`relative overflow-hidden rounded-[26px] px-6 pt-12 pb-10 flex flex-col items-center text-center bg-gradient-to-b ${leveledUp ? (dark ? 'from-[#241a3a] to-[#0d0a17]' : 'from-indigo-50 to-white') : (dark ? 'from-[#0e2318] to-[#081712]' : 'from-emerald-50 to-white')} border ${leveledUp ? (dark ? 'border-indigo-400/30' : 'border-indigo-100') : (dark ? 'border-emerald-500/20' : 'border-emerald-100')}`}>
           <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-emerald-500/25 blur-3xl" />
-            <div className="absolute -bottom-14 -right-10 w-48 h-48 rounded-full bg-green-400/20 blur-3xl" />
+            {leveledUp ? (
+              <>
+                <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-indigo-500/25 blur-3xl" />
+                <div className="absolute -bottom-14 -right-10 w-48 h-48 rounded-full bg-purple-400/20 blur-3xl" />
+              </>
+            ) : (
+              <>
+                <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-emerald-500/25 blur-3xl" />
+                <div className="absolute -bottom-14 -right-10 w-48 h-48 rounded-full bg-green-400/20 blur-3xl" />
+              </>
+            )}
           </div>
+          {leveledUp && <Confetti big />}
           <div className="relative z-10 flex flex-col items-center">
-            <div className="sq-anim-check w-24 h-24 rounded-full flex items-center justify-center border-2 border-emerald-400"
-              style={{ boxShadow: '0 0 40px -6px rgba(52,211,153,0.55)' }}>
-              <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            {leveledUp && (
+              <span className="mb-3 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-widest bg-gradient-to-r from-indigo-500 to-purple-600 text-white sq-anim-pop">
+                ⚡ Level Up!
+              </span>
+            )}
+            <div className={`sq-anim-check w-24 h-24 rounded-full flex items-center justify-center border-2 ${leveledUp ? 'border-indigo-400' : 'border-emerald-400'}`}
+              style={{ boxShadow: leveledUp ? '0 0 40px -6px rgba(129,92,246,0.6)' : '0 0 40px -6px rgba(52,211,153,0.55)' }}>
+              <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke={leveledUp ? '#a78bfa' : '#34d399'} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
             </div>
             <h2 className={`mt-5 text-[22px] font-bold ${txt}`}>Quest Completed!</h2>
-            <span className="mt-3 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/90 text-white">
+            <span className={`mt-3 px-3 py-1 rounded-full text-xs font-semibold text-white ${leveledUp ? 'bg-indigo-500/90' : 'bg-emerald-500/90'}`}>
               +{quest?.xp ?? 0} XP
             </span>
           </div>
@@ -709,6 +806,9 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const poseStateRef      = useRef(createPoseRepState(quest.reps ? (quest.progress || 0) : 0));
   const poseRafRef        = useRef(null);
   const poseLastVideoTimeRef = useRef(-1);
+  const smoothedActRef    = useRef(null);
+  const smoothedNegRef    = useRef(null);
+  const verifyingRef      = useRef(false);
 
   const [phase,         setPhase]         = useState('starting');
   const [camError,      setCamError]      = useState(null);
@@ -736,6 +836,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const [repsDone,      setRepsDone]      = useState(quest.reps ? (quest.progress || 0) : 0);
   const [repPhase,      setRepPhase]      = useState('up');
   const [confirmed,     setConfirmed]     = useState(false);
+  const [verifying,     setVerifying]     = useState(false);
   const [lastLabel,     setLastLabel]     = useState('');
   const [uploadedProof, setUploadedProof] = useState(null);
 
@@ -848,6 +949,15 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     return () => { cancelled = true; };
   }, [modelVersion, quest.reps]);
 
+  // Warm up the larger, more accurate model in the background (low priority)
+  // so the final confirmation pass later doesn't stall on a cold load.
+  useEffect(() => {
+    if (quest.reps || !modelReady) return undefined;
+    let cancelled = false;
+    getStaticClassifier().catch(() => { /* falls back gracefully in runFinalVerification */ });
+    return () => { cancelled = true; };
+  }, [modelReady, quest.reps]);
+
   const resetRepTracking = useCallback(() => {
     const baseline = quest.reps ? (quest.progress || 0) : 0;
     poseStateRef.current = createPoseRepState(baseline);
@@ -897,17 +1007,85 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const negScore = getMaxLabelScore(results, activeNegatives);
         setLastLabel(results[0]?.label ?? '');
 
-        setLiveScore(Math.round(actScore * 100));
-        const passed = actScore > negScore && actScore >= PASS_THRESHOLD;
-        passStreakRef.current = passed ? passStreakRef.current + 1 : 0;
+        // Smooth scores across frames (EMA) so a single blurry/occluded frame
+        // doesn't tank an otherwise-confident read, while still requiring the
+        // signal to be sustained rather than a lucky one-off frame.
+        smoothedActRef.current = smoothedActRef.current === null ? actScore : smoothedActRef.current * (1 - SCORE_SMOOTHING) + actScore * SCORE_SMOOTHING;
+        smoothedNegRef.current = smoothedNegRef.current === null ? negScore : smoothedNegRef.current * (1 - SCORE_SMOOTHING) + negScore * SCORE_SMOOTHING;
+        const smoothedAct = smoothedActRef.current;
+        const smoothedNeg = smoothedNegRef.current;
+
+        setLiveScore(Math.round(smoothedAct * 100));
+        const passed = smoothedAct > smoothedNeg && smoothedAct >= PASS_THRESHOLD;
+        passStreakRef.current = passed
+          ? Math.min(REQUIRED_PASSES, passStreakRef.current + 1)
+          : Math.max(0, passStreakRef.current - 1);
         setPassStreak(passStreakRef.current);
-        if (passStreakRef.current >= REQUIRED_PASSES) { confirmedRef.current = true; setConfirmed(true); }
+        if (passStreakRef.current >= REQUIRED_PASSES && !verifyingRef.current && !confirmedRef.current) {
+          // The fast live model is sustained-confident — hand off to the larger,
+          // more accurate model for one final high-quality frame before locking
+          // this in as verified. Keeps the live loop snappy while the moment
+          // that actually counts gets the better model.
+          verifyingRef.current = true;
+          setVerifying(true);
+          runFinalVerification();
+        } else if (passed) {
+          haptic(8);
+        }
       } catch (err) { 
         consecutiveErrors += 1;
         if (consecutiveErrors >= 3 && isCurrentRun()) setModelError('AI analysis is temporarily unavailable. Try closing and reopening the camera.');
       } finally { 
         isScanningRef.current = false;
         if (isCurrentRun()) { setScanning(false); scheduleNext(consecutiveErrors ? 1000 : 1200); }
+      }
+    };
+
+    const runFinalVerification = async () => {
+      try {
+        const video = videoRef.current;
+        if (!video || !video.videoWidth) throw new Error('no live frame available');
+        const size = 256; // matches the accurate model's native input resolution
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const scale = Math.min(size / video.videoWidth, size / video.videoHeight);
+        const w = video.videoWidth * scale, h = video.videoHeight * scale;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, size, size);
+        ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, (size - w) / 2, (size - h) / 2, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+
+        const staticClassifier = await getStaticClassifier();
+        const results = await staticClassifier(dataUrl, classifierLabels);
+        const actScore = getMaxLabelScore(results, labels.activity);
+        const negScore = getMaxLabelScore(results, activeNegatives);
+        const finalPass = actScore > negScore && actScore >= PASS_THRESHOLD;
+
+        if (!isCurrentRun()) return;
+        if (finalPass) {
+          confirmedRef.current = true;
+          setConfirmed(true);
+          haptic([15, 30, 15]);
+        } else {
+          // The accurate model disagreed with the fast live read — don't lock
+          // in a false positive. Back the streak off a bit and keep scanning
+          // rather than throwing a hard error at the user.
+          passStreakRef.current = Math.max(0, REQUIRED_PASSES - 2);
+          setPassStreak(passStreakRef.current);
+        }
+      } catch {
+        // If the accurate model fails to load (e.g. offline), fall back to
+        // trusting the sustained live streak rather than blocking completion.
+        if (isCurrentRun() && !confirmedRef.current) {
+          confirmedRef.current = true;
+          setConfirmed(true);
+          haptic([15, 30, 15]);
+        }
+      } finally {
+        verifyingRef.current = false;
+        setVerifying(false);
+        if (isCurrentRun()) scheduleNext(400);
       }
     };
     scanLoop();
@@ -943,6 +1121,9 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   if (update.reps >= quest.reps) {
                     confirmedRef.current = true;
                     setConfirmed(true);
+                    haptic([15, 30, 15]);
+                  } else {
+                    haptic(10);
                   }
                 }
               } else if (!landmarks && quest.reps) {
@@ -1050,7 +1231,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
   const retryCamera = () => { scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); setSourceWarning(null); };
   const flipCamera = () => { 
-    clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
+    clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; smoothedActRef.current = null; smoothedNegRef.current = null; verifyingRef.current = false; setVerifying(false); resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
     if (skeletonCanvasRef.current) {
       const ctx = skeletonCanvasRef.current.getContext('2d');
       ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
@@ -1072,20 +1253,20 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           const authCheck = await checkPhotoAuthenticity(file, dataUrl, SOURCE_LABELS);
           if (authCheck.suspicious) {
             setPassStreak(0);
-            setNotice("This looks like a stock photo, screenshot, or image pulled from the internet rather than one you took yourself. Please upload an original photo.");
+            setNotice(`This looks like a stock photo, screenshot, or image pulled from the internet rather than one you took yourself (${authCheck.confidence}% confidence). Please upload an original photo.`);
             return;
           }
           if (!authCheck.hasCameraMetadata) {
             setSourceWarning("Heads up — this photo has no camera metadata, so we can't fully confirm it's an original. Live camera capture is the most reliable option.");
           }
         }
-        const classifier = await getClassifier();
+        const classifier = await getStaticClassifier();
         const results = await classifier(dataUrl, classifierLabels);
         const actScore = getMaxLabelScore(results, labels.activity);
         const negScore = getMaxLabelScore(results, activeNegatives);
         setLiveScore(Math.round(actScore * 100)); setLastLabel(results[0]?.label ?? '');
         if (actScore > negScore && actScore >= (PASS_THRESHOLD - 0.05)) {
-          setPassStreak(REQUIRED_PASSES); confirmedRef.current = true; accepted = true; setConfirmed(true);
+          setPassStreak(REQUIRED_PASSES); confirmedRef.current = true; accepted = true; setConfirmed(true); haptic([15, 30, 15]);
         } else { setPassStreak(0); setNotice("Verification failed. Please make sure you upload a clear activity summary log showing distance and elapsed time metrics."); }
       } catch (err) { } finally { setScanning(false); setUploading(false); if (!accepted) { setUploadedProof(null); retryCamera(); } }
     };
@@ -1242,6 +1423,11 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   </div>
                   <p className="text-green-50 text-[13px] font-bold tracking-wide">Verified & Locked!</p>
                 </div>
+              ) : verifying ? (
+                <div className="flex items-center gap-2.5 bg-[#007AFF]/20 w-max px-4 py-2 rounded-full border border-[#007AFF]/30 backdrop-blur-md">
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin flex-shrink-0" />
+                  <p className="text-white text-[13px] font-bold tracking-wide">Confirming with high-accuracy AI…</p>
+                </div>
               ) : (
                 <>
                   <div className="flex items-end justify-between mb-2">
@@ -1297,7 +1483,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                 className={`w-full py-4 rounded-[18px] text-[15px] font-bold tracking-wide transition-all duration-300 ${
                   confirmed ? 'bg-[#007AFF] text-white shadow-[0_8px_20px_rgba(0,122,255,0.4)] active:scale-[0.98]' : `${pill} ${sub} cursor-not-allowed`
                 }`}>
-                {confirmed ? 'Complete Quest' : instructionText}
+                {confirmed ? 'Complete Quest' : verifying ? 'Confirming…' : instructionText}
               </button>
               <div className="flex gap-3">
                 <button onClick={flipCamera} className={`${quest.reps ? 'w-full' : 'flex-1'} py-3.5 rounded-[16px] text-[14px] font-semibold ${pill} ${txt} active:opacity-70 transition-opacity`}>
@@ -1428,16 +1614,19 @@ export default function QuestDailyApp() {
   }, [level, xp, quests, lastReset, proofImages, isMounted]);
 
   const applyXpChange = useCallback((amount) => {
+    const startLevel = levelRef.current;
     let newXp = xpRef.current + amount, newLevel = levelRef.current;
     while (newXp >= newLevel * 100) { newXp -= newLevel * 100; newLevel++; }
     while (newXp < 0 && newLevel > 1) { newLevel--; newXp += newLevel * 100; }
     if (newLevel === 1 && newXp < 0) newXp = 0;
     xpRef.current = newXp; levelRef.current = newLevel;
     setXp(newXp); setLevel(newLevel);
+    return newLevel > startLevel;
   }, []);
 
  const handleQuestClick = (quest) => {
   if (quest.completed) return;
+  haptic(6);
   setDetailQuestId(quest.id);
 };
 
@@ -1446,10 +1635,10 @@ export default function QuestDailyApp() {
     if (!quest || quest.completed) { setProofModalId(null); setDetailQuestId(null); return; }
     setProofImages(prev => ({ ...prev, [questId]: img }));
     setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true, progress: 0 } : q));
-    applyXpChange(quest?.xp ?? 0);
+    const leveledUp = applyXpChange(quest?.xp ?? 0);
     setProofModalId(null);
     setDetailQuestId(null);
-    setCompletionQuest(quest || null);
+    setCompletionQuest(quest ? { ...quest, leveledUp } : null);
   };
 
   const handleCancelProof = (progress) => {
@@ -1528,6 +1717,12 @@ export default function QuestDailyApp() {
                 <span className={`text-[11px] font-medium ${sub}`}>Novice Adventurer</span>
                 <span className={`ml-auto text-[11px] font-semibold ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{xp} / {xpRequired} XP</span>
               </div>
+              <div className={`mt-2 h-1.5 w-full rounded-full overflow-hidden ${dark ? 'bg-zinc-800' : 'bg-gray-200'}`}>
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-[width] duration-700 ease-out"
+                  style={{ width: `${xpPct}%` }}
+                />
+              </div>
             </div>
 
             <div className="relative z-10 flex-1 scroll-ios px-3 pt-1 pb-8 space-y-5">
@@ -1549,7 +1744,7 @@ export default function QuestDailyApp() {
                     <div key={quest.id}>
                       {i > 0 && <div className={`border-t ${sep} ml-[58px]`} />}
                       <button onClick={() => { if (!quest.completed) handleQuestClick(quest); }}
-                        className={`w-full flex items-center gap-3.5 px-4 py-[18px] text-left active:bg-black/5 transition-all`}>
+                        className={`w-full flex items-center gap-3.5 px-4 py-[18px] text-left active:bg-black/5 active:scale-[0.99] transition-all`}>
                         <div className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center border-2 transition-all duration-300 ${quest.completed ? 'bg-[#34C759] border-[#34C759] shadow-[0_0_10px_rgba(52,199,89,0.4)]' : dark ? 'border-zinc-600' : 'border-gray-300'}`}>
                           {quest.completed && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
                         </div>
@@ -1584,10 +1779,11 @@ export default function QuestDailyApp() {
               </div>
 
               {allDone && (
-                <div className={`${cardBg} rounded-[20px] p-6 text-center border ${dark ? 'border-white/5' : 'border-gray-100 shadow-sm'}`}>
-                  <p className="text-3xl mb-3">🏆</p>
-                  <p className={`font-bold text-[16px] ${txt}`}>All Quests Complete</p>
-                  <p className={`text-sm mt-1.5 font-medium ${sub}`}>Rest up. New quests when the timer hits zero.</p>
+                <div className={`relative overflow-hidden rounded-[20px] p-6 text-center border sq-anim-pop bg-gradient-to-b ${dark ? 'from-[#1c1530] to-[#0d0a17] border-white/5' : 'from-indigo-50 to-white border-gray-100 shadow-sm'}`}>
+                  <div className="pointer-events-none absolute -top-8 -right-8 w-32 h-32 rounded-full bg-purple-500/20 blur-3xl" />
+                  <p className="text-3xl mb-3 relative z-10">🏆</p>
+                  <p className={`font-bold text-[16px] relative z-10 ${txt}`}>All Quests Complete</p>
+                  <p className={`text-sm mt-1.5 font-medium relative z-10 ${sub}`}>Rest up. New quests when the timer hits zero.</p>
                 </div>
               )}
 
