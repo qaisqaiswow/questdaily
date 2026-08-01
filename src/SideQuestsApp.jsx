@@ -4,6 +4,80 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { pipeline, env } from '@huggingface/transformers';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as exifr from 'exifr';
+import { initializeApp, getApps } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
+
+// ─── FIREBASE / LEADERBOARD BACKEND ───────────────────────────────────────────
+// Replace these with your own Firebase project's config — Firebase Console →
+// Project Settings → General → "Your apps" → SDK setup and configuration.
+// (This is safe to ship client-side; it's not a secret. Access control lives
+// in your Firestore security rules, not in this config object.)
+const firebaseConfig = {
+  apiKey: "AIzaSyDWaoCQjCc8mpF9jE8FIZvSKDKkxgTUELA",
+  authDomain: "quest-daily-8debb.firebaseapp.com",
+  projectId: "quest-daily-8debb",
+  storageBucket: "quest-daily-8debb.firebasestorage.app",
+  messagingSenderId: "628879821292",
+  appId: "1:628879821292:web:997e8155a24b806eb2d8c9",
+  measurementId: "G-C6S86XMFRZ",
+};
+
+const firebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const db = getFirestore(firebaseApp);
+const LEADERBOARD_COLLECTION = 'leaderboard';
+const LEADERBOARD_SIZE = 100;
+
+// Writes (or merges) the current player's stats into their leaderboard doc.
+// Ranking is by lifetime XP earned (never decreases), so a leveling-related
+// XP "spend" never demotes someone — it's a pure progress counter.
+async function syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned }) {
+  if (!uid || !username) return;
+  try {
+    await setDoc(doc(db, LEADERBOARD_COLLECTION, uid), {
+      username: username.slice(0, 20),
+      level,
+      xp,
+      totalXpEarned,
+      updatedAt: Date.now(),
+    }, { merge: true });
+  } catch (err) {
+    console.error('Leaderboard sync failed:', err);
+  }
+}
+
+// Signs the device in anonymously so it has a stable UID to own a leaderboard
+// doc, without requiring the player to create an account or password.
+function useAnonymousAuth() {
+  const [uid, setUid] = useState(null);
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, user => {
+      if (user) setUid(user.uid);
+      else signInAnonymously(auth).catch(err => console.error('Anonymous auth failed:', err));
+    });
+    return unsub;
+  }, []);
+  return uid;
+}
+
+// Live top-N leaderboard — Firestore's onSnapshot pushes updates to every
+// connected client the instant any player's doc changes, so this needs no
+// polling or manual refresh.
+function useLeaderboard() {
+  const [entries, setEntries] = useState([]);
+  const [status, setStatus] = useState('loading'); // 'loading' | 'ready' | 'error'
+  useEffect(() => {
+    const q = query(collection(db, LEADERBOARD_COLLECTION), orderBy('totalXpEarned', 'desc'), limit(LEADERBOARD_SIZE));
+    const unsub = onSnapshot(
+      q,
+      snap => { setEntries(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setStatus('ready'); },
+      err => { console.error('Leaderboard listener error:', err); setStatus('error'); }
+    );
+    return unsub;
+  }, []);
+  return { entries, status };
+}
 
 // ─── HAPTICS ─────────────────────────────────────────────────────────────────
 function haptic(pattern = 10) {
@@ -574,6 +648,159 @@ const Confetti = ({ count = 24, big = false }) => {
     </div>
   );
 };
+
+// ─── USERNAME ONBOARDING MODAL (shown once, powers the leaderboard) ──────────
+function UsernameModal({ onSubmit, dark }) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState(null);
+
+  const cardBg = dark ? 'bg-zinc-900' : 'bg-white';
+  const txt = dark ? 'text-white' : 'text-gray-900';
+  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
+  const inputBg = dark ? 'bg-zinc-800 border-zinc-700 text-white placeholder-zinc-500' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400';
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const trimmed = name.trim();
+    if (trimmed.length < 3) { setError('At least 3 characters.'); return; }
+    if (trimmed.length > 20) { setError('20 characters max.'); return; }
+    if (!/^[a-zA-Z0-9_ ]+$/.test(trimmed)) { setError('Letters, numbers, and underscores only.'); return; }
+    haptic(15);
+    onSubmit(trimmed);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
+      <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-zinc-800' : 'border-gray-100'}`}>
+        <div className="mx-auto w-16 h-16 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-3xl mb-4 shadow-[0_10px_30px_-10px_rgba(139,92,246,0.6)]">
+          🏆
+        </div>
+        <h2 className={`text-[18px] font-bold ${txt}`}>Pick your adventurer name</h2>
+        <p className={`text-[13px] mt-1.5 leading-relaxed ${sub}`}>
+          This is how you'll show up on the worldwide leaderboard. You can only set it once, so choose wisely.
+        </p>
+        <form onSubmit={handleSubmit} className="mt-5">
+          <input
+            type="text"
+            value={name}
+            onChange={e => { setName(e.target.value); setError(null); }}
+            placeholder="e.g. QuestMaster99"
+            maxLength={20}
+            autoFocus
+            className={`w-full rounded-[14px] border px-4 py-3 text-[15px] font-semibold text-center outline-none focus:ring-2 focus:ring-[#007AFF]/50 transition-all ${inputBg}`}
+          />
+          {error && <p className="text-rose-500 text-[12px] font-semibold mt-2">{error}</p>}
+          <button type="submit"
+            className="w-full mt-4 py-3.5 rounded-[16px] text-[15px] font-bold text-white bg-gradient-to-r from-indigo-500 to-purple-600 shadow-lg active:scale-[0.98] transition-transform"
+            style={{ boxShadow: '0 10px 30px -10px rgba(139,92,246,0.6)' }}>
+            Join the Leaderboard
+          </button>
+        </form>
+        <p className={`text-[10px] mt-3 ${dark ? 'text-zinc-600' : 'text-gray-400'}`}>
+          Only your name, level, and XP are shared — nothing else about you.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── LEADERBOARD SCREEN ────────────────────────────────────────────────────────
+function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp }) {
+  const { entries, status } = useLeaderboard();
+  const txt = dark ? 'text-white' : 'text-gray-900';
+  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
+  const cardBg = dark ? 'bg-zinc-900/70' : 'bg-white';
+  const sep = dark ? 'border-zinc-800' : 'border-gray-100';
+
+  const myRank = useMemo(() => {
+    const idx = entries.findIndex(e => e.id === myUid);
+    return idx === -1 ? null : idx + 1;
+  }, [entries, myUid]);
+
+  const medal = (rank) => rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : null;
+
+  return (
+    <div className="sq-anim-pop relative z-10 min-h-screen flex flex-col">
+      <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
+        <button onClick={onBack}
+          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <p className={`text-[15px] font-bold ${txt}`}>Worldwide Leaderboard</p>
+        <div className="w-9 h-9" />
+      </div>
+
+      {myRank && (
+        <div className="px-4 mb-3">
+          <div className={`rounded-[16px] px-4 py-3 flex items-center gap-3 bg-gradient-to-r from-indigo-500 to-purple-600 shadow-lg`}>
+            <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white font-extrabold text-[13px] flex-shrink-0">
+              #{myRank}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-white font-bold text-[14px] truncate">{myUsername} (You)</p>
+              <p className="text-white/70 text-[11px] font-medium">Lv {myLevel} · {myXp} XP this level</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1 px-4 pb-8 overflow-y-auto scroll-ios">
+        {status === 'loading' && (
+          <div className="flex flex-col items-center justify-center py-16 gap-3">
+            <div className="w-8 h-8 border-4 border-white/20 border-t-[#007AFF] rounded-full animate-spin" />
+            <p className={`text-[13px] font-medium ${sub}`}>Loading rankings…</p>
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6">
+            <p className="text-3xl mb-1">📡</p>
+            <p className={`text-[14px] font-bold ${txt}`}>Can't reach the leaderboard</p>
+            <p className={`text-[12px] ${sub}`}>Check your connection, or the backend may not be configured yet.</p>
+          </div>
+        )}
+
+        {status === 'ready' && entries.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6">
+            <p className="text-3xl mb-1">🏁</p>
+            <p className={`text-[14px] font-bold ${txt}`}>No rankings yet</p>
+            <p className={`text-[12px] ${sub}`}>Complete a quest to be the first on the board.</p>
+          </div>
+        )}
+
+        {status === 'ready' && entries.length > 0 && (
+          <div className={`${cardBg} border ${dark ? 'border-white/5' : 'border-gray-100 shadow-sm'} rounded-[20px] overflow-hidden`}>
+            {entries.map((entry, i) => {
+              const rank = i + 1;
+              const isMe = entry.id === myUid;
+              return (
+                <div key={entry.id}>
+                  {i > 0 && <div className={`border-t ${sep} ml-[58px]`} />}
+                  <div className={`flex items-center gap-3 px-4 py-3 ${isMe ? (dark ? 'bg-indigo-500/10' : 'bg-indigo-50') : ''}`}>
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[13px] font-extrabold ${
+                      rank <= 3 ? 'text-lg' : dark ? 'bg-zinc-800 text-zinc-400' : 'bg-gray-100 text-gray-500'
+                    }`}>
+                      {medal(rank) || rank}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-[14px] font-semibold truncate ${isMe ? 'text-indigo-400' : txt}`}>
+                        {entry.username || 'Adventurer'}{isMe ? ' (You)' : ''}
+                      </p>
+                      <p className={`text-[11px] font-medium ${sub}`}>Lv {entry.level ?? 1}</p>
+                    </div>
+                    <span className={`text-[12px] font-bold flex-shrink-0 ${dark ? 'text-zinc-400' : 'text-gray-500'}`}>
+                      {(entry.totalXpEarned ?? 0).toLocaleString()} XP
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─── INSTALL PROMPT ONBOARDING MODAL ──────────────────────────────────────────
 function DeviceInstallPrompt({ onDismiss, dark }) {
@@ -1536,12 +1763,16 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function QuestDailyApp() {
   const [isMounted, setIsMounted] = useState(false);
+  const uid = useAnonymousAuth();
 
   const [dark, setDark] = useState(true);
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [level, setLevel] = useState(1);
   const [xp, setXp] = useState(0);
+  const [totalXpEarned, setTotalXpEarned] = useState(0);
   const [streak, setStreak] = useState(0);
+  const [username, setUsername] = useState(null);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [quests, setQuests] = useState([]);
   const [lastReset, setLastReset] = useState(0);
   const [proofImages, setProofImages] = useState({});
@@ -1558,7 +1789,9 @@ export default function QuestDailyApp() {
 
     setLevel(parseInt(localStorage.getItem('sq_level')) || 1);
     setXp(parseInt(localStorage.getItem('sq_xp')) || 0);
+    setTotalXpEarned(parseInt(localStorage.getItem('sq_totalXpEarned')) || 0);
     setStreak(parseInt(localStorage.getItem('sq_streak')) || 0);
+    setUsername(localStorage.getItem('sq_username') || null);
     setLastReset(parseInt(localStorage.getItem('sq_lastReset')) || 0);
     setProofImages(JSON.parse(localStorage.getItem('sq_proofs')) || {});
 
@@ -1586,6 +1819,21 @@ export default function QuestDailyApp() {
     localStorage.setItem('sq_has_seen_install_v2', 'true');
     setShowInstallPrompt(false);
   };
+
+  const handleSetUsername = (name) => {
+    localStorage.setItem('sq_username', name);
+    setUsername(name);
+  };
+
+  // Once both an anonymous UID and a username exist, make sure the player has
+  // a leaderboard doc (covers first-time setup and returning after a while).
+  // Per-completion updates are handled separately in handleProofConfirm.
+  useEffect(() => {
+    if (uid && username) {
+      syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uid, username]);
   
   const [timeLeft,  setTimeLeft]  = useState('--:--:--');
   const [proofModalId,   setProofModalId]   = useState(null);
@@ -1598,8 +1846,10 @@ export default function QuestDailyApp() {
 
   const xpRef    = useRef(xp);
   const levelRef = useRef(level);
+  const totalXpEarnedRef = useRef(totalXpEarned);
   useEffect(() => { xpRef.current    = xp;    }, [xp]);
   useEffect(() => { levelRef.current = level; }, [level]);
+  useEffect(() => { totalXpEarnedRef.current = totalXpEarned; }, [totalXpEarned]);
 
   const xpRequired = level * 100;
 
@@ -1626,12 +1876,13 @@ export default function QuestDailyApp() {
     if (isMounted) {
       localStorage.setItem('sq_level', level);
       localStorage.setItem('sq_xp', xp);
+      localStorage.setItem('sq_totalXpEarned', totalXpEarned);
       localStorage.setItem('sq_streak', streak);
       localStorage.setItem('sq_quests', JSON.stringify(quests));
       localStorage.setItem('sq_lastReset', lastReset);
       localStorage.setItem('sq_proofs', JSON.stringify(proofImages));
     }
-  }, [level, xp, streak, quests, lastReset, proofImages, isMounted]);
+  }, [level, xp, totalXpEarned, streak, quests, lastReset, proofImages, isMounted]);
 
   const applyXpChange = useCallback((amount) => {
     const startLevel = levelRef.current;
@@ -1641,7 +1892,17 @@ export default function QuestDailyApp() {
     if (newLevel === 1 && newXp < 0) newXp = 0;
     xpRef.current = newXp; levelRef.current = newLevel;
     setXp(newXp); setLevel(newLevel);
-    return newLevel > startLevel;
+
+    // Lifetime XP only ever goes up — it's the leaderboard's ranking metric,
+    // separate from "current XP toward next level" which resets each level.
+    let newTotal = totalXpEarnedRef.current;
+    if (amount > 0) {
+      newTotal += amount;
+      totalXpEarnedRef.current = newTotal;
+      setTotalXpEarned(newTotal);
+    }
+
+    return { leveledUp: newLevel > startLevel, newXp, newLevel, newTotal };
   }, []);
 
  const handleQuestClick = (quest) => {
@@ -1655,7 +1916,7 @@ export default function QuestDailyApp() {
     if (!quest || quest.completed) { setProofModalId(null); setDetailQuestId(null); return; }
     setProofImages(prev => ({ ...prev, [questId]: img }));
     setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true, progress: 0 } : q));
-    const leveledUp = applyXpChange(quest?.xp ?? 0);
+    const { leveledUp, newXp, newLevel, newTotal } = applyXpChange(quest?.xp ?? 0);
 
     // Bump the daily streak once per calendar day, the first time a quest is completed that day.
     const todayStr = new Date().toDateString();
@@ -1665,6 +1926,10 @@ export default function QuestDailyApp() {
       setStreak(prev => (lastStreakDate === yesterdayStr ? prev + 1 : 1));
       localStorage.setItem('sq_streak_date', todayStr);
     }
+
+    // Push the freshly-computed stats straight to the leaderboard — no
+    // waiting on a state update/re-render, so it reflects instantly.
+    syncLeaderboardEntry(uid, { username, level: newLevel, xp: newXp, totalXpEarned: newTotal });
 
     setProofModalId(null);
     setDetailQuestId(null);
@@ -1703,7 +1968,9 @@ export default function QuestDailyApp() {
         
         <AnimatedBackground dark={dark} />
 
-        {showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} dark={dark} />}
+        {isMounted && !username && <UsernameModal onSubmit={handleSetUsername} dark={dark} />}
+
+        {username && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} dark={dark} />}
 
         {proofModal && (
           <CameraModal quest={proofModal} dark={dark}
@@ -1719,7 +1986,10 @@ export default function QuestDailyApp() {
           </div>
         )}
 
-        {completionQuest ? (
+        {showLeaderboard ? (
+          <LeaderboardScreen dark={dark} onBack={() => setShowLeaderboard(false)}
+            myUid={uid} myUsername={username} myLevel={level} myXp={xp} />
+        ) : completionQuest ? (
           <CompletionScreen quest={completionQuest} dark={dark} timeLeft={timeLeft}
             onToggleTheme={() => setDark(d => !d)}
             onBack={() => setCompletionQuest(null)} />
@@ -1750,6 +2020,11 @@ export default function QuestDailyApp() {
                     <span className="text-[10px]">⏱</span>
                     <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
                   </div>
+                  <button onClick={() => setShowLeaderboard(true)}
+                    className={`w-8 h-8 rounded-full flex items-center justify-center text-[14px] ${dark ? 'bg-zinc-800/80' : 'bg-gray-100'} active:opacity-70 transition-colors`}
+                    aria-label="Worldwide leaderboard">
+                    🏆
+                  </button>
                   <button onClick={() => setDark(d => !d)}
                     className={`w-8 h-8 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
                     {dark ? <SunIcon /> : <MoonIcon />}
