@@ -33,7 +33,7 @@ const LEADERBOARD_SIZE = 100;
 // Ranking is by lifetime XP earned (never decreases), so a leveling-related
 // XP "spend" never demotes someone — it's a pure progress counter.
 async function syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned }) {
-  if (!uid || !username) return;
+  if (!uid || !username) return { ok: false, error: 'Not signed in yet — try again in a moment.' };
   try {
     await setDoc(doc(db, LEADERBOARD_COLLECTION, uid), {
       username: username.slice(0, 20),
@@ -42,8 +42,10 @@ async function syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned })
       totalXpEarned,
       updatedAt: Date.now(),
     }, { merge: true });
+    return { ok: true };
   } catch (err) {
     console.error('Leaderboard sync failed:', err);
+    return { ok: false, error: `${err.code || 'error'}: ${err.message}` };
   }
 }
 
@@ -67,16 +69,24 @@ function useAnonymousAuth() {
 function useLeaderboard() {
   const [entries, setEntries] = useState([]);
   const [status, setStatus] = useState('loading'); // 'loading' | 'ready' | 'error'
+  const [errorDetail, setErrorDetail] = useState(null);
   useEffect(() => {
     const q = query(collection(db, LEADERBOARD_COLLECTION), orderBy('totalXpEarned', 'desc'), limit(LEADERBOARD_SIZE));
+    // If Firestore/Auth aren't set up yet in the Firebase console, the SDK can
+    // hang rather than error out quickly — don't leave the user staring at a
+    // spinner forever.
+    const timeout = setTimeout(() => {
+      setStatus(prev => prev === 'loading' ? 'error' : prev);
+      setErrorDetail(prev => prev || 'Timed out waiting for a response. Firestore Database and Anonymous Auth may not be enabled yet in the Firebase console.');
+    }, 8000);
     const unsub = onSnapshot(
       q,
-      snap => { setEntries(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setStatus('ready'); },
-      err => { console.error('Leaderboard listener error:', err); setStatus('error'); }
+      snap => { clearTimeout(timeout); setEntries(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setStatus('ready'); setErrorDetail(null); },
+      err => { clearTimeout(timeout); console.error('Leaderboard listener error:', err); setStatus('error'); setErrorDetail(`${err.code || 'error'}: ${err.message}`); }
     );
-    return unsub;
+    return () => { clearTimeout(timeout); unsub(); };
   }, []);
-  return { entries, status };
+  return { entries, status, errorDetail };
 }
 
 // ─── HAPTICS ─────────────────────────────────────────────────────────────────
@@ -705,8 +715,8 @@ function UsernameModal({ onSubmit, dark }) {
 }
 
 // ─── LEADERBOARD SCREEN ────────────────────────────────────────────────────────
-function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp }) {
-  const { entries, status } = useLeaderboard();
+function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syncError, onRetrySync }) {
+  const { entries, status, errorDetail } = useLeaderboard();
   const txt = dark ? 'text-white' : 'text-gray-900';
   const sub = dark ? 'text-zinc-400' : 'text-gray-500';
   const cardBg = dark ? 'bg-zinc-900/70' : 'bg-white';
@@ -729,6 +739,25 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp }) {
         <p className={`text-[15px] font-bold ${txt}`}>Worldwide Leaderboard</p>
         <div className="w-9 h-9" />
       </div>
+
+      {syncError && (
+        <div className="px-4 mb-3">
+          <div className={`rounded-[14px] px-4 py-3 flex items-start gap-2.5 ${dark ? 'bg-rose-500/10 border border-rose-500/20' : 'bg-rose-50 border border-rose-100'}`}>
+            <span className="text-[15px] flex-shrink-0">⚠️</span>
+            <div className="flex-1 min-w-0">
+              <p className={`text-[12px] font-medium leading-snug ${dark ? 'text-rose-300' : 'text-rose-600'}`}>
+                Your last score didn't save to the leaderboard: {syncError}
+              </p>
+              {onRetrySync && (
+                <button onClick={onRetrySync}
+                  className={`mt-1.5 text-[11px] font-bold underline ${dark ? 'text-rose-300' : 'text-rose-600'}`}>
+                  Try again
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {myRank && (
         <div className="px-4 mb-3">
@@ -756,7 +785,12 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp }) {
           <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6">
             <p className="text-3xl mb-1">📡</p>
             <p className={`text-[14px] font-bold ${txt}`}>Can't reach the leaderboard</p>
-            <p className={`text-[12px] ${sub}`}>Check your connection, or the backend may not be configured yet.</p>
+            <p className={`text-[12px] ${sub}`}>
+              {errorDetail || 'Check your connection, or the backend may not be configured yet.'}
+            </p>
+            <p className={`text-[11px] mt-2 max-w-xs ${dark ? 'text-zinc-600' : 'text-gray-400'}`}>
+              In the Firebase console, double-check Firestore Database and Anonymous Auth are both enabled, and that your security rules are published.
+            </p>
           </div>
         )}
 
@@ -764,7 +798,11 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp }) {
           <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6">
             <p className="text-3xl mb-1">🏁</p>
             <p className={`text-[14px] font-bold ${txt}`}>No rankings yet</p>
-            <p className={`text-[12px] ${sub}`}>Complete a quest to be the first on the board.</p>
+            <p className={`text-[12px] ${sub}`}>
+              {myLevel > 1 || myXp > 0
+                ? "You've made progress locally, but it hasn't reached the server yet. Try completing another quest, or reopen this screen in a moment."
+                : 'Complete a quest to be the first on the board.'}
+            </p>
           </div>
         )}
 
@@ -1773,6 +1811,7 @@ export default function QuestDailyApp() {
   const [streak, setStreak] = useState(0);
   const [username, setUsername] = useState(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [leaderboardSyncError, setLeaderboardSyncError] = useState(null);
   const [quests, setQuests] = useState([]);
   const [lastReset, setLastReset] = useState(0);
   const [proofImages, setProofImages] = useState({});
@@ -1825,12 +1864,21 @@ export default function QuestDailyApp() {
     setUsername(name);
   };
 
+  const retryLeaderboardSync = () => {
+    if (uid && username) {
+      syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned })
+        .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
+    }
+  };
+
   // Once both an anonymous UID and a username exist, make sure the player has
-  // a leaderboard doc (covers first-time setup and returning after a while).
+  // a leaderboard doc (covers first-time setup, returning after a while, and
+  // any completion that happened before anonymous auth had finished signing in).
   // Per-completion updates are handled separately in handleProofConfirm.
   useEffect(() => {
     if (uid && username) {
-      syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned });
+      syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned })
+        .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid, username]);
@@ -1928,8 +1976,11 @@ export default function QuestDailyApp() {
     }
 
     // Push the freshly-computed stats straight to the leaderboard — no
-    // waiting on a state update/re-render, so it reflects instantly.
-    syncLeaderboardEntry(uid, { username, level: newLevel, xp: newXp, totalXpEarned: newTotal });
+    // waiting on a state update/re-render, so it reflects instantly. If this
+    // fails (e.g. anonymous auth hasn't finished signing in yet), the
+    // catch-all effect above will retry once `uid` becomes available.
+    syncLeaderboardEntry(uid, { username, level: newLevel, xp: newXp, totalXpEarned: newTotal })
+      .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
 
     setProofModalId(null);
     setDetailQuestId(null);
@@ -1988,7 +2039,8 @@ export default function QuestDailyApp() {
 
         {showLeaderboard ? (
           <LeaderboardScreen dark={dark} onBack={() => setShowLeaderboard(false)}
-            myUid={uid} myUsername={username} myLevel={level} myXp={xp} />
+            myUid={uid} myUsername={username} myLevel={level} myXp={xp}
+            syncError={leaderboardSyncError} onRetrySync={retryLeaderboardSync} />
         ) : completionQuest ? (
           <CompletionScreen quest={completionQuest} dark={dark} timeLeft={timeLeft}
             onToggleTheme={() => setDark(d => !d)}
