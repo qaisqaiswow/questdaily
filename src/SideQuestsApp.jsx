@@ -613,7 +613,7 @@ const QuestIconBadge = ({ questId, size = 96, dark, floating = false }) => {
   const Icon = QuestSvg[theme.icon] || QuestSvg.target;
   return (
     <div className={`relative flex items-center justify-center rounded-full ${theme.grad} ${floating ? 'sq-anim-float' : ''}`}
-      style={{ width: size, height: size, boxShadow: `inset 0 0 0 1px rgba(255,255,255,0.22), inset 0 -3px 6px rgba(0,0,0,0.25), 0 3px 0 rgba(0,0,0,0.18)` }}>
+      style={{ width: size, height: size, backgroundImage: 'linear-gradient(165deg, rgba(255,255,255,0.3), rgba(255,255,255,0) 45%, rgba(0,0,0,0.15) 100%)', boxShadow: `inset 0 1px 1px rgba(255,255,255,0.35), inset 0 -4px 7px rgba(0,0,0,0.3), 0 3px 6px rgba(0,0,0,0.18), 0 8px 16px -6px rgba(0,0,0,0.35)` }}>
       <div className="absolute inset-[4px] rounded-full border border-white/20" style={{ borderStyle: 'dashed' }} />
       <Icon width={Math.round(size * 0.42)} height={Math.round(size * 0.42)} className="text-white relative z-10" />
     </div>
@@ -645,7 +645,7 @@ const ProgressRing = ({ pct, size = 56, stroke = 5, dark }) => {
 
 // ─── STAT CHIP (mini dashboard tile) ───────────────────────────────────────────
 const StatChip = ({ icon, label, value, dark, accent }) => (
-  <div className={`rounded-[10px] px-2 py-3 flex flex-col items-center justify-center text-center gap-1 ${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100 shadow-sm'}`}>
+  <div className={`rounded-[10px] px-2 py-3 flex flex-col items-center justify-center text-center gap-1 ${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100 shadow-[0_1px_2px_rgba(38,32,20,0.06),0_10px_24px_-8px_rgba(38,32,20,0.18)]'}`}>
     <span className={accent || (dark ? 'text-[#D9A64A]' : 'text-[#B8842A]')}>{icon}</span>
     <span className={`sq-mono text-[15px] font-bold leading-tight ${accent || (dark ? 'text-white' : 'text-stone-900')}`}>{value}</span>
     <span className={`text-[9px] font-bold uppercase tracking-wider ${dark ? 'text-stone-500' : 'text-stone-400'}`}>{label}</span>
@@ -720,7 +720,7 @@ function UsernameModal({ onSubmit, dark }) {
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
       <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-stone-800' : 'border-stone-100'}`}>
         <div className="mx-auto w-16 h-16 rounded-full bg-[#B8842A] flex items-center justify-center mb-4"
-          style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.25), inset 0 -3px 6px rgba(0,0,0,0.25), 0 3px 0 rgba(0,0,0,0.2)' }}>
+          style={{ boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.35), inset 0 -4px 7px rgba(0,0,0,0.3), 0 6px 16px -4px rgba(184,132,42,0.5)' }}>
           <TrophyIcon size={26} className="text-white" />
         </div>
         <h2 className={`sq-display text-[18px] font-semibold ${txt}`}>Pick your adventurer name</h2>
@@ -740,7 +740,7 @@ function UsernameModal({ onSubmit, dark }) {
           {error && <p className="text-rose-500 text-[12px] font-semibold mt-2">{error}</p>}
           <button type="submit"
             className="w-full mt-4 py-3.5 rounded-[12px] text-[15px] font-bold sq-display tracking-wide text-white bg-[#B8842A] active:scale-[0.98] transition-transform"
-            style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
+            style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 20px -6px rgba(184,132,42,0.55)' }}>
             Join the Leaderboard
           </button>
         </form>
@@ -800,7 +800,7 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
       {myRank && (
         <div className="px-4 mb-3">
           <div className={`rounded-[14px] px-4 py-3 flex items-center gap-3 bg-[#B8842A]`}
-            style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.15)' }}>
+            style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 20px -6px rgba(184,132,42,0.5)' }}>
             <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white font-extrabold text-[13px] sq-mono flex-shrink-0">
               #{myRank}
             </div>
@@ -846,7 +846,7 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
         )}
 
         {status === 'ready' && entries.length > 0 && (
-          <div className={`${cardBg} border ${dark ? 'border-white/5' : 'border-stone-100 shadow-sm'} rounded-[20px] overflow-hidden`}>
+          <div className={`${cardBg} border ${dark ? 'border-white/5' : 'border-stone-100 shadow-[0_1px_2px_rgba(38,32,20,0.06),0_10px_24px_-8px_rgba(38,32,20,0.18)]'} rounded-[20px] overflow-hidden`}>
             {entries.map((entry, i) => {
               const rank = i + 1;
               const isMe = entry.id === myUid;
@@ -903,10 +903,10 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
             <h3 className={`sq-display text-xl font-semibold mb-2 ${txt}`}>Install QuestDaily</h3>
             <p className={`text-sm mb-6 ${sub}`}>Which device are you using?</p>
             <div className="flex flex-col gap-3">
-              <button onClick={() => { setOs('ios'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#B8842A] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
+              <button onClick={() => { setOs('ios'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#B8842A] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 18px -6px rgba(184,132,42,0.5)' }}>
                 Apple (iOS)
               </button>
-              <button onClick={() => { setOs('android'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#4B6B3E] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
+              <button onClick={() => { setOs('android'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#4B6B3E] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 18px -6px rgba(75,107,62,0.5)' }}>
                 Android
               </button>
               <button onClick={onDismiss} className={`w-full mt-2 py-3 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>
@@ -935,7 +935,7 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
               {step === 2 && (
                 <button onClick={() => setStep(1)} className={`flex-1 py-3.5 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>Back</button>
               )}
-              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#B8842A] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
+              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#B8842A] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 18px -6px rgba(184,132,42,0.5)' }}>
                 {step === 1 ? 'Next' : 'Got it!'}
               </button>
             </div>
@@ -961,7 +961,7 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
               {step === 2 && (
                 <button onClick={() => setStep(1)} className={`flex-1 py-3.5 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>Back</button>
               )}
-              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#4B6B3E] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
+              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#4B6B3E] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 18px -6px rgba(75,107,62,0.5)' }}>
                 {step === 1 ? 'Next' : 'Got it!'}
               </button>
             </div>
@@ -1021,7 +1021,7 @@ function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMar
       <div className="px-4 pb-8 mt-6">
         <button onClick={onMarkComplete}
           className={`w-full py-4 rounded-[14px] text-[15px] font-bold tracking-wide sq-display text-white ${theme.grad} active:scale-[0.97] transition-transform`}
-          style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
+          style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.25), 0 10px 22px -8px rgba(0,0,0,0.45)' }}>
           Start Challenge
         </button>
       </div>
@@ -1063,7 +1063,7 @@ function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack }) {
           <div className="relative z-10 flex flex-col items-center">
             {leveledUp && (
               <span className="mb-3 inline-flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-widest sq-display bg-[#B8842A] text-white sq-anim-pop"
-                style={{ clipPath: 'polygon(6% 0%,94% 0%,100% 50%,94% 100%,6% 100%,0% 50%)' }}>
+                style={{ clipPath: 'polygon(6% 0%,94% 0%,100% 50%,94% 100%,6% 100%,0% 50%)', backgroundImage: 'linear-gradient(165deg, rgba(255,255,255,0.28), rgba(255,255,255,0) 45%, rgba(0,0,0,0.14) 100%)', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>
                 <QuestSvg.bolt width={11} height={11} /> Level Up
               </span>
             )}
@@ -2112,16 +2112,17 @@ export default function QuestDailyApp() {
               </div>
               <div className="mt-3.5 flex items-center gap-2">
                 <span className="sq-display inline-flex items-center justify-center bg-[#B8842A] text-white text-[10px] font-semibold tracking-wide"
-                  style={{ padding: '3px 11px 3px 9px', clipPath: 'polygon(12% 0%,100% 0%,100% 100%,12% 100%,0% 50%)' }}>
+                  style={{ padding: '3px 11px 3px 9px', clipPath: 'polygon(12% 0%,100% 0%,100% 100%,12% 100%,0% 50%)', backgroundImage: 'linear-gradient(165deg, rgba(255,255,255,0.28), rgba(255,255,255,0) 45%, rgba(0,0,0,0.14) 100%)', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.35))' }}>
                   LV {level}
                 </span>
                 <span className={`text-[11px] font-medium ${sub}`}>{getLevelTitle(level)}</span>
                 <span className={`ml-auto sq-mono text-[11px] font-semibold ${dark ? 'text-stone-500' : 'text-stone-400'}`}>{xp} / {xpRequired} XP</span>
               </div>
-              <div className={`mt-2 h-1.5 w-full rounded-full overflow-hidden ${dark ? 'bg-stone-800' : 'bg-stone-200'}`}>
+              <div className={`mt-2 h-1.5 w-full rounded-full overflow-hidden ${dark ? 'bg-stone-800' : 'bg-stone-200'}`}
+                style={{ boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.18)' }}>
                 <div
                   className="h-full rounded-full bg-[#B8842A] transition-[width] duration-700 ease-out"
-                  style={{ width: `${xpPct}%` }}
+                  style={{ width: `${xpPct}%`, backgroundImage: 'linear-gradient(180deg, rgba(255,255,255,0.35), rgba(255,255,255,0) 60%)' }}
                 />
               </div>
             </div>
@@ -2133,7 +2134,7 @@ export default function QuestDailyApp() {
                 <StatChip icon={<CheckIcon />} label="Today" value={`${completedCount}/${quests.length || 0}`} dark={dark} accent={allDone ? (dark ? 'text-[#8fbb78]' : 'text-[#4B6B3E]') : undefined} />
               </div>
 
-              <div className={`${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100'} rounded-[20px] px-4 py-4 flex items-center justify-between sq-anim-pop shadow-sm`}>
+              <div className={`${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100 shadow-[0_1px_2px_rgba(38,32,20,0.06),0_10px_24px_-8px_rgba(38,32,20,0.18)]'} rounded-[20px] px-4 py-4 flex items-center justify-between sq-anim-pop`}>
                 <div>
                   <p className={`text-[14px] font-bold ${txt}`}>Daily Progress</p>
                   <p className={`text-[12px] mt-0.5 font-medium ${sub}`}>{completedCount} / {quests.length} completed</p>
@@ -2146,7 +2147,7 @@ export default function QuestDailyApp() {
                   Today's Objectives
                 </p>
 
-                <div className={`${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100 shadow-sm'} rounded-[20px] overflow-hidden`}>
+                <div className={`${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100 shadow-[0_1px_2px_rgba(38,32,20,0.06),0_10px_24px_-8px_rgba(38,32,20,0.18)]'} rounded-[20px] overflow-hidden`}>
                   {quests.map((quest, i) => {
                     const qTheme = QUEST_THEME[quest.id] || { icon: 'target', grad: 'from-amber-500 to-amber-600' };
                     const QIcon = QuestSvg[qTheme.icon] || QuestSvg.target;
@@ -2157,7 +2158,7 @@ export default function QuestDailyApp() {
                         className={`w-full flex items-center gap-3.5 px-4 py-[18px] text-left active:bg-black/5 active:scale-[0.99] transition-all`}>
                         <div className="relative flex-shrink-0">
                           <div className={`w-9 h-9 rounded-full flex items-center justify-center ${qTheme.grad} transition-all duration-300 ${quest.completed ? 'opacity-40 saturate-50' : ''}`}
-                            style={quest.completed ? undefined : { boxShadow: 'inset 0 -2px 4px rgba(0,0,0,0.25), inset 0 0 0 1px rgba(255,255,255,0.2)' }}>
+                            style={quest.completed ? undefined : { backgroundImage: 'linear-gradient(165deg, rgba(255,255,255,0.3), rgba(255,255,255,0) 45%, rgba(0,0,0,0.15) 100%)', boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.3), inset 0 -2px 4px rgba(0,0,0,0.25), 0 3px 8px -2px rgba(0,0,0,0.3)' }}>
                             <QIcon width={16} height={16} className="text-white" />
                           </div>
                           {quest.completed && (
@@ -2198,7 +2199,7 @@ export default function QuestDailyApp() {
               </div>
 
               {allDone && (
-                <div className={`relative overflow-hidden rounded-[20px] p-6 text-center border sq-anim-pop bg-gradient-to-b ${dark ? 'from-[#2a2210] to-[#15120b] border-white/5' : 'from-amber-50 to-white border-stone-100 shadow-sm'}`}>
+                <div className={`relative overflow-hidden rounded-[20px] p-6 text-center border sq-anim-pop bg-gradient-to-b ${dark ? 'from-[#2a2210] to-[#15120b] border-white/5' : 'from-amber-50 to-white border-stone-100 shadow-[0_1px_2px_rgba(38,32,20,0.06),0_10px_24px_-8px_rgba(38,32,20,0.18)]'}`}>
                   <TrophyIcon size={30} className={`mx-auto mb-3 relative z-10 ${dark ? 'text-[#D9A64A]' : 'text-[#B8842A]'}`} />
                   <p className={`sq-display font-semibold text-[16px] relative z-10 ${txt}`}>All Quests Complete</p>
                   <p className={`text-sm mt-1.5 font-medium relative z-10 ${sub}`}>Rest up. New quests when the timer hits zero.</p>
