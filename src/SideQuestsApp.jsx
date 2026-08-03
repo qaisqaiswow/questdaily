@@ -461,33 +461,62 @@ const AndroidAddIcon = () => (
   </svg>
 );
 
-// ─── AMBIENT ANIMATED BACKGROUND ───────────────────────────────────────────────
+const TrophyIcon = ({ size = 16, className = '' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M8 4h8v5a4 4 0 0 1-8 0V4Z"/><path d="M8 5H5a3 3 0 0 0 3 4"/><path d="M16 5h3a3 3 0 0 1-3 4"/><path d="M12 13v3"/><path d="M9 20h6"/><path d="M10 16h4l.5 4h-5l.5-4Z"/>
+  </svg>
+);
+const WarningIcon = ({ size = 15, className = '' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>
+);
+const SignalOffIcon = ({ size = 26, className = '' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M5 12.5a11 11 0 0 1 4-2.5"/><path d="M9.5 8.8A11 11 0 0 1 19 10.5"/><path d="M12.5 15a4 4 0 0 1 3 1.8"/><circle cx="8" cy="19" r="1"/><line x1="2" y1="2" x2="22" y2="22"/>
+  </svg>
+);
+const FlagIcon = ({ size = 26, className = '' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M5 21V4"/><path d="M5 4h13l-3 4 3 4H5"/>
+  </svg>
+);
+
+// ─── GLOBAL TYPE SYSTEM ─────────────────────────────────────────────────────
+// Loaded once (this component is always mounted). Oswald carries headings and
+// badges, IBM Plex Mono carries anything that reads like a stat or a readout,
+// Inter stays as the quiet workhorse for body copy.
+const SqTypeImport = () => (
+  <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
+    .sq-display { font-family: 'Oswald', 'Inter', sans-serif; letter-spacing: 0.01em; }
+    .sq-mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+    .sq-body { font-family: 'Inter', ui-sans-serif, sans-serif; }
+  `}</style>
+);
+
+// ─── AMBIENT BACKGROUND — a quiet contour map, standing in for a route log ──────
+// Faint elevation-line waypoints instead of glow blobs: it reads as a trail
+// the player is charting, not a decorative gradient.
 const AnimatedBackground = ({ dark }) => {
-  const vars = {
-    '--sq-streak-c1': dark ? 'rgba(139,92,246,0.55)' : 'rgba(99,102,241,0.30)',
-    '--sq-streak-c2': dark ? 'rgba(99,102,241,0.35)' : 'rgba(168,85,247,0.20)',
-    '--sq-glow-1':    dark ? '#7c3aed' : '#c7d2fe',
-    '--sq-glow-2':    dark ? '#4f46e5' : '#e0d4fc',
-    '--sq-glow-o':    dark ? 0.28 : 0.55,
-  };
+  const line = dark ? 'rgba(217,166,74,0.16)' : 'rgba(184,132,42,0.22)';
+  const line2 = dark ? 'rgba(75,107,62,0.14)' : 'rgba(75,107,62,0.16)';
+  const dot = dark ? 'rgba(217,166,74,0.5)' : 'rgba(184,132,42,0.45)';
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden z-0" style={vars}>
-      <div className="sq-streak sq-streak-1" />
-      <div className="sq-streak sq-streak-2" />
-      <div className="sq-streak sq-streak-3" />
-      <div className="sq-glow sq-glow-1" />
-      <div className="sq-glow sq-glow-2" />
+    <div className="pointer-events-none absolute inset-0 overflow-hidden z-0">
+      <SqTypeImport />
+      <svg className="sq-contour sq-contour-a" viewBox="0 0 400 500" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M-20,60 C 60,20 110,100 190,60 C 270,20 320,100 420,60" fill="none" stroke={line} strokeWidth="1.4"/>
+        <path d="M-20,110 C 70,150 130,60 210,110 C 290,160 340,70 420,110" fill="none" stroke={line} strokeWidth="1.4"/>
+        <path d="M-20,430 C 60,390 110,470 190,430 C 270,390 320,470 420,430" fill="none" stroke={line2} strokeWidth="1.4"/>
+        <path d="M-20,468 C 70,500 130,420 210,468 C 290,510 340,430 420,468" fill="none" stroke={line2} strokeWidth="1.4"/>
+        <circle cx="190" cy="60" r="3" fill={dot} />
+        <circle cx="210" cy="468" r="3" fill={dot} />
+      </svg>
       <style>{`
-        .sq-streak { position: absolute; width: 180%; height: 1.5px; left: -40%; background: linear-gradient(90deg, transparent, var(--sq-streak-c1), var(--sq-streak-c2), transparent); transform-origin: center; filter: blur(0.5px); opacity: 0.7; }
-        .sq-streak-1 { top: 14%;  transform: rotate(-18deg); animation: sq-drift-a 9s ease-in-out infinite; }
-        .sq-streak-2 { top: 42%;  transform: rotate(-12deg); animation: sq-drift-b 13s ease-in-out infinite; opacity: 0.45; }
-        .sq-streak-3 { top: 68%;  transform: rotate(-22deg); animation: sq-drift-a 11s ease-in-out infinite reverse; opacity: 0.35; }
-        @keyframes sq-drift-a { 0% { transform: translateX(-6%) rotate(-18deg); opacity: 0.35; } 50% { transform: translateX(6%)  rotate(-16deg); opacity: 0.8; } 100% { transform: translateX(-6%) rotate(-18deg); opacity: 0.35; } }
-        @keyframes sq-drift-b { 0% { transform: translateX(5%)  rotate(-12deg); opacity: 0.25; } 50% { transform: translateX(-5%) rotate(-10deg); opacity: 0.55; } 100% { transform: translateX(5%)  rotate(-12deg); opacity: 0.25; } }
-        .sq-glow { position: absolute; width: 260px; height: 260px; border-radius: 999px; filter: blur(70px); opacity: var(--sq-glow-o); }
-        .sq-glow-1 { top: -60px; left: -60px; background: var(--sq-glow-1); animation: sq-float 10s ease-in-out infinite; }
-        .sq-glow-2 { bottom: -80px; right: -60px; background: var(--sq-glow-2); animation: sq-float 12s ease-in-out infinite reverse; }
-        @keyframes sq-float { 0%, 100% { transform: translate(0,0) scale(1); } 50% { transform: translate(20px, -15px) scale(1.15); } }
+        .sq-contour { position: absolute; left: 0; width: 100%; }
+        .sq-contour-a { top: 0; height: 100%; animation: sq-chart-drift 42s ease-in-out infinite; }
+        @keyframes sq-chart-drift { 0%, 100% { transform: translate(0,0); } 50% { transform: translate(-2.5%, 1%); } }
         @keyframes sq-pop-in { 0% { opacity: 0; transform: scale(0.9) translateY(8px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
         @keyframes sq-check-in { 0% { opacity: 0; transform: scale(0.4); } 60% { opacity: 1; transform: scale(1.15); } 100% { opacity: 1; transform: scale(1); } }
         @keyframes sq-icon-float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-4px); } }
@@ -527,23 +556,31 @@ const QuestSvg = {
   target: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.6" fill="currentColor"/></svg>),
 };
 
+// Eight "enamel" tones, each standing in for a category of quest — strength,
+// endurance, heat, recovery, core, fuel, flexibility, cold — cycled across the
+// pool instead of a different neon gradient per card.
+const SQ_BADGE = {
+  brass: 'bg-[#B8842A]', moss: 'bg-[#4B6B3E]', ember: 'bg-[#B24A24]',
+  steelBlue: 'bg-[#45606B]', clay: 'bg-[#9C3B3B]', teal: 'bg-[#2E6B63]',
+  plum: 'bg-[#6B4C6B]', steel: 'bg-[#5B6470]',
+};
 const QUEST_THEME = {
-  q1:  { icon: 'dumbbell', grad: 'from-fuchsia-500 to-purple-600' }, q2:  { icon: 'legs',     grad: 'from-violet-500 to-indigo-600' },
-  q3:  { icon: 'run',      grad: 'from-orange-400 to-rose-500' },    q4:  { icon: 'bar',      grad: 'from-purple-500 to-blue-600' },
-  q5:  { icon: 'footsteps',grad: 'from-teal-400 to-cyan-600' },      q6:  { icon: 'cup',      grad: 'from-indigo-400 to-violet-600' },
-  q7:  { icon: 'lotus',    grad: 'from-emerald-400 to-teal-600' },   q8:  { icon: 'stretch',  grad: 'from-sky-400 to-indigo-600' },
-  q9:  { icon: 'bowl',     grad: 'from-lime-400 to-emerald-600' },   q10: { icon: 'moon',     grad: 'from-indigo-500 to-slate-700' },
-  q11: { icon: 'bolt',     grad: 'from-yellow-400 to-orange-600' },  q12: { icon: 'core',     grad: 'from-rose-500 to-red-600' },
-  q13: { icon: 'pencil',   grad: 'from-amber-400 to-orange-600' },   q14: { icon: 'smoothie', grad: 'from-green-400 to-emerald-600' },
-  q15: { icon: 'stopwatch',grad: 'from-cyan-400 to-blue-600' },      q16: { icon: 'bike',     grad: 'from-blue-400 to-indigo-600' },
-  q17: { icon: 'rope',     grad: 'from-pink-500 to-fuchsia-600' },   q18: { icon: 'droplet',  grad: 'from-sky-400 to-blue-600' },
-  q19: { icon: 'leaf',     grad: 'from-emerald-400 to-green-600' },  q20: { icon: 'pot',      grad: 'from-orange-400 to-amber-600' },
-  q21: { icon: 'wind',     grad: 'from-cyan-300 to-teal-600' },      q22: { icon: 'footsteps',grad: 'from-violet-400 to-purple-600' },
-  q23: { icon: 'legs',     grad: 'from-fuchsia-500 to-rose-600' },   q24: { icon: 'moon',     grad: 'from-indigo-400 to-blue-700' },
-  q25: { icon: 'snowflake',grad: 'from-cyan-300 to-blue-600' },
-  q26: { icon: 'legs',     grad: 'from-amber-500 to-orange-600' },  q27: { icon: 'core',     grad: 'from-rose-400 to-pink-600' },
-  q28: { icon: 'bolt',     grad: 'from-yellow-400 to-red-500' },    q29: { icon: 'core',     grad: 'from-blue-500 to-cyan-600' },
-  q30: { icon: 'stretch',  grad: 'from-indigo-400 to-purple-600' }, q31: { icon: 'flame',    grad: 'from-orange-500 to-red-600' },
+  q1:  { icon: 'dumbbell', grad: SQ_BADGE.brass },     q2:  { icon: 'legs',      grad: SQ_BADGE.clay },
+  q3:  { icon: 'run',      grad: SQ_BADGE.moss },       q4:  { icon: 'bar',       grad: SQ_BADGE.brass },
+  q5:  { icon: 'footsteps',grad: SQ_BADGE.moss },       q6:  { icon: 'cup',       grad: SQ_BADGE.teal },
+  q7:  { icon: 'lotus',    grad: SQ_BADGE.steelBlue },  q8:  { icon: 'stretch',   grad: SQ_BADGE.plum },
+  q9:  { icon: 'bowl',     grad: SQ_BADGE.teal },       q10: { icon: 'moon',      grad: SQ_BADGE.steelBlue },
+  q11: { icon: 'bolt',     grad: SQ_BADGE.brass },      q12: { icon: 'core',      grad: SQ_BADGE.clay },
+  q13: { icon: 'pencil',   grad: SQ_BADGE.plum },       q14: { icon: 'smoothie',  grad: SQ_BADGE.teal },
+  q15: { icon: 'stopwatch',grad: SQ_BADGE.steel },      q16: { icon: 'bike',      grad: SQ_BADGE.moss },
+  q17: { icon: 'rope',     grad: SQ_BADGE.plum },       q18: { icon: 'droplet',   grad: SQ_BADGE.steelBlue },
+  q19: { icon: 'leaf',     grad: SQ_BADGE.teal },       q20: { icon: 'pot',       grad: SQ_BADGE.teal },
+  q21: { icon: 'wind',     grad: SQ_BADGE.steelBlue },  q22: { icon: 'footsteps', grad: SQ_BADGE.moss },
+  q23: { icon: 'legs',     grad: SQ_BADGE.clay },       q24: { icon: 'moon',      grad: SQ_BADGE.steelBlue },
+  q25: { icon: 'snowflake',grad: SQ_BADGE.steel },
+  q26: { icon: 'legs',     grad: SQ_BADGE.clay },       q27: { icon: 'core',      grad: SQ_BADGE.clay },
+  q28: { icon: 'bolt',     grad: SQ_BADGE.brass },      q29: { icon: 'core',      grad: SQ_BADGE.clay },
+  q30: { icon: 'stretch',  grad: SQ_BADGE.plum },       q31: { icon: 'flame',     grad: SQ_BADGE.ember },
 };
 
 const QUEST_ABOUT = {
@@ -572,12 +609,12 @@ const QUEST_QUOTES = ["Small steps every day lead to big changes.", "Discipline 
 const QUEST_QUOTE = { q1: "Strength grows one rep at a time.", q2: "Every squat builds a stronger foundation.", q3: "Miles don't lie — you earned this one.", q4: "Small steps every day lead to big changes.", q5: "One step at a time is still progress.", q6: "Small steps every day lead to big changes.", q7: "A quiet mind carries the loudest strength.", q8: "Flexibility today, resilience tomorrow.", q9: "You fueled the body that carries you.", q10: "Rest is where the real gains happen.", q11: "Energy in motion stays in motion.", q12: "A strong core holds everything else together.", q13: "The pen remembers what the mind forgets.", q14: "Good fuel, good day.", q15: "Stillness can be the hardest work of all.", q16: "Every mile ridden is a mile earned.", q17: "Rhythm builds more than just your legs.", q18: "Discomfort today, discipline for life.", q19: "Progress, not perfection.", q20: "What you cook is what you become.", q21: "Breathe in control, breathe out doubt.", q22: "One step at a time is still progress.", q23: "Balance is built one side at a time.", q24: "Tonight's rest is tomorrow's edge.", q25: "You didn't come this far to only come this far." };
 
 const QuestIconBadge = ({ questId, size = 96, dark, floating = false }) => {
-  const theme = QUEST_THEME[questId] || { icon: 'target', grad: 'from-indigo-500 to-purple-600' };
+  const theme = QUEST_THEME[questId] || { icon: 'target', grad: SQ_BADGE.brass };
   const Icon = QuestSvg[theme.icon] || QuestSvg.target;
   return (
-    <div className={`relative flex items-center justify-center rounded-full bg-gradient-to-br ${theme.grad} ${floating ? 'sq-anim-float' : ''}`}
-      style={{ width: size, height: size, boxShadow: `0 0 0 1px rgba(255,255,255,0.15) inset, 0 8px 30px -8px rgba(139,92,246,0.65)` }}>
-      <div className="absolute inset-[3px] rounded-full border border-white/25" />
+    <div className={`relative flex items-center justify-center rounded-full ${theme.grad} ${floating ? 'sq-anim-float' : ''}`}
+      style={{ width: size, height: size, boxShadow: `inset 0 0 0 1px rgba(255,255,255,0.22), inset 0 -3px 6px rgba(0,0,0,0.25), 0 3px 0 rgba(0,0,0,0.18)` }}>
+      <div className="absolute inset-[4px] rounded-full border border-white/20" style={{ borderStyle: 'dashed' }} />
       <Icon width={Math.round(size * 0.42)} height={Math.round(size * 0.42)} className="text-white relative z-10" />
     </div>
   );
@@ -590,17 +627,17 @@ const ProgressRing = ({ pct, size = 56, stroke = 5, dark }) => {
   return (
     <div className="relative" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={dark ? '#27272a' : '#e5e7eb'} strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={dark ? '#3a352b' : '#ded5c0'} strokeWidth={stroke} />
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="url(#sq-ring-gradient)" strokeWidth={stroke} strokeLinecap="round" strokeDasharray={c} style={{ strokeDashoffset: offset, transition: 'stroke-dashoffset 0.8s cubic-bezier(0.22,1,0.36,1)' }} />
         <defs>
           <linearGradient id="sq-ring-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#818cf8" />
-            <stop offset="100%" stopColor="#c084fc" />
+            <stop offset="0%" stopColor="#D9A64A" />
+            <stop offset="100%" stopColor="#B8842A" />
           </linearGradient>
         </defs>
       </svg>
       <div className="absolute inset-0 flex items-center justify-center">
-        <span className={`text-[11px] font-bold ${dark ? 'text-white' : 'text-gray-900'}`}>{Math.round(pct)}%</span>
+        <span className={`text-[11px] font-bold ${dark ? 'text-white' : 'text-stone-900'}`}>{Math.round(pct)}%</span>
       </div>
     </div>
   );
@@ -608,15 +645,15 @@ const ProgressRing = ({ pct, size = 56, stroke = 5, dark }) => {
 
 // ─── STAT CHIP (mini dashboard tile) ───────────────────────────────────────────
 const StatChip = ({ icon, label, value, dark, accent }) => (
-  <div className={`rounded-[16px] px-2 py-3 flex flex-col items-center justify-center text-center gap-0.5 ${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100 shadow-sm'}`}>
-    <span className="text-[17px] leading-none">{icon}</span>
-    <span className={`text-[15px] font-extrabold leading-tight ${accent || (dark ? 'text-white' : 'text-gray-900')}`}>{value}</span>
-    <span className={`text-[9px] font-bold uppercase tracking-wider ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{label}</span>
+  <div className={`rounded-[10px] px-2 py-3 flex flex-col items-center justify-center text-center gap-1 ${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100 shadow-sm'}`}>
+    <span className={accent || (dark ? 'text-[#D9A64A]' : 'text-[#B8842A]')}>{icon}</span>
+    <span className={`sq-mono text-[15px] font-bold leading-tight ${accent || (dark ? 'text-white' : 'text-stone-900')}`}>{value}</span>
+    <span className={`text-[9px] font-bold uppercase tracking-wider ${dark ? 'text-stone-500' : 'text-stone-400'}`}>{label}</span>
   </div>
 );
 
 // ─── CONFETTI BURST ───────────────────────────────────────────────────────────
-const CONFETTI_COLORS = ['#818cf8', '#c084fc', '#34d399', '#fbbf24', '#f472b6', '#38bdf8'];
+const CONFETTI_COLORS = ['#B8842A', '#D9A64A', '#4B6B3E', '#6B8F5A', '#B24A24', '#EDE7D8'];
 const Confetti = ({ count = 24, big = false }) => {
   const pieces = useMemo(() => {
     const total = big ? Math.round(count * 1.7) : count;
@@ -664,10 +701,10 @@ function UsernameModal({ onSubmit, dark }) {
   const [name, setName] = useState('');
   const [error, setError] = useState(null);
 
-  const cardBg = dark ? 'bg-zinc-900' : 'bg-white';
-  const txt = dark ? 'text-white' : 'text-gray-900';
-  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
-  const inputBg = dark ? 'bg-zinc-800 border-zinc-700 text-white placeholder-zinc-500' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400';
+  const cardBg = dark ? 'bg-stone-900' : 'bg-white';
+  const txt = dark ? 'text-white' : 'text-stone-900';
+  const sub = dark ? 'text-stone-400' : 'text-stone-500';
+  const inputBg = dark ? 'bg-stone-800 border-stone-700 text-white placeholder-stone-500' : 'bg-stone-50 border-stone-200 text-stone-900 placeholder-stone-400';
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -681,11 +718,12 @@ function UsernameModal({ onSubmit, dark }) {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
-      <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-zinc-800' : 'border-gray-100'}`}>
-        <div className="mx-auto w-16 h-16 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-3xl mb-4 shadow-[0_10px_30px_-10px_rgba(139,92,246,0.6)]">
-          🏆
+      <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-stone-800' : 'border-stone-100'}`}>
+        <div className="mx-auto w-16 h-16 rounded-full bg-[#B8842A] flex items-center justify-center mb-4"
+          style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.25), inset 0 -3px 6px rgba(0,0,0,0.25), 0 3px 0 rgba(0,0,0,0.2)' }}>
+          <TrophyIcon size={26} className="text-white" />
         </div>
-        <h2 className={`text-[18px] font-bold ${txt}`}>Pick your adventurer name</h2>
+        <h2 className={`sq-display text-[18px] font-semibold ${txt}`}>Pick your adventurer name</h2>
         <p className={`text-[13px] mt-1.5 leading-relaxed ${sub}`}>
           This is how you'll show up on the worldwide leaderboard. You can only set it once, so choose wisely.
         </p>
@@ -697,16 +735,16 @@ function UsernameModal({ onSubmit, dark }) {
             placeholder="e.g. QuestMaster99"
             maxLength={20}
             autoFocus
-            className={`w-full rounded-[14px] border px-4 py-3 text-[15px] font-semibold text-center outline-none focus:ring-2 focus:ring-[#007AFF]/50 transition-all ${inputBg}`}
+            className={`w-full rounded-[10px] border px-4 py-3 text-[15px] font-semibold text-center outline-none focus:ring-2 focus:ring-[#B8842A]/50 transition-all ${inputBg}`}
           />
           {error && <p className="text-rose-500 text-[12px] font-semibold mt-2">{error}</p>}
           <button type="submit"
-            className="w-full mt-4 py-3.5 rounded-[16px] text-[15px] font-bold text-white bg-gradient-to-r from-indigo-500 to-purple-600 shadow-lg active:scale-[0.98] transition-transform"
-            style={{ boxShadow: '0 10px 30px -10px rgba(139,92,246,0.6)' }}>
+            className="w-full mt-4 py-3.5 rounded-[12px] text-[15px] font-bold sq-display tracking-wide text-white bg-[#B8842A] active:scale-[0.98] transition-transform"
+            style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
             Join the Leaderboard
           </button>
         </form>
-        <p className={`text-[10px] mt-3 ${dark ? 'text-zinc-600' : 'text-gray-400'}`}>
+        <p className={`text-[10px] mt-3 ${dark ? 'text-stone-600' : 'text-stone-400'}`}>
           Only your name, level, and XP are shared — nothing else about you.
         </p>
       </div>
@@ -717,33 +755,33 @@ function UsernameModal({ onSubmit, dark }) {
 // ─── LEADERBOARD SCREEN ────────────────────────────────────────────────────────
 function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syncError, onRetrySync }) {
   const { entries, status, errorDetail } = useLeaderboard();
-  const txt = dark ? 'text-white' : 'text-gray-900';
-  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
-  const cardBg = dark ? 'bg-zinc-900/70' : 'bg-white';
-  const sep = dark ? 'border-zinc-800' : 'border-gray-100';
+  const txt = dark ? 'text-white' : 'text-stone-900';
+  const sub = dark ? 'text-stone-400' : 'text-stone-500';
+  const cardBg = dark ? 'bg-stone-900/70' : 'bg-white';
+  const sep = dark ? 'border-stone-800' : 'border-stone-100';
 
   const myRank = useMemo(() => {
     const idx = entries.findIndex(e => e.id === myUid);
     return idx === -1 ? null : idx + 1;
   }, [entries, myUid]);
 
-  const medal = (rank) => rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : null;
+  const RANK_TIER = { 1: 'bg-[#B8842A] text-white', 2: 'bg-[#8b9199] text-white', 3: 'bg-[#B24A24] text-white' };
 
   return (
     <div className="sq-anim-pop relative z-10 min-h-screen flex flex-col">
       <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
         <button onClick={onBack}
-          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
+          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
-        <p className={`text-[15px] font-bold ${txt}`}>Worldwide Leaderboard</p>
+        <p className={`sq-display text-[15px] font-semibold uppercase tracking-wide ${txt}`}>Worldwide Leaderboard</p>
         <div className="w-9 h-9" />
       </div>
 
       {syncError && (
         <div className="px-4 mb-3">
           <div className={`rounded-[14px] px-4 py-3 flex items-start gap-2.5 ${dark ? 'bg-rose-500/10 border border-rose-500/20' : 'bg-rose-50 border border-rose-100'}`}>
-            <span className="text-[15px] flex-shrink-0">⚠️</span>
+            <WarningIcon size={15} className={`flex-shrink-0 mt-0.5 ${dark ? 'text-rose-300' : 'text-rose-600'}`} />
             <div className="flex-1 min-w-0">
               <p className={`text-[12px] font-medium leading-snug ${dark ? 'text-rose-300' : 'text-rose-600'}`}>
                 Your last score didn't save to the leaderboard: {syncError}
@@ -761,13 +799,14 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
 
       {myRank && (
         <div className="px-4 mb-3">
-          <div className={`rounded-[16px] px-4 py-3 flex items-center gap-3 bg-gradient-to-r from-indigo-500 to-purple-600 shadow-lg`}>
-            <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white font-extrabold text-[13px] flex-shrink-0">
+          <div className={`rounded-[14px] px-4 py-3 flex items-center gap-3 bg-[#B8842A]`}
+            style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.15)' }}>
+            <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white font-extrabold text-[13px] sq-mono flex-shrink-0">
               #{myRank}
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-white font-bold text-[14px] truncate">{myUsername} (You)</p>
-              <p className="text-white/70 text-[11px] font-medium">Lv {myLevel} · {myXp} XP this level</p>
+              <p className="text-white/70 text-[11px] font-medium sq-mono">Lv {myLevel} · {myXp} XP this level</p>
             </div>
           </div>
         </div>
@@ -776,19 +815,19 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
       <div className="flex-1 px-4 pb-8 overflow-y-auto scroll-ios">
         {status === 'loading' && (
           <div className="flex flex-col items-center justify-center py-16 gap-3">
-            <div className="w-8 h-8 border-4 border-white/20 border-t-[#007AFF] rounded-full animate-spin" />
+            <div className="w-8 h-8 border-4 border-white/20 border-t-[#B8842A] rounded-full animate-spin" />
             <p className={`text-[13px] font-medium ${sub}`}>Loading rankings…</p>
           </div>
         )}
 
         {status === 'error' && (
           <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6">
-            <p className="text-3xl mb-1">📡</p>
+            <SignalOffIcon size={26} className={`mb-1 ${dark ? 'text-stone-600' : 'text-stone-300'}`} />
             <p className={`text-[14px] font-bold ${txt}`}>Can't reach the leaderboard</p>
             <p className={`text-[12px] ${sub}`}>
               {errorDetail || 'Check your connection, or the backend may not be configured yet.'}
             </p>
-            <p className={`text-[11px] mt-2 max-w-xs ${dark ? 'text-zinc-600' : 'text-gray-400'}`}>
+            <p className={`text-[11px] mt-2 max-w-xs ${dark ? 'text-stone-600' : 'text-stone-400'}`}>
               In the Firebase console, double-check Firestore Database and Anonymous Auth are both enabled, and that your security rules are published.
             </p>
           </div>
@@ -796,7 +835,7 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
 
         {status === 'ready' && entries.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6">
-            <p className="text-3xl mb-1">🏁</p>
+            <FlagIcon size={26} className={`mb-1 ${dark ? 'text-stone-600' : 'text-stone-300'}`} />
             <p className={`text-[14px] font-bold ${txt}`}>No rankings yet</p>
             <p className={`text-[12px] ${sub}`}>
               {myLevel > 1 || myXp > 0
@@ -807,26 +846,26 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
         )}
 
         {status === 'ready' && entries.length > 0 && (
-          <div className={`${cardBg} border ${dark ? 'border-white/5' : 'border-gray-100 shadow-sm'} rounded-[20px] overflow-hidden`}>
+          <div className={`${cardBg} border ${dark ? 'border-white/5' : 'border-stone-100 shadow-sm'} rounded-[20px] overflow-hidden`}>
             {entries.map((entry, i) => {
               const rank = i + 1;
               const isMe = entry.id === myUid;
               return (
                 <div key={entry.id}>
                   {i > 0 && <div className={`border-t ${sep} ml-[58px]`} />}
-                  <div className={`flex items-center gap-3 px-4 py-3 ${isMe ? (dark ? 'bg-indigo-500/10' : 'bg-indigo-50') : ''}`}>
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[13px] font-extrabold ${
-                      rank <= 3 ? 'text-lg' : dark ? 'bg-zinc-800 text-zinc-400' : 'bg-gray-100 text-gray-500'
+                  <div className={`flex items-center gap-3 px-4 py-3 ${isMe ? (dark ? 'bg-amber-500/10' : 'bg-amber-50') : ''}`}>
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[12px] font-bold sq-mono ${
+                      RANK_TIER[rank] || (dark ? 'bg-stone-800 text-stone-400' : 'bg-stone-100 text-stone-500')
                     }`}>
-                      {medal(rank) || rank}
+                      {rank}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className={`text-[14px] font-semibold truncate ${isMe ? 'text-indigo-400' : txt}`}>
+                      <p className={`text-[14px] font-semibold truncate ${isMe ? 'text-amber-400' : txt}`}>
                         {entry.username || 'Adventurer'}{isMe ? ' (You)' : ''}
                       </p>
                       <p className={`text-[11px] font-medium ${sub}`}>Lv {entry.level ?? 1}</p>
                     </div>
-                    <span className={`text-[12px] font-bold flex-shrink-0 ${dark ? 'text-zinc-400' : 'text-gray-500'}`}>
+                    <span className={`text-[12px] font-bold flex-shrink-0 ${dark ? 'text-stone-400' : 'text-stone-500'}`}>
                       {(entry.totalXpEarned ?? 0).toLocaleString()} XP
                     </span>
                   </div>
@@ -845,10 +884,10 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
   const [step, setStep] = useState(0);
   const [os, setOs] = useState(null); // 'ios' or 'android'
   
-  const cardBg = dark ? 'bg-zinc-900' : 'bg-white';
-  const txt = dark ? 'text-white' : 'text-gray-900';
-  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
-  const pill = dark ? 'bg-zinc-800' : 'bg-gray-100';
+  const cardBg = dark ? 'bg-stone-900' : 'bg-white';
+  const txt = dark ? 'text-white' : 'text-stone-900';
+  const sub = dark ? 'text-stone-400' : 'text-stone-500';
+  const pill = dark ? 'bg-stone-800' : 'bg-stone-100';
 
   const nextStep = () => {
     if (step === 1) setStep(2);
@@ -857,17 +896,17 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
-      <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-zinc-800' : 'border-gray-100'}`}>
+      <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-stone-800' : 'border-stone-100'}`}>
         
         {step === 0 && (
           <>
-            <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install QuestDaily</h3>
+            <h3 className={`sq-display text-xl font-semibold mb-2 ${txt}`}>Install QuestDaily</h3>
             <p className={`text-sm mb-6 ${sub}`}>Which device are you using?</p>
             <div className="flex flex-col gap-3">
-              <button onClick={() => { setOs('ios'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#007AFF] text-white shadow-lg active:scale-95 transition-transform">
+              <button onClick={() => { setOs('ios'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#B8842A] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
                 Apple (iOS)
               </button>
-              <button onClick={() => { setOs('android'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#34C759] text-white shadow-lg active:scale-95 transition-transform">
+              <button onClick={() => { setOs('android'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#4B6B3E] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
                 Android
               </button>
               <button onClick={onDismiss} className={`w-full mt-2 py-3 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>
@@ -879,10 +918,10 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
 
         {step > 0 && os === 'ios' && (
           <>
-            <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install on iOS</h3>
+            <h3 className={`sq-display text-xl font-semibold mb-2 ${txt}`}>Install on iOS</h3>
             <p className={`text-sm mb-6 ${sub}`}>Add this app to your home screen.</p>
             <div className={`relative mb-8 ${pill} rounded-2xl p-5 flex flex-col items-center justify-center border ${dark ? 'border-white/5' : 'border-black/5'}`}>
-              <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-[#007AFF] text-white shadow-lg mb-3">
+              <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-[#B8842A] text-white mb-3">
                 {step === 1 ? <IOSShareIcon /> : <IOSAddIcon />}
               </div>
               <p className={`text-sm font-semibold ${txt} mb-1`}>
@@ -896,7 +935,7 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
               {step === 2 && (
                 <button onClick={() => setStep(1)} className={`flex-1 py-3.5 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>Back</button>
               )}
-              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#007AFF] text-white shadow-lg active:scale-95 transition-transform">
+              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#B8842A] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
                 {step === 1 ? 'Next' : 'Got it!'}
               </button>
             </div>
@@ -905,10 +944,10 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
 
         {step > 0 && os === 'android' && (
           <>
-            <h3 className={`text-xl font-bold mb-2 ${txt}`}>Install on Android</h3>
+            <h3 className={`sq-display text-xl font-semibold mb-2 ${txt}`}>Install on Android</h3>
             <p className={`text-sm mb-6 ${sub}`}>Add this app to your home screen.</p>
             <div className={`relative mb-8 ${pill} rounded-2xl p-5 flex flex-col items-center justify-center border ${dark ? 'border-white/5' : 'border-black/5'}`}>
-              <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-[#34C759] text-white shadow-lg mb-3">
+              <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-[#4B6B3E] text-white mb-3">
                 {step === 1 ? <AndroidMenuIcon /> : <AndroidAddIcon />}
               </div>
               <p className={`text-sm font-semibold ${txt} mb-1`}>
@@ -922,7 +961,7 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
               {step === 2 && (
                 <button onClick={() => setStep(1)} className={`flex-1 py-3.5 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>Back</button>
               )}
-              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#34C759] text-white shadow-lg active:scale-95 transition-transform">
+              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#4B6B3E] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
                 {step === 1 ? 'Next' : 'Got it!'}
               </button>
             </div>
@@ -935,37 +974,37 @@ function DeviceInstallPrompt({ onDismiss, dark }) {
 
 // ─── QUEST DETAIL SCREEN ────────────────────────────────────────────────────────
 function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMarkComplete }) {
-  const txt = dark ? 'text-white' : 'text-gray-900';
-  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
-  const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
-  const cardBg = dark ? 'bg-zinc-900/70' : 'bg-white';
-  const theme = QUEST_THEME[quest.id] || { grad: 'from-indigo-500 to-purple-600' };
+  const txt = dark ? 'text-white' : 'text-stone-900';
+  const sub = dark ? 'text-stone-400' : 'text-stone-500';
+  const pill = dark ? 'bg-stone-800/80' : 'bg-stone-100';
+  const cardBg = dark ? 'bg-stone-900/70' : 'bg-white';
+  const theme = QUEST_THEME[quest.id] || { grad: 'from-amber-500 to-amber-600' };
   const about = QUEST_ABOUT[quest.id] || 'Stay consistent — every quest you complete adds up to real progress.';
 
   return (
     <div className="sq-anim-pop relative z-10 min-h-screen flex flex-col">
       <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
         <button onClick={onBack}
-          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
+          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
         <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${pill}`}>
           <span className="text-[10px]">⏱</span>
-          <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
+          <span className={`text-[11px] font-mono font-medium ${dark ? 'text-stone-300' : 'text-stone-600'}`}>{timeLeft}</span>
         </div>
         <button onClick={onToggleTheme}
-          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
+          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
           {dark ? <SunIcon /> : <MoonIcon />}
         </button>
       </div>
 
       <div className="px-4">
-        <div className={`relative overflow-hidden rounded-[26px] px-6 pt-10 pb-8 flex flex-col items-center text-center bg-gradient-to-b ${dark ? 'from-[#1c1530] to-[#0d0a17]' : 'from-indigo-50 to-white'} border ${dark ? 'border-white/10' : 'border-gray-100'}`}>
+        <div className={`relative overflow-hidden rounded-[26px] px-6 pt-10 pb-8 flex flex-col items-center text-center bg-gradient-to-b ${dark ? 'from-[#2a2210] to-[#15120b]' : 'from-amber-50 to-white'} border ${dark ? 'border-white/10' : 'border-stone-100'}`}>
           <AnimatedBackground dark={dark} />
           <div className="relative z-10 flex flex-col items-center">
             <QuestIconBadge questId={quest.id} size={92} dark={dark} floating />
             <h2 className={`mt-5 text-[22px] font-bold leading-tight max-w-[240px] ${txt}`}>{quest.text}</h2>
-            <span className={`mt-3 px-3 py-1 rounded-full text-xs font-semibold bg-gradient-to-r ${theme.grad} text-white`}>
+            <span className={`mt-3 px-3 py-1 rounded-full text-xs font-semibold sq-mono ${theme.grad} text-white`}>
               +{quest.xp} XP
             </span>
           </div>
@@ -973,16 +1012,16 @@ function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMar
       </div>
 
       <div className="px-4 mt-5 flex-1">
-        <p className={`text-[11px] font-semibold uppercase tracking-widest mb-1.5 px-1 ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>About this quest</p>
-        <div className={`${cardBg} rounded-[16px] p-4 border ${dark ? 'border-white/5' : 'border-gray-100'}`}>
+        <p className={`text-[11px] font-semibold uppercase tracking-widest mb-1.5 px-1 ${dark ? 'text-stone-500' : 'text-stone-400'}`}>About this quest</p>
+        <div className={`${cardBg} rounded-[16px] p-4 border ${dark ? 'border-white/5' : 'border-stone-100'}`}>
           <p className={`text-[14px] leading-relaxed ${sub}`}>{about}</p>
         </div>
       </div>
 
       <div className="px-4 pb-8 mt-6">
         <button onClick={onMarkComplete}
-          className={`w-full py-4 rounded-[16px] text-[15px] font-semibold text-white bg-gradient-to-r ${theme.grad} shadow-lg active:scale-[0.97] transition-transform`}
-          style={{ boxShadow: '0 10px 30px -10px rgba(139,92,246,0.6)' }}>
+          className={`w-full py-4 rounded-[14px] text-[15px] font-bold tracking-wide sq-display text-white ${theme.grad} active:scale-[0.97] transition-transform`}
+          style={{ boxShadow: '0 3px 0 rgba(0,0,0,0.2)' }}>
           Start Challenge
         </button>
       </div>
@@ -992,10 +1031,10 @@ function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMar
 
 // ─── COMPLETION SCREEN ───────────────────────────────────────────────────────────
 function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack }) {
-  const txt = dark ? 'text-white' : 'text-gray-900';
-  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
-  const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
-  const cardBg = dark ? 'bg-zinc-900/70' : 'bg-white';
+  const txt = dark ? 'text-white' : 'text-stone-900';
+  const sub = dark ? 'text-stone-400' : 'text-stone-500';
+  const pill = dark ? 'bg-stone-800/80' : 'bg-stone-100';
+  const cardBg = dark ? 'bg-stone-900/70' : 'bg-white';
   const quote = useMemo(() => QUEST_QUOTE[quest?.id] || QUEST_QUOTES[Math.floor(Math.random() * QUEST_QUOTES.length)], [quest?.id]);
   const leveledUp = Boolean(quest?.leveledUp);
 
@@ -1005,49 +1044,37 @@ function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack }) {
     <div className="sq-anim-pop relative z-10 min-h-screen flex flex-col">
       <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
         <button onClick={onBack}
-          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
+          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
         <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${pill}`}>
           <span className="text-[10px]">⏱</span>
-          <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
+          <span className={`text-[11px] font-mono font-medium ${dark ? 'text-stone-300' : 'text-stone-600'}`}>{timeLeft}</span>
         </div>
         <button onClick={onToggleTheme}
-          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
+          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
           {dark ? <SunIcon /> : <MoonIcon />}
         </button>
       </div>
 
       <div className="px-4">
-        <div className={`relative overflow-hidden rounded-[26px] px-6 pt-12 pb-10 flex flex-col items-center text-center bg-gradient-to-b ${leveledUp ? (dark ? 'from-[#241a3a] to-[#0d0a17]' : 'from-indigo-50 to-white') : (dark ? 'from-[#0e2318] to-[#081712]' : 'from-emerald-50 to-white')} border ${leveledUp ? (dark ? 'border-indigo-400/30' : 'border-indigo-100') : (dark ? 'border-emerald-500/20' : 'border-emerald-100')}`}>
-          <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            {leveledUp ? (
-              <>
-                <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-indigo-500/25 blur-3xl" />
-                <div className="absolute -bottom-14 -right-10 w-48 h-48 rounded-full bg-purple-400/20 blur-3xl" />
-              </>
-            ) : (
-              <>
-                <div className="absolute -top-10 -left-10 w-40 h-40 rounded-full bg-emerald-500/25 blur-3xl" />
-                <div className="absolute -bottom-14 -right-10 w-48 h-48 rounded-full bg-green-400/20 blur-3xl" />
-              </>
-            )}
-          </div>
+        <div className={`relative overflow-hidden rounded-[26px] px-6 pt-12 pb-10 flex flex-col items-center text-center bg-gradient-to-b ${leveledUp ? (dark ? 'from-[#2a2210] to-[#15120b]' : 'from-amber-50 to-white') : (dark ? 'from-[#0e2318] to-[#081712]' : 'from-emerald-50 to-white')} border ${leveledUp ? (dark ? 'border-amber-400/30' : 'border-amber-100') : (dark ? 'border-emerald-500/20' : 'border-emerald-100')}`}>
           {leveledUp && <Confetti big />}
           <div className="relative z-10 flex flex-col items-center">
             {leveledUp && (
-              <span className="mb-3 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-widest bg-gradient-to-r from-indigo-500 to-purple-600 text-white sq-anim-pop">
-                ⚡ Level Up!
+              <span className="mb-3 inline-flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-widest sq-display bg-[#B8842A] text-white sq-anim-pop"
+                style={{ clipPath: 'polygon(6% 0%,94% 0%,100% 50%,94% 100%,6% 100%,0% 50%)' }}>
+                <QuestSvg.bolt width={11} height={11} /> Level Up
               </span>
             )}
-            <div className={`sq-anim-check w-24 h-24 rounded-full flex items-center justify-center border-2 ${leveledUp ? 'border-indigo-400' : 'border-emerald-400'}`}
-              style={{ boxShadow: leveledUp ? '0 0 40px -6px rgba(129,92,246,0.6)' : '0 0 40px -6px rgba(52,211,153,0.55)' }}>
-              <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke={leveledUp ? '#a78bfa' : '#34d399'} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <div className={`sq-anim-check w-24 h-24 rounded-full flex items-center justify-center border-2 ${leveledUp ? 'border-amber-400' : 'border-emerald-400'}`}
+              style={{ boxShadow: leveledUp ? '0 0 40px -6px rgba(217,166,74,0.5)' : '0 0 40px -6px rgba(107,143,90,0.5)' }}>
+              <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke={leveledUp ? '#D9A64A' : '#6B8F5A'} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="20 6 9 17 4 12"/>
               </svg>
             </div>
             <h2 className={`mt-5 text-[22px] font-bold ${txt}`}>Quest Completed!</h2>
-            <span className={`mt-3 px-3 py-1 rounded-full text-xs font-semibold text-white ${leveledUp ? 'bg-indigo-500/90' : 'bg-emerald-500/90'}`}>
+            <span className={`mt-3 px-3 py-1 rounded-full text-xs font-semibold text-white ${leveledUp ? 'bg-amber-500/90' : 'bg-emerald-500/90'}`}>
               +{quest?.xp ?? 0} XP
             </span>
           </div>
@@ -1055,16 +1082,16 @@ function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack }) {
       </div>
 
       <div className="px-4 mt-5 flex-1">
-        <div className={`${cardBg} rounded-[16px] p-5 border ${dark ? 'border-white/5' : 'border-gray-100'} relative`}>
-          <span className={`absolute top-2 left-3 text-3xl leading-none ${dark ? 'text-zinc-700' : 'text-gray-200'}`}>&ldquo;</span>
+        <div className={`${cardBg} rounded-[16px] p-5 border ${dark ? 'border-white/5' : 'border-stone-100'} relative`}>
+          <span className={`absolute top-2 left-3 text-3xl leading-none ${dark ? 'text-stone-700' : 'text-stone-200'}`}>&ldquo;</span>
           <p className={`text-[15px] font-medium text-center leading-relaxed px-3 ${txt}`}>{quote}</p>
-          <span className={`absolute bottom-1 right-3 text-3xl leading-none ${dark ? 'text-zinc-700' : 'text-gray-200'}`}>&rdquo;</span>
+          <span className={`absolute bottom-1 right-3 text-3xl leading-none ${dark ? 'text-stone-700' : 'text-stone-200'}`}>&rdquo;</span>
         </div>
       </div>
 
       <div className="px-4 pb-8 mt-6">
         <button onClick={onBack}
-          className={`w-full py-4 rounded-[16px] text-[15px] font-semibold ${dark ? 'bg-zinc-800 text-white' : 'bg-gray-100 text-gray-800'} active:opacity-70`}>
+          className={`w-full py-4 rounded-[16px] text-[15px] font-semibold ${dark ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-800'} active:opacity-70`}>
           Back to Quests
         </button>
       </div>
@@ -1439,7 +1466,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
                   const mapped = landmarks.map(mapPt);
                   const currentPhase = poseStateRef.current.phase;
-                  const lineColor = currentPhase === 'down' ? '#4ade80' : '#38bdf8'; 
+                  const lineColor = currentPhase === 'down' ? '#6B8F5A' : '#D9A64A'; 
                   const shadowColor = currentPhase === 'down' ? 'rgba(74, 222, 128, 0.8)' : 'rgba(56, 189, 248, 0.8)';
 
                   ctx.save();
@@ -1575,10 +1602,10 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   };
 
   const meterColor = liveScore >= PASS_THRESHOLD * 100 ? 'bg-emerald-500' : liveScore >= 15 ? 'bg-amber-400' : 'bg-rose-500';
-  const bg = dark ? 'bg-zinc-950' : 'bg-white';
-  const txt = dark ? 'text-white' : 'text-gray-900';
-  const sub = dark ? 'text-zinc-400' : 'text-gray-500';
-  const pill = dark ? 'bg-zinc-800/80' : 'bg-gray-100';
+  const bg = dark ? 'bg-stone-950' : 'bg-white';
+  const txt = dark ? 'text-white' : 'text-stone-900';
+  const sub = dark ? 'text-stone-400' : 'text-stone-500';
+  const pill = dark ? 'bg-stone-800/80' : 'bg-stone-100';
 
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center" style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
@@ -1588,12 +1615,12 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         </div>
 
         <div className="relative z-10 flex justify-center pt-4 pb-2">
-          <div className={`w-12 h-1.5 rounded-full ${dark ? 'bg-zinc-700' : 'bg-gray-300'}`} />
+          <div className={`w-12 h-1.5 rounded-full ${dark ? 'bg-stone-700' : 'bg-stone-300'}`} />
         </div>
 
         <div className={`relative z-10 flex items-center justify-center px-6 py-2 pb-4`}>
           <div className="text-center">
-            <p className={`text-[15px] font-bold ${txt}`}>AI Verification</p>
+            <p className={`sq-display text-[15px] font-semibold uppercase tracking-wide ${txt}`}>Quest Check-In</p>
             <p className={`text-[11px] font-medium ${sub} mt-0.5 max-w-[220px] truncate`}>{uiSubtext}</p>
           </div>
         </div>
@@ -1607,25 +1634,25 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           />
 
           {phase === 'live' && !uploadedProof && labels?.bodyParts && (
-            <div className="absolute inset-0 pointer-events-none border-[2px] border-dashed border-violet-500/40 m-5 rounded-2xl animate-pulse z-10">
-              <div className="absolute top-4 left-4 bg-black/75 backdrop-blur-md px-3 py-2 rounded-xl border border-violet-500/50 shadow-2xl">
-                <div className="flex items-center gap-2 mb-1.5 text-white uppercase font-bold text-[10px] tracking-wider">
-                  <span className="w-2 h-2 rounded-full bg-violet-400 animate-ping inline-block" />
-                  Biometric Engine
+            <div className="absolute inset-0 pointer-events-none border-[2px] border-dashed border-[#D9A64A]/40 m-5 rounded-2xl z-10">
+              <div className="absolute top-4 left-4 bg-black/75 backdrop-blur-md px-3 py-2 rounded-xl border border-[#D9A64A]/50 shadow-2xl">
+                <div className="flex items-center gap-2 mb-1.5 text-white uppercase font-bold text-[10px] tracking-wider sq-display">
+                  <span className="w-2 h-2 rounded-full bg-[#D9A64A] animate-pulse inline-block" />
+                  Motion Tracker
                 </div>
-                <div className="text-white/60 text-[9px] mb-1 font-mono">Tracking Nodes Active:</div>
+                <div className="text-white/60 text-[9px] mb-1 sq-mono">Watching:</div>
                 <div className="flex flex-wrap gap-1.5 max-w-[160px]">
                   {labels.bodyParts.map((part) => (
-                    <span key={part} className="bg-violet-950/80 text-violet-300 px-1.5 py-0.5 rounded text-[9px] border border-violet-800/60 font-semibold tracking-wide">
+                    <span key={part} className="bg-black/60 text-[#D9A64A] px-1.5 py-0.5 rounded text-[9px] border border-[#D9A64A]/40 font-semibold tracking-wide sq-mono">
                       {part}
                     </span>
                   ))}
                 </div>
               </div>
-              <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-violet-500/80 rounded-tl-xl" />
-              <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-violet-500/80 rounded-tr-xl" />
-              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-violet-500/80 rounded-bl-xl" />
-              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-violet-500/80 rounded-br-xl" />
+              <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-[#D9A64A]/80 rounded-tl-xl" />
+              <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-[#D9A64A]/80 rounded-tr-xl" />
+              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-[#D9A64A]/80 rounded-bl-xl" />
+              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-[#D9A64A]/80 rounded-br-xl" />
             </div>
           )}
 
@@ -1634,19 +1661,19 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           )}
 
           {phase === 'starting' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-zinc-900">
-              <div className="w-10 h-10 border-4 border-white/20 border-t-[#007AFF] rounded-full animate-spin" />
-              <p className="text-white/70 text-xs font-medium tracking-wide">Initializing Camera Engine…</p>
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-stone-900">
+              <div className="w-10 h-10 border-4 border-white/20 border-t-[#B8842A] rounded-full animate-spin" />
+              <p className="text-white/70 text-xs font-medium tracking-wide">Opening camera…</p>
             </div>
           )}
 
           {phase === 'error' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center bg-zinc-900">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center bg-stone-900">
               <p className="text-white font-bold text-[15px]">{camError === 'permission' ? 'Camera Access Blocked' : 'No Camera Found'}</p>
               <p className="text-white/60 text-[13px] leading-relaxed mb-2">
                 {camError === 'permission' ? 'Open this app in a new tab and allow camera access when prompted.' : quest.reps ? 'This quest needs a live camera. Check your camera and try again.' : 'Upload a photo instead.'}
               </p>
-              <button onClick={retryCamera} className="bg-[#007AFF] text-white text-[13px] font-semibold px-6 py-2.5 rounded-full active:scale-95 transition-transform">
+              <button onClick={retryCamera} className="bg-[#B8842A] text-white text-[13px] font-semibold px-6 py-2.5 rounded-full active:scale-95 transition-transform">
                 Try Camera Again
               </button>
             </div>
@@ -1678,12 +1705,12 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
               ) : poseError ? (
                 <p className="text-rose-300 text-[12px] font-semibold">{poseError}</p>
               ) : !poseReady ? (
-                <p className="text-white/80 text-[11px] font-bold tracking-widest uppercase mb-2">Loading Pose Tracking Model…</p>
+                <p className="text-white/80 text-[11px] font-bold tracking-widest uppercase mb-2 sq-display">Getting ready to track your reps…</p>
               ) : (
                 <>
                   <div className="flex items-end justify-between mb-2">
                     <p className="text-white/90 text-[13px] font-semibold tracking-wide drop-shadow-md">{repCue}</p>
-                    <p className="text-white text-[13px] font-black tracking-widest bg-[#007AFF] px-3 py-1 rounded-lg shadow-lg">
+                    <p className="text-white text-[13px] font-black tracking-widest bg-[#B8842A] px-3 py-1 rounded-lg">
                       {repsDone} / {quest.reps} REPS
                     </p>
                   </div>
@@ -1706,9 +1733,9 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   <p className="text-green-50 text-[13px] font-bold tracking-wide">Verified & Locked!</p>
                 </div>
               ) : verifying ? (
-                <div className="flex items-center gap-2.5 bg-[#007AFF]/20 w-max px-4 py-2 rounded-full border border-[#007AFF]/30 backdrop-blur-md">
+                <div className="flex items-center gap-2.5 bg-[#B8842A]/20 w-max px-4 py-2 rounded-full border border-[#B8842A]/30 backdrop-blur-md">
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin flex-shrink-0" />
-                  <p className="text-white text-[13px] font-bold tracking-wide">Confirming with high-accuracy AI…</p>
+                  <p className="text-white text-[13px] font-bold tracking-wide">Double-checking the shot…</p>
                 </div>
               ) : (
                 <>
@@ -1734,9 +1761,9 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
           {phase === 'live' && !quest.reps && !modelReady && !modelError && (
             <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)' }}>
-              <p className="text-white/80 text-[11px] font-bold tracking-widest uppercase mb-2">Loading Vision Model… {modelProgress ?? 0}%</p>
+              <p className="text-white/80 text-[11px] font-bold tracking-widest uppercase mb-2 sq-display">Getting ready… {modelProgress ?? 0}%</p>
               <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden">
-                <div className="h-full bg-[#007AFF] transition-all duration-300 rounded-full shadow-[0_0_10px_rgba(0,122,255,0.8)]" style={{ width: `${modelProgress ?? 0}%` }} />
+                <div className="h-full bg-[#B8842A] transition-all duration-300 rounded-full shadow-[0_0_10px_rgba(184,132,42,0.8)]" style={{ width: `${modelProgress ?? 0}%` }} />
               </div>
             </div>
           )}
@@ -1744,14 +1771,14 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         </div>
 
         {quest.duration && (
-          <div className={`px-5 py-3.5 mx-4 mt-4 rounded-[18px] border flex items-center justify-between shadow-sm ${dark ? 'bg-zinc-900 border-zinc-800' : 'bg-gray-50 border-gray-200'}`}>
+          <div className={`px-5 py-3.5 mx-4 mt-4 rounded-[18px] border flex items-center justify-between shadow-sm ${dark ? 'bg-stone-900 border-stone-800' : 'bg-stone-50 border-stone-200'}`}>
             <div className="flex flex-col">
-              <span className={`text-[10px] font-bold uppercase tracking-widest ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>Objective Duration</span>
+              <span className={`text-[10px] font-bold uppercase tracking-widest ${dark ? 'text-stone-500' : 'text-stone-400'}`}>Objective Duration</span>
               <span className={`text-[22px] leading-none mt-1 font-mono font-black tracking-tight ${txt}`}>{formatTimerString(secondsLeft)}</span>
             </div>
             <button onClick={() => setTimerRunning(!timerRunning)} disabled={secondsLeft === 0}
               className={`px-5 py-2.5 rounded-[12px] text-[13px] font-bold tracking-wide transition-colors shadow-sm ${
-                secondsLeft === 0 ? 'bg-zinc-200 text-zinc-400 cursor-not-allowed' : timerRunning ? 'bg-rose-500 text-white active:bg-rose-600' : 'bg-[#34C759] text-white active:bg-green-600'
+                secondsLeft === 0 ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : timerRunning ? 'bg-rose-500 text-white active:bg-rose-600' : 'bg-[#4B6B3E] text-white active:bg-green-600'
               }`}>
               {secondsLeft === 0 ? 'Completed' : timerRunning ? 'Pause Activity' : 'Start Timer'}
             </button>
@@ -1763,7 +1790,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             <div className="space-y-3">
               <button onClick={captureAndConfirm} disabled={!confirmed}
                 className={`w-full py-4 rounded-[18px] text-[15px] font-bold tracking-wide transition-all duration-300 ${
-                  confirmed ? 'bg-[#007AFF] text-white shadow-[0_8px_20px_rgba(0,122,255,0.4)] active:scale-[0.98]' : `${pill} ${sub} cursor-not-allowed`
+                  confirmed ? 'bg-[#B8842A] text-white shadow-[0_8px_20px_rgba(184,132,42,0.4)] active:scale-[0.98]' : `${pill} ${sub} cursor-not-allowed`
                 }`}>
                 {confirmed ? 'Complete Quest' : verifying ? 'Confirming…' : instructionText}
               </button>
@@ -1772,7 +1799,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   Flip Camera
                 </button>
                 {!quest.reps && (
-                <label className={`flex-1 py-3.5 rounded-[16px] text-[14px] font-semibold ${pill} ${txt} text-center cursor-pointer active:opacity-70 transition-opacity ${questType === 'map' ? 'ring-2 ring-[#007AFF] bg-[#007AFF]/10 text-[#007AFF]' : ''}`}>
+                <label className={`flex-1 py-3.5 rounded-[16px] text-[14px] font-semibold ${pill} ${txt} text-center cursor-pointer active:opacity-70 transition-opacity ${questType === 'map' ? 'ring-2 ring-[#B8842A] bg-[#B8842A]/10 text-[#B8842A]' : ''}`}>
                   Upload Photo
                   <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
                 </label>
@@ -1999,17 +2026,17 @@ export default function QuestDailyApp() {
   const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
   const allDone = quests.length > 0 && quests.every(q => q.completed);
   const greetingHour = new Date().getHours();
-  const greeting = greetingHour < 5 ? 'Late night grind 🌙'
+  const greeting = greetingHour < 5 ? 'Late night grind'
     : greetingHour < 12 ? 'Good morning, Adventurer'
     : greetingHour < 18 ? 'Good afternoon, Adventurer'
     : 'Good evening, Adventurer';
 
-  const bg       = dark ? 'bg-black'      : 'bg-[#F2F2F7]';
-  const cardBg   = dark ? 'bg-zinc-900'   : 'bg-white';
-  const txt      = dark ? 'text-white'    : 'text-gray-900';
-  const sub      = dark ? 'text-zinc-400' : 'text-gray-500';
-  const sep      = dark ? 'border-zinc-800' : 'border-gray-100';
-  const secLabel = dark ? 'text-zinc-500' : 'text-gray-400';
+  const bg       = dark ? 'bg-stone-950'  : 'bg-[#EDE7D8]';
+  const cardBg   = dark ? 'bg-stone-900'   : 'bg-white';
+  const txt      = dark ? 'text-white'    : 'text-stone-900';
+  const sub      = dark ? 'text-stone-400' : 'text-stone-500';
+  const sep      = dark ? 'border-stone-800' : 'border-stone-100';
+  const secLabel = dark ? 'text-stone-500' : 'text-stone-400';
   const completedCount = quests.filter(q => q.completed).length;
   const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
@@ -2057,40 +2084,43 @@ export default function QuestDailyApp() {
                 <div className="flex items-center gap-2.5">
                   <LogoIcon size={34} dark={dark} />
                   <div>
-                    <h1 className={`text-[22px] font-bold tracking-tight leading-none ${txt}`}>QuestDaily</h1>
-                    <p className={`text-[11px] font-medium mt-1 ${secLabel}`}>{greeting}</p>
+                    <h1 className={`sq-display text-[21px] font-semibold uppercase tracking-wide leading-none ${txt}`}>QuestDaily</h1>
+                    <p className={`text-[11px] font-medium mt-1.5 ${secLabel}`}>{greeting}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   {streak > 0 && (
-                    <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${dark ? 'bg-orange-500/15' : 'bg-orange-50'}`}>
-                      <span className="text-[11px]">🔥</span>
-                      <span className={`text-[11px] font-bold ${dark ? 'text-orange-300' : 'text-orange-600'}`}>{streak}</span>
+                    <div className={`flex items-center gap-1 px-2.5 py-1 rounded-[8px] ${dark ? 'bg-[#B24A24]/15' : 'bg-[#B24A24]/10'}`}>
+                      <QuestSvg.flame width={12} height={12} className={dark ? 'text-[#e08a63]' : 'text-[#B24A24]'} />
+                      <span className={`sq-mono text-[11px] font-bold ${dark ? 'text-[#e08a63]' : 'text-[#B24A24]'}`}>{streak}</span>
                     </div>
                   )}
-                  <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${dark ? 'bg-zinc-800/80' : 'bg-gray-100'}`}>
-                    <span className="text-[10px]">⏱</span>
-                    <span className={`text-[11px] font-mono font-medium ${dark ? 'text-zinc-300' : 'text-gray-600'}`}>{timeLeft}</span>
+                  <div className={`flex items-center gap-1 px-2.5 py-1 rounded-[8px] ${dark ? 'bg-stone-800/80' : 'bg-stone-100'}`}>
+                    <QuestSvg.stopwatch width={11} height={11} className={dark ? 'text-stone-400' : 'text-stone-500'} />
+                    <span className={`sq-mono text-[11px] font-medium ${dark ? 'text-stone-300' : 'text-stone-600'}`}>{timeLeft}</span>
                   </div>
                   <button onClick={() => setShowLeaderboard(true)}
-                    className={`w-8 h-8 rounded-full flex items-center justify-center text-[14px] ${dark ? 'bg-zinc-800/80' : 'bg-gray-100'} active:opacity-70 transition-colors`}
+                    className={`w-8 h-8 rounded-[8px] flex items-center justify-center ${dark ? 'bg-stone-800/80 text-[#D9A64A]' : 'bg-stone-100 text-[#B8842A]'} active:opacity-70 transition-colors`}
                     aria-label="Worldwide leaderboard">
-                    🏆
+                    <TrophyIcon size={15} />
                   </button>
                   <button onClick={() => setDark(d => !d)}
-                    className={`w-8 h-8 rounded-full flex items-center justify-center ${dark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-gray-100 text-gray-600'} active:opacity-70 transition-colors`}>
+                    className={`w-8 h-8 rounded-[8px] flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
                     {dark ? <SunIcon /> : <MoonIcon />}
                   </button>
                 </div>
               </div>
-              <div className="mt-3 flex items-center gap-1.5">
-                <span className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">Lv {level}</span>
+              <div className="mt-3.5 flex items-center gap-2">
+                <span className="sq-display inline-flex items-center justify-center bg-[#B8842A] text-white text-[10px] font-semibold tracking-wide"
+                  style={{ padding: '3px 11px 3px 9px', clipPath: 'polygon(12% 0%,100% 0%,100% 100%,12% 100%,0% 50%)' }}>
+                  LV {level}
+                </span>
                 <span className={`text-[11px] font-medium ${sub}`}>{getLevelTitle(level)}</span>
-                <span className={`ml-auto text-[11px] font-semibold ${dark ? 'text-zinc-500' : 'text-gray-400'}`}>{xp} / {xpRequired} XP</span>
+                <span className={`ml-auto sq-mono text-[11px] font-semibold ${dark ? 'text-stone-500' : 'text-stone-400'}`}>{xp} / {xpRequired} XP</span>
               </div>
-              <div className={`mt-2 h-1.5 w-full rounded-full overflow-hidden ${dark ? 'bg-zinc-800' : 'bg-gray-200'}`}>
+              <div className={`mt-2 h-1.5 w-full rounded-full overflow-hidden ${dark ? 'bg-stone-800' : 'bg-stone-200'}`}>
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-[width] duration-700 ease-out"
+                  className="h-full rounded-full bg-[#B8842A] transition-[width] duration-700 ease-out"
                   style={{ width: `${xpPct}%` }}
                 />
               </div>
@@ -2098,12 +2128,12 @@ export default function QuestDailyApp() {
 
             <div className="relative z-10 flex-1 scroll-ios px-3 pt-1 pb-8 space-y-5">
               <div className="grid grid-cols-3 gap-2 sq-anim-pop">
-                <StatChip icon="⚡" label="Level" value={level} dark={dark} />
-                <StatChip icon="🔥" label="Streak" value={`${streak}d`} dark={dark} accent={streak > 0 ? (dark ? 'text-orange-300' : 'text-orange-600') : undefined} />
-                <StatChip icon="✅" label="Today" value={`${completedCount}/${quests.length || 0}`} dark={dark} accent={allDone ? (dark ? 'text-emerald-400' : 'text-emerald-600') : undefined} />
+                <StatChip icon={<QuestSvg.bolt width={15} height={15} />} label="Level" value={level} dark={dark} />
+                <StatChip icon={<QuestSvg.flame width={15} height={15} />} label="Streak" value={`${streak}d`} dark={dark} accent={streak > 0 ? (dark ? 'text-[#e08a63]' : 'text-[#B24A24]') : undefined} />
+                <StatChip icon={<CheckIcon />} label="Today" value={`${completedCount}/${quests.length || 0}`} dark={dark} accent={allDone ? (dark ? 'text-[#8fbb78]' : 'text-[#4B6B3E]') : undefined} />
               </div>
 
-              <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100'} rounded-[20px] px-4 py-4 flex items-center justify-between sq-anim-pop shadow-sm`}>
+              <div className={`${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100'} rounded-[20px] px-4 py-4 flex items-center justify-between sq-anim-pop shadow-sm`}>
                 <div>
                   <p className={`text-[14px] font-bold ${txt}`}>Daily Progress</p>
                   <p className={`text-[12px] mt-0.5 font-medium ${sub}`}>{completedCount} / {quests.length} completed</p>
@@ -2116,9 +2146,9 @@ export default function QuestDailyApp() {
                   Today's Objectives
                 </p>
 
-                <div className={`${dark ? 'bg-zinc-900/70 border border-white/5' : 'bg-white border border-gray-100 shadow-sm'} rounded-[20px] overflow-hidden`}>
+                <div className={`${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100 shadow-sm'} rounded-[20px] overflow-hidden`}>
                   {quests.map((quest, i) => {
-                    const qTheme = QUEST_THEME[quest.id] || { icon: 'target', grad: 'from-indigo-500 to-purple-600' };
+                    const qTheme = QUEST_THEME[quest.id] || { icon: 'target', grad: 'from-amber-500 to-amber-600' };
                     const QIcon = QuestSvg[qTheme.icon] || QuestSvg.target;
                     return (
                     <div key={quest.id}>
@@ -2126,19 +2156,20 @@ export default function QuestDailyApp() {
                       <button onClick={() => { if (!quest.completed) handleQuestClick(quest); }}
                         className={`w-full flex items-center gap-3.5 px-4 py-[18px] text-left active:bg-black/5 active:scale-[0.99] transition-all`}>
                         <div className="relative flex-shrink-0">
-                          <div className={`w-9 h-9 rounded-full flex items-center justify-center bg-gradient-to-br ${qTheme.grad} transition-all duration-300 ${quest.completed ? 'opacity-40 saturate-50' : 'shadow-[0_4px_14px_-4px_rgba(139,92,246,0.55)]'}`}>
+                          <div className={`w-9 h-9 rounded-full flex items-center justify-center ${qTheme.grad} transition-all duration-300 ${quest.completed ? 'opacity-40 saturate-50' : ''}`}
+                            style={quest.completed ? undefined : { boxShadow: 'inset 0 -2px 4px rgba(0,0,0,0.25), inset 0 0 0 1px rgba(255,255,255,0.2)' }}>
                             <QIcon width={16} height={16} className="text-white" />
                           </div>
                           {quest.completed && (
-                            <div className={`absolute -bottom-1 -right-1 rounded-full bg-[#34C759] border-2 ${dark ? 'border-zinc-900' : 'border-white'} flex items-center justify-center shadow-[0_0_8px_rgba(52,199,89,0.6)]`} style={{ width: 18, height: 18 }}>
+                            <div className={`absolute -bottom-1 -right-1 rounded-full bg-[#4B6B3E] border-2 ${dark ? 'border-stone-900' : 'border-white'} flex items-center justify-center shadow-[0_0_8px_rgba(75,107,62,0.6)]`} style={{ width: 18, height: 18 }}>
                               <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                             </div>
                           )}
                         </div>
-                        <span className={`flex-1 text-[15px] font-semibold leading-snug transition-colors ${quest.completed ? (dark ? 'text-zinc-600 line-through' : 'text-gray-400 line-through') : txt}`}>
+                        <span className={`flex-1 text-[15px] font-semibold leading-snug transition-colors ${quest.completed ? (dark ? 'text-stone-600 line-through' : 'text-stone-400 line-through') : txt}`}>
                           {quest.text}
                           {!quest.completed && quest.progress > 0 && (
-                            <span className="ml-2 align-middle text-[10px] font-bold uppercase tracking-wide text-[#007AFF] bg-[#007AFF]/10 px-1.5 py-0.5 rounded-full">
+                            <span className="ml-2 align-middle text-[10px] font-bold uppercase tracking-wide text-[#B8842A] bg-[#B8842A]/10 px-1.5 py-0.5 rounded-full">
                               In progress
                             </span>
                           )}
@@ -2150,11 +2181,11 @@ export default function QuestDailyApp() {
                               <img src={proofImages[quest.id]} alt="proof" className="w-full h-full object-cover" />
                             </button>
                           )}
-                          <span className={`text-[13px] font-bold ${quest.completed ? 'text-[#34C759]' : dark ? 'text-zinc-500' : 'text-gray-400'}`}>+{quest.xp}</span>
+                          <span className={`text-[13px] font-bold ${quest.completed ? 'text-[#4B6B3E]' : dark ? 'text-stone-500' : 'text-stone-400'}`}>+{quest.xp}</span>
                           {quest.completed ? (
-                            <span className={`text-[10px] font-bold ${dark ? 'text-zinc-600' : 'text-gray-300'}`}>XP</span>
+                            <span className={`text-[10px] font-bold ${dark ? 'text-stone-600' : 'text-stone-300'}`}>XP</span>
                           ) : (
-                            <span className={`text-[11px] ${dark ? 'text-zinc-600' : 'text-gray-300'}`}>
+                            <span className={`text-[11px] ${dark ? 'text-stone-600' : 'text-stone-300'}`}>
                               <svg width="8" height="14" viewBox="0 0 8 14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1 7 7 1 13"/></svg>
                             </span>
                           )}
@@ -2167,17 +2198,16 @@ export default function QuestDailyApp() {
               </div>
 
               {allDone && (
-                <div className={`relative overflow-hidden rounded-[20px] p-6 text-center border sq-anim-pop bg-gradient-to-b ${dark ? 'from-[#1c1530] to-[#0d0a17] border-white/5' : 'from-indigo-50 to-white border-gray-100 shadow-sm'}`}>
-                  <div className="pointer-events-none absolute -top-8 -right-8 w-32 h-32 rounded-full bg-purple-500/20 blur-3xl" />
-                  <p className="text-3xl mb-3 relative z-10">🏆</p>
-                  <p className={`font-bold text-[16px] relative z-10 ${txt}`}>All Quests Complete</p>
+                <div className={`relative overflow-hidden rounded-[20px] p-6 text-center border sq-anim-pop bg-gradient-to-b ${dark ? 'from-[#2a2210] to-[#15120b] border-white/5' : 'from-amber-50 to-white border-stone-100 shadow-sm'}`}>
+                  <TrophyIcon size={30} className={`mx-auto mb-3 relative z-10 ${dark ? 'text-[#D9A64A]' : 'text-[#B8842A]'}`} />
+                  <p className={`sq-display font-semibold text-[16px] relative z-10 ${txt}`}>All Quests Complete</p>
                   <p className={`text-sm mt-1.5 font-medium relative z-10 ${sub}`}>Rest up. New quests when the timer hits zero.</p>
                 </div>
               )}
 
               {quests.length > 0 && (
                 <p className={`text-[11px] font-medium text-center ${secLabel} px-4 pb-2 uppercase tracking-wide`}>
-                  All quests verified by on-device AI <br/> no data leaves your phone
+                  Every quest is checked right on your device <br/> nothing you record ever leaves your phone
                 </p>
               )}
             </div>
