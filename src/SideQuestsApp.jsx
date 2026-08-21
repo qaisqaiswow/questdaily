@@ -778,8 +778,14 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
   const { entries, status, errorDetail } = useLeaderboard();
 
   // don't surface a name until they've actually earned XP — someone who's
-  // just picked a username but hasn't completed anything yet stays anonymous
-  const rankedEntries = useMemo(() => entries.filter(e => (e.totalXpEarned ?? 0) > 0), [entries]);
+  // just picked a username but hasn't completed anything yet stays
+  // anonymous. Checked against level too (not just totalXpEarned) so an
+  // older or partially-synced doc missing that field doesn't wrongly hide
+  // someone who's clearly made progress.
+  const rankedEntries = useMemo(
+      () => entries.filter(e => (e.totalXpEarned ?? 0) > 0 || (e.level ?? 1) > 1),
+      [entries]
+  );
 
   const myRank = useMemo(() => {
     const idx = rankedEntries.findIndex(e => e.id === myUid);
