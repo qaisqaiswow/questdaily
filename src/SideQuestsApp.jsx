@@ -6,7 +6,7 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as exifr from 'exifr';
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 import {
   Sun, Moon, CheckSquare, History as HistoryIcon,
   Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Timer, ChevronsUp,
@@ -35,8 +35,11 @@ const LEADERBOARD_COLLECTION = 'leaderboard';
 const LEADERBOARD_SIZE = 100;
 
 // pushes the player's stats up to their leaderboard doc. ranked by lifetime
-// xp earned (not current xp) so leveling up never makes your rank go down
-async function syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned }) {
+// xp earned (not current xp) so leveling up never makes your rank go down.
+// this same doc also acts as a per-account profile backup — see
+// fetchRemoteProfile below — so progress can survive a cleared localStorage
+// as long as the anonymous auth session (and its uid) is still intact.
+async function syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned, streak }) {
   if (!uid || !username) return { ok: false, error: 'Not signed in yet — try again in a moment.' };
   try {
     await setDoc(doc(db, LEADERBOARD_COLLECTION, uid), {
@@ -44,12 +47,49 @@ async function syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned })
       level,
       xp,
       totalXpEarned,
+      ...(streak !== undefined ? { streak } : {}),
       updatedAt: Date.now(),
     }, { merge: true });
     return { ok: true };
   } catch (err) {
     console.error('Leaderboard sync failed:', err);
     return { ok: false, error: `${err.code || 'error'}: ${err.message}` };
+  }
+}
+
+// reads the profile doc back — used on load to restore level/xp/streak if
+// localStorage came back empty but this uid's Firestore data didn't.
+async function fetchRemoteProfile(uid) {
+  if (!uid) return null;
+  try {
+    const snap = await getDoc(doc(db, LEADERBOARD_COLLECTION, uid));
+    return snap.exists() ? snap.data() : null;
+  } catch (err) {
+    console.error('Profile fetch failed:', err);
+    return null;
+  }
+}
+
+// completed-quest history, stored per-account under users/{uid}/history/{id}
+// so it isn't stranded on a single browser's localStorage.
+async function syncHistoryEntry(uid, entry) {
+  if (!uid) return;
+  try {
+    await setDoc(doc(db, 'users', uid, 'history', entry.id), entry);
+  } catch (err) {
+    console.error('History sync failed:', err);
+  }
+}
+
+async function fetchRemoteHistory(uid) {
+  if (!uid) return [];
+  try {
+    const q = query(collection(db, 'users', uid, 'history'), orderBy('ts', 'desc'), limit(500));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => d.data());
+  } catch (err) {
+    console.error('History fetch failed:', err);
+    return [];
   }
 }
 
@@ -461,6 +501,22 @@ const SystemType = () => (
     .sq-large-title { letter-spacing: -0.6px; }
     .sq-title { letter-spacing: -0.2px; }
     * { -webkit-tap-highlight-color: transparent; }
+    /* No text selection, no pinch/double-tap zoom — this is meant to feel
+       like a native app, not a webpage. Inputs stay selectable/editable so
+       usernames etc. still work normally. touch-action still allows normal
+       scrolling (pan-y); it only blocks the pinch/double-tap zoom gestures —
+       the viewport meta tag in index.html should also set
+       maximum-scale=1, user-scalable=no as the primary safeguard, since
+       some browsers only respect that and ignore touch-action for zoom. */
+    .sq-root {
+      -webkit-user-select: none; -moz-user-select: none; user-select: none;
+      -webkit-touch-callout: none;
+      touch-action: pan-x pan-y;
+    }
+    .sq-root input, .sq-root textarea {
+      -webkit-user-select: text; -moz-user-select: text; user-select: text;
+      touch-action: manipulation;
+    }
     /* Theme crossfade — kept to cheap, compositor-friendly properties only.
        box-shadow/backdrop-filter are deliberately excluded here: animating
        those on many overlapping glass surfaces at once is what causes janky,
@@ -1036,24 +1092,27 @@ function DeviceInstallPrompt({ onDismiss, c }) {
 
   const nextStep = () => { if (step === 1) setStep(2); else onDismiss(); };
 
-  const rowStyle = { width: '100%', padding: '13px 16px', borderRadius: 18, fontSize: 15, fontWeight: 500, textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: c.bgSecondary, color: c.label };
+  const rowStyle = { width: '100%', padding: '16px 18px', borderRadius: 18, fontSize: 16, fontWeight: 500, textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: c.bgSecondary, color: c.label };
 
   return (
-      <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
-        <div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 340, padding: 20, textAlign: 'center' }}>
+      <div className="fixed inset-0 z-[100] flex flex-col sq-anim-in" style={{ background: c.bg }}>
+        <div className="flex-1 flex flex-col justify-center px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
           {step === 0 && (
               <>
-                <h3 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label, marginBottom: 2 }}>Add to Home Screen</h3>
-                <p style={{ fontSize: 13, color: c.labelSecondary, marginBottom: 16 }}>Which device are you using?</p>
-                <div className="flex flex-col gap-2">
+                <div className="text-center mb-8">
+                  <div style={{ width: 84, height: 84, borderRadius: 32, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+                    <IOSAddIcon />
+                    <style>{`div > svg { color: #fff; width: 40px; height: 40px; }`}</style>
+                  </div>
+                  <h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 8 }}>Add to Home Screen</h3>
+                  <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.4 }}>Which device are you using?</p>
+                </div>
+                <div className="flex flex-col gap-3">
                   <button onClick={() => { setOs('ios'); setStep(1); }} style={rowStyle}>
                     <span>iPhone or iPad</span><ChevronIcon color={c.labelTertiary} />
                   </button>
                   <button onClick={() => { setOs('android'); setStep(1); }} style={rowStyle}>
                     <span>Android</span><ChevronIcon color={c.labelTertiary} />
-                  </button>
-                  <button onClick={onDismiss} style={{ width: '100%', padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: c.blue, marginTop: 4 }}>
-                    Not Now
                   </button>
                 </div>
               </>
@@ -1061,50 +1120,59 @@ function DeviceInstallPrompt({ onDismiss, c }) {
 
           {step > 0 && os === 'ios' && (
               <>
-                <h3 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label, marginBottom: 2 }}>Install on iOS</h3>
-                <p style={{ fontSize: 13, color: c.labelSecondary, marginBottom: 16 }}>Step {step} of 2</p>
-                <div style={{ background: c.bgSecondary, borderRadius: 20, padding: 20, marginBottom: 16 }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 999, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
+                <div className="text-center mb-2">
+                  <h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 6 }}>Install on iOS</h3>
+                  <p style={{ fontSize: 14, color: c.labelSecondary, marginBottom: 28 }}>Step {step} of 2</p>
+                </div>
+                <div style={{ ...glassStyle(c), borderRadius: 28, padding: '40px 24px', marginBottom: 20, textAlign: 'center' }}>
+                  <div style={{ width: 72, height: 72, borderRadius: 999, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
                     {step === 1 ? <IOSShareIcon /> : <IOSAddIcon />}
+                    <style>{`div > svg { width: 30px; height: 30px; }`}</style>
                   </div>
-                  <p style={{ fontSize: 14, fontWeight: 600, color: c.label, marginBottom: 4 }}>
+                  <p style={{ fontSize: 18, fontWeight: 600, color: c.label, marginBottom: 6 }}>
                     {step === 1 ? 'Tap the Share button' : 'Tap Add to Home Screen'}
                   </p>
-                  <p style={{ fontSize: 12, color: c.labelSecondary }}>
+                  <p style={{ fontSize: 14, color: c.labelSecondary }}>
                     {step === 1 ? 'Find it in the Safari toolbar.' : 'Scroll down the share sheet to find it.'}
                   </p>
-                </div>
-                <div className="flex gap-2">
-                  {step === 2 && <button onClick={() => setStep(1)} style={{ flex: 1, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, background: c.bgSecondary, color: c.label }}>Back</button>}
-                  <button onClick={nextStep} style={{ flex: 2, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, background: c.blue, color: '#fff' }}>
-                    {step === 1 ? 'Next' : 'Done'}
-                  </button>
                 </div>
               </>
           )}
 
           {step > 0 && os === 'android' && (
               <>
-                <h3 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label, marginBottom: 2 }}>Install on Android</h3>
-                <p style={{ fontSize: 13, color: c.labelSecondary, marginBottom: 16 }}>Step {step} of 2</p>
-                <div style={{ background: c.bgSecondary, borderRadius: 20, padding: 20, marginBottom: 16 }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 999, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
+                <div className="text-center mb-2">
+                  <h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 6 }}>Install on Android</h3>
+                  <p style={{ fontSize: 14, color: c.labelSecondary, marginBottom: 28 }}>Step {step} of 2</p>
+                </div>
+                <div style={{ ...glassStyle(c), borderRadius: 28, padding: '40px 24px', marginBottom: 20, textAlign: 'center' }}>
+                  <div style={{ width: 72, height: 72, borderRadius: 999, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
                     {step === 1 ? <AndroidMenuIcon /> : <AndroidAddIcon />}
+                    <style>{`div > svg { width: 30px; height: 30px; }`}</style>
                   </div>
-                  <p style={{ fontSize: 14, fontWeight: 600, color: c.label, marginBottom: 4 }}>
+                  <p style={{ fontSize: 18, fontWeight: 600, color: c.label, marginBottom: 6 }}>
                     {step === 1 ? 'Tap the menu icon' : 'Tap Add to Home Screen'}
                   </p>
-                  <p style={{ fontSize: 12, color: c.labelSecondary }}>
+                  <p style={{ fontSize: 14, color: c.labelSecondary }}>
                     {step === 1 ? 'Three dots, usually top right in Chrome.' : 'Select it from the menu, or "Install app".'}
                   </p>
                 </div>
-                <div className="flex gap-2">
-                  {step === 2 && <button onClick={() => setStep(1)} style={{ flex: 1, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, background: c.bgSecondary, color: c.label }}>Back</button>}
-                  <button onClick={nextStep} style={{ flex: 2, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, background: c.green, color: '#fff' }}>
-                    {step === 1 ? 'Next' : 'Done'}
-                  </button>
-                </div>
               </>
+          )}
+        </div>
+
+        <div className="px-6" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 24px)' }}>
+          {step === 0 ? (
+              <button onClick={onDismiss} style={{ width: '100%', padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, color: c.blue, background: c.fill }}>
+                Not Now
+              </button>
+          ) : (
+              <div className="flex gap-3">
+                {step === 2 && <button onClick={() => setStep(1)} style={{ flex: 1, padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, background: c.fill, color: c.label }}>Back</button>}
+                <button onClick={nextStep} style={{ flex: 2, padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, background: os === 'ios' ? c.blue : c.green, color: '#fff' }}>
+                  {step === 1 ? 'Next' : 'Done'}
+                </button>
+              </div>
           )}
         </div>
       </div>
@@ -1997,6 +2065,39 @@ export default function QuestDailyApp() {
     }
   }, []);
 
+  // once this device has a stable anonymous uid, reconcile with whatever's
+  // already saved in Firestore under that uid: adopt remote progress if
+  // localStorage came back empty (e.g. cleared site data, or a fresh
+  // install that still resolved to the same anonymous session), merge in
+  // any history entries this device hasn't seen yet, and push up any local
+  // entries Firestore doesn't have (covers quests completed before this
+  // syncing existed, or while offline).
+  const cloudSyncedRef = useRef(false);
+  useEffect(() => {
+    if (!uid || !isMounted || cloudSyncedRef.current) return;
+    cloudSyncedRef.current = true;
+    (async () => {
+      const [profile, remoteHistory] = await Promise.all([fetchRemoteProfile(uid), fetchRemoteHistory(uid)]);
+
+      if (profile && level <= 1 && xp === 0 && totalXpEarned === 0) {
+        if (typeof profile.level === 'number') setLevel(profile.level);
+        if (typeof profile.xp === 'number') setXp(profile.xp);
+        if (typeof profile.totalXpEarned === 'number') setTotalXpEarned(profile.totalXpEarned);
+        if (typeof profile.streak === 'number' && streak === 0) setStreak(profile.streak);
+      }
+
+      setHistory(prevLocal => {
+        const byId = new Map();
+        [...remoteHistory, ...prevLocal].forEach(e => byId.set(e.id, e));
+        const merged = Array.from(byId.values()).sort((a, b) => b.ts - a.ts).slice(0, 500);
+        const remoteIds = new Set(remoteHistory.map(e => e.id));
+        prevLocal.forEach(e => { if (!remoteIds.has(e.id)) syncHistoryEntry(uid, e); });
+        return merged;
+      });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uid, isMounted]);
+
   useEffect(() => {
     if (isMounted) {
       document.documentElement.classList.toggle('dark', dark);
@@ -2016,14 +2117,14 @@ export default function QuestDailyApp() {
 
   const retryLeaderboardSync = () => {
     if (uid && username) {
-      syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned })
+      syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned, streak })
           .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
     }
   };
 
   useEffect(() => {
     if (uid && username) {
-      syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned })
+      syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned, streak })
           .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2111,21 +2212,24 @@ export default function QuestDailyApp() {
     setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true, progress: 0 } : q));
     const { leveledUp, newXp, newLevel, newTotal } = applyXpChange(quest?.xp ?? 0);
 
+    const entry = { id: `${questId}-${Date.now()}`, questId, text: quest.text, xp: quest.xp, ts: Date.now(), leveledUp };
     setHistory(prev => {
-      const entry = { id: `${questId}-${Date.now()}`, questId, text: quest.text, xp: quest.xp, ts: Date.now(), leveledUp };
       const next = [entry, ...prev];
       return next.length > 500 ? next.slice(0, 500) : next;
     });
+    if (uid) syncHistoryEntry(uid, entry);
 
     const todayStr = new Date().toDateString();
     const lastStreakDate = localStorage.getItem('sq_streak_date');
+    let newStreak = streak;
     if (lastStreakDate !== todayStr) {
       const yesterdayStr = new Date(Date.now() - ONE_DAY_MS).toDateString();
-      setStreak(prev => (lastStreakDate === yesterdayStr ? prev + 1 : 1));
+      newStreak = lastStreakDate === yesterdayStr ? streak + 1 : 1;
+      setStreak(newStreak);
       localStorage.setItem('sq_streak_date', todayStr);
     }
 
-    syncLeaderboardEntry(uid, { username, level: newLevel, xp: newXp, totalXpEarned: newTotal })
+    syncLeaderboardEntry(uid, { username, level: newLevel, xp: newXp, totalXpEarned: newTotal, streak: newStreak })
         .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
 
     setProofModalId(null);
