@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "lucide-react": "^1.33.0",
     "@huggingface/transformers": "^4.2.0",
     "@mediapipe/tasks-vision": "^0.10.14",
     "exifr": "^7.1.3",
