@@ -777,10 +777,14 @@ function UsernameModal({ onSubmit, c }) {
 function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syncError, onRetrySync, c }) {
   const { entries, status, errorDetail } = useLeaderboard();
 
+  // don't surface a name until they've actually earned XP — someone who's
+  // just picked a username but hasn't completed anything yet stays anonymous
+  const rankedEntries = useMemo(() => entries.filter(e => (e.totalXpEarned ?? 0) > 0), [entries]);
+
   const myRank = useMemo(() => {
-    const idx = entries.findIndex(e => e.id === myUid);
+    const idx = rankedEntries.findIndex(e => e.id === myUid);
     return idx === -1 ? null : idx + 1;
-  }, [entries, myUid]);
+  }, [rankedEntries, myUid]);
 
   const RANK_COLOR = { 1: c.yellow, 2: c.gray, 3: c.orange };
 
@@ -838,7 +842,7 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
               </div>
           )}
 
-          {status === 'ready' && entries.length === 0 && (
+          {status === 'ready' && rankedEntries.length === 0 && (
               <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6" style={{ color: c.labelTertiary }}>
                 <FlagIcon size={24} />
                 <p style={{ fontSize: 14, fontWeight: 600, color: c.label }}>No rankings yet</p>
@@ -848,9 +852,9 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
               </div>
           )}
 
-          {status === 'ready' && entries.length > 0 && (
+          {status === 'ready' && rankedEntries.length > 0 && (
               <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
-                {entries.map((entry, i) => {
+                {rankedEntries.map((entry, i) => {
                   const rank = i + 1;
                   const isMe = entry.id === myUid;
                   return (
