@@ -7,12 +7,17 @@ import * as exifr from 'exifr';
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
+import {
+  Sun, Moon, CheckSquare, History as HistoryIcon,
+  Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Timer, ChevronsUp,
+  Droplet, Leaf, Utensils, CookingPot, Flower2, Move, Zap, Flame,
+  Pencil, Snowflake, Wind, Waves, Target, GlassWater, CupSoda,
+} from 'lucide-react';
 
-// ─── FIREBASE / LEADERBOARD BACKEND ───────────────────────────────────────────
-// Replace these with your own Firebase project's config — Firebase Console →
-// Project Settings → General → "Your apps" → SDK setup and configuration.
-// (This is safe to ship client-side; it's not a secret. Access control lives
-// in your Firestore security rules, not in this config object.)
+// firebase / leaderboard stuff
+// swap in your own project config (Firebase console > project settings > your apps)
+// this is fine to ship client-side btw, it's not secret — the real access control
+// is in the firestore security rules
 const firebaseConfig = {
   apiKey: "AIzaSyDWaoCQjCc8mpF9jE8FIZvSKDKkxgTUELA",
   authDomain: "quest-daily-8debb.firebaseapp.com",
@@ -29,9 +34,8 @@ const db = getFirestore(firebaseApp);
 const LEADERBOARD_COLLECTION = 'leaderboard';
 const LEADERBOARD_SIZE = 100;
 
-// Writes (or merges) the current player's stats into their leaderboard doc.
-// Ranking is by lifetime XP earned (never decreases), so a leveling-related
-// XP "spend" never demotes someone — it's a pure progress counter.
+// pushes the player's stats up to their leaderboard doc. ranked by lifetime
+// xp earned (not current xp) so leveling up never makes your rank go down
 async function syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned }) {
   if (!uid || !username) return { ok: false, error: 'Not signed in yet — try again in a moment.' };
   try {
@@ -49,8 +53,7 @@ async function syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned })
   }
 }
 
-// Signs the device in anonymously so it has a stable UID to own a leaderboard
-// doc, without requiring the player to create an account or password.
+// anonymous auth so the device has a stable uid, no account/password needed
 function useAnonymousAuth() {
   const [uid, setUid] = useState(null);
   useEffect(() => {
@@ -63,59 +66,53 @@ function useAnonymousAuth() {
   return uid;
 }
 
-// Live top-N leaderboard — Firestore's onSnapshot pushes updates to every
-// connected client the instant any player's doc changes, so this needs no
-// polling or manual refresh.
+// live top-100, onSnapshot keeps it updated in realtime so no polling needed
 function useLeaderboard() {
   const [entries, setEntries] = useState([]);
   const [status, setStatus] = useState('loading'); // 'loading' | 'ready' | 'error'
   const [errorDetail, setErrorDetail] = useState(null);
   useEffect(() => {
     const q = query(collection(db, LEADERBOARD_COLLECTION), orderBy('totalXpEarned', 'desc'), limit(LEADERBOARD_SIZE));
-    // If Firestore/Auth aren't set up yet in the Firebase console, the SDK can
-    // hang rather than error out quickly — don't leave the user staring at a
-    // spinner forever.
     const timeout = setTimeout(() => {
       setStatus(prev => prev === 'loading' ? 'error' : prev);
       setErrorDetail(prev => prev || 'Timed out waiting for a response. Firestore Database and Anonymous Auth may not be enabled yet in the Firebase console.');
     }, 8000);
     const unsub = onSnapshot(
-      q,
-      snap => { clearTimeout(timeout); setEntries(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setStatus('ready'); setErrorDetail(null); },
-      err => { clearTimeout(timeout); console.error('Leaderboard listener error:', err); setStatus('error'); setErrorDetail(`${err.code || 'error'}: ${err.message}`); }
+        q,
+        snap => { clearTimeout(timeout); setEntries(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setStatus('ready'); setErrorDetail(null); },
+        err => { clearTimeout(timeout); console.error('Leaderboard listener error:', err); setStatus('error'); setErrorDetail(`${err.code || 'error'}: ${err.message}`); }
     );
     return () => { clearTimeout(timeout); unsub(); };
   }, []);
   return { entries, status, errorDetail };
 }
 
-// ─── HAPTICS ─────────────────────────────────────────────────────────────────
+// haptics
 function haptic(pattern = 10) {
   try { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(pattern); } catch { /* unsupported */ }
 }
 
 function getLevelTitle(level) {
-  if (level < 5)  return 'Novice Adventurer';
-  if (level < 10) return 'Apprentice Adventurer';
-  if (level < 20) return 'Skilled Adventurer';
-  if (level < 35) return 'Veteran Adventurer';
-  return 'Legendary Adventurer';
+  if (level < 5)  return 'Novice';
+  if (level < 10) return 'Apprentice';
+  if (level < 20) return 'Skilled';
+  if (level < 35) return 'Veteran';
+  return 'Legendary';
 }
 
-// ─── AI SETUP ────────────────────────────────────────────────────────────────
+// ai model setup
 env.allowLocalModels = false;
 
-// FAST MODEL — used by the real-time live scan loop (runs every ~1.2s while the
-// camera is open). Quantized (int8) for low latency on-device; the live loop
-// compensates for the small accuracy trade-off with multi-frame smoothing and a
-// required streak (see SCORE_SMOOTHING / REQUIRED_PASSES below).
+// fast model, used by the live scan loop while the camera is open (~every 1.2s).
+// quantized so it's fast enough to run on-device — we make up for the accuracy
+// hit with multi-frame smoothing + requiring a streak of passes (see below)
 let classifierPromise = null;
 function getClassifier(onProgress) {
   if (!classifierPromise) {
     classifierPromise = pipeline(
-      'zero-shot-image-classification',
-      'Xenova/siglip-base-patch16-224',
-      { dtype: 'q8', ...(onProgress ? { progress_callback: onProgress } : {}) }
+        'zero-shot-image-classification',
+        'Xenova/siglip-base-patch16-224',
+        { dtype: 'q8', ...(onProgress ? { progress_callback: onProgress } : {}) }
     ).catch(error => {
       classifierPromise = null;
       throw error;
@@ -124,18 +121,15 @@ function getClassifier(onProgress) {
   return classifierPromise;
 }
 
-// ACCURATE MODEL — a larger SigLIP checkpoint at full precision, used only for
-// one-shot checks where latency doesn't matter: uploaded proof photos, photo
-// authenticity screening, and the final confirmation frame that locks in a live
-// quest. This gives the live loop's fast reads a high-accuracy second opinion
-// before anything actually counts as verified.
+// bigger/slower model, only used for one-shot checks (uploaded photos, the final
+// confirm frame) — basically a second opinion before we actually mark it verified
 let staticClassifierPromise = null;
 function getStaticClassifier(onProgress) {
   if (!staticClassifierPromise) {
     staticClassifierPromise = pipeline(
-      'zero-shot-image-classification',
-      'Xenova/siglip-large-patch16-256',
-      onProgress ? { progress_callback: onProgress } : undefined
+        'zero-shot-image-classification',
+        'Xenova/siglip-large-patch16-256',
+        onProgress ? { progress_callback: onProgress } : undefined
     ).catch(error => {
       staticClassifierPromise = null;
       throw error;
@@ -144,7 +138,7 @@ function getStaticClassifier(onProgress) {
   return staticClassifierPromise;
 }
 
-// ─── PHOTO SOURCE / AUTHENTICITY LABELS ─────────────────────────────────────
+// photo source labels (for the "is this actually your photo" check)
 const SOURCE_CAMERA_LABEL = 'a real unedited photo taken with a phone camera';
 const SOURCE_DOWNLOADED_LABELS = [
   'a professional stock photography image',
@@ -153,18 +147,18 @@ const SOURCE_DOWNLOADED_LABELS = [
 ];
 const SOURCE_LABELS = [SOURCE_CAMERA_LABEL, ...SOURCE_DOWNLOADED_LABELS];
 
-// ─── POSE MODEL SETUP (real rep counting via joint tracking) ────────────────
+// pose model — this is what actually counts reps
 let landmarkerPromise = null;
 function getPoseLandmarker() {
   if (!landmarkerPromise) {
     landmarkerPromise = (async () => {
       const vision = await FilesetResolver.forVisionTasks(
-        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
       );
       return PoseLandmarker.createFromOptions(vision, {
         baseOptions: {
           modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+              'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
           delegate: 'GPU',
         },
         runningMode: 'VIDEO',
@@ -292,7 +286,7 @@ function updatePoseRepState(state, questId, landmarks, now) {
   return { reps: state.reps, phase: state.phase, cue, counted };
 }
 
-// ─── QUEST LABELS & PROFILES ─────────────────────────────────────────────────
+// quest labels
 const QUEST_LABELS = {
   q1:  { type: 'reps', activity: ['person doing pushups on floor', 'pushup exercise'], label: 'doing pushups', bodyParts: ['Chest', 'Triceps', 'Shoulders', 'Core'] },
   q2:  { type: 'reps', activity: ['person doing squats exercise', 'squat workout legs bent'], label: 'doing squats', bodyParts: ['Quads', 'Hamstrings', 'Glutes', 'Core'] },
@@ -329,8 +323,23 @@ const QUEST_LABELS = {
 
 const MOVEMENT_ACTION_IDS = new Set(['q8', 'q11', 'q15', 'q26', 'q27', 'q28', 'q29', 'q30', 'q31']);
 
+// labels that catch the most common ways people try to fake a check-in:
+// holding a printed photo up to the lens, or pointing the camera at a
+// second screen (phone/tablet/laptop) that's playing a photo or video of
+// someone else doing the activity. These are added to every negative set
+// so the classifier is actively working against replay attempts, not just
+// scoring "does this look vaguely like the activity".
+const ANTI_SPOOF_LABELS = [
+  'a photo or video playing on a phone or tablet screen',
+  'a laptop or computer monitor screen',
+  'a printed photograph being held up to the camera',
+  'a picture of a picture',
+];
+const SPOOF_BLOCK_THRESHOLD = 0.30;
+const PASS_MARGIN = 0.12; // how much the activity score must clear the negative/spoof score by
+
 const getNegativeLabels = (type) => {
-  const base = ['person sitting doing nothing', 'person standing still straight', 'random everyday object'];
+  const base = ['person sitting doing nothing', 'person standing still straight', 'random everyday object', ...ANTI_SPOOF_LABELS];
   if (type === 'map') return [...base, 'sweaty selfie face', 'picture of running shoes', 'treadmill machine indoors', 'person running outside'];
   if (type === 'food') return [...base, 'empty plate or bowl', 'restaurant paper menu', 'store product barcode', 'person eating face'];
   return [...base, 'phone or computer screen'];
@@ -373,9 +382,9 @@ function randomizeQuest(pool) {
 }
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const REQUIRED_PASSES = 3;
-const PASS_THRESHOLD  = 0.35;
-const SCORE_SMOOTHING = 0.45; // weight given to each new frame when smoothing confidence
+const REQUIRED_PASSES = 4;
+const PASS_THRESHOLD  = 0.42;
+const SCORE_SMOOTHING = 0.38; // weight given to each new frame when smoothing confidence — lower = slower to react, harder to fool with a quick flash
 
 function getMaxLabelScore(results, candidates) {
   if (!candidates?.length) return 0;
@@ -397,190 +406,209 @@ async function checkPhotoAuthenticity(file, dataUrl, classifierLabels) {
     downloadedScore = getMaxLabelScore(results, SOURCE_DOWNLOADED_LABELS);
   } catch { /* if the model call fails, fall back to EXIF alone */ }
 
-  // Require a clear margin (not just a coin-flip edge) before flagging, so a real
-  // photo that scores close to 50/50 isn't wrongly rejected.
   const margin = downloadedScore - cameraScore;
-  const modelThinksDownloaded = margin > 0.08;
+  const modelThinksDownloaded = margin > 0.05;
   const suspicious = !hasCameraMetadata && modelThinksDownloaded;
   const confidence = Math.round(Math.max(cameraScore, downloadedScore) * 100);
   return { hasCameraMetadata, cameraScore, downloadedScore, suspicious, confidence };
 }
 
-// ─── ICONS ───────────────────────────────────────────────────────────────────
-const LogoIcon = ({ size = 34, dark }) => (
-  <img src="/logo-transparent.png" alt="QuestDaily" width={size} height={size}
-    style={{ filter: dark ? 'invert(0)' : 'invert(1)', opacity: 0.9 }} />
-);
+// colors
+// just the standard ios system colors, light + dark. using plain objects instead
+// of tailwind's dark: classes since we're already passing `dark` around as state
+const C = {
+  light: {
+    bg: '#F2F2F7', bgElevated: '#FFFFFF', bgSecondary: '#F2F2F7', bgTertiary: '#E5E5EA',
+    label: '#000000', labelSecondary: 'rgba(60,60,67,0.60)', labelTertiary: 'rgba(60,60,67,0.30)',
+    separator: 'rgba(60,60,67,0.29)', fill: 'rgba(120,120,128,0.12)',
+    blue: '#007AFF', green: '#34C759', orange: '#FF9500', red: '#FF3B30',
+    indigo: '#5856D6', teal: '#30B0C7', purple: '#AF52DE', yellow: '#FFCC00', pink: '#FF2D55', gray: '#8E8E93',
+    glass: 'rgba(255,255,255,0.55)', glassStrong: 'rgba(255,255,255,0.72)',
+    glassBorder: 'rgba(255,255,255,0.6)', glassHighlight: 'rgba(255,255,255,0.9)',
+    glassShadow: '0 1px 1px rgba(0,0,0,0.03), 0 8px 24px -12px rgba(0,0,0,0.14)',
+  },
+  dark: {
+    bg: '#000000', bgElevated: '#1C1C1E', bgSecondary: '#1C1C1E', bgTertiary: '#2C2C2E',
+    label: '#FFFFFF', labelSecondary: 'rgba(235,235,245,0.60)', labelTertiary: 'rgba(235,235,245,0.30)',
+    separator: 'rgba(84,84,88,0.65)', fill: 'rgba(120,120,128,0.24)',
+    blue: '#0A84FF', green: '#30D158', orange: '#FF9F0A', red: '#FF453A',
+    indigo: '#5E5CE6', teal: '#40C8E0', purple: '#BF5AF2', yellow: '#FFD60A', pink: '#FF375F', gray: '#98989D',
+    glass: 'rgba(28,28,30,0.55)', glassStrong: 'rgba(28,28,30,0.72)',
+    glassBorder: 'rgba(255,255,255,0.1)', glassHighlight: 'rgba(255,255,255,0.14)',
+    glassShadow: '0 1px 1px rgba(0,0,0,0.2), 0 8px 24px -12px rgba(0,0,0,0.5)',
+  },
+};
 
-const SunIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
-  </svg>
-);
-const MoonIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-  </svg>
-);
-const CheckIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="20 6 9 17 4 12"/>
-  </svg>
-);
+// one helper so every glass surface looks the same — real "liquid glass":
+// heavy blur + saturation boost, a soft glossy wash top-to-bottom, and a
+// thin specular highlight traced along the inner top edge like light
+// catching the rim of actual glass.
+const glassStyle = (c, strong = false) => ({
+  background: `linear-gradient(165deg, ${c.glassHighlight} 0%, ${strong ? c.glassStrong : c.glass} 22%, ${strong ? c.glassStrong : c.glass} 100%)`,
+  backdropFilter: 'blur(22px) saturate(165%)',
+  WebkitBackdropFilter: 'blur(22px) saturate(165%)',
+  border: `0.5px solid ${c.glassBorder}`,
+  boxShadow: `inset 0 1px 0 ${c.glassHighlight}, inset 0 0 0 0.5px rgba(255,255,255,0.04), ${c.glassShadow}`,
+  transform: 'translateZ(0)',
+});
 
-const IOSShareIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
-    <polyline points="16 6 12 2 8 6"/>
-    <line x1="12" y1="2" x2="12" y2="15"/>
-  </svg>
-);
-
-const IOSAddIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="3" width="18" height="18" rx="4" ry="4"/>
-    <line x1="12" y1="8" x2="12" y2="16"/>
-    <line x1="8" y1="12" x2="16" y2="12"/>
-  </svg>
-);
-
-const AndroidMenuIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-    <circle cx="12" cy="5" r="2.5"/>
-    <circle cx="12" cy="12" r="2.5"/>
-    <circle cx="12" cy="19" r="2.5"/>
-  </svg>
-);
-
-const AndroidAddIcon = () => (
-  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
-    <line x1="12" y1="18" x2="12.01" y2="18"/>
-    <line x1="9" y1="11" x2="15" y2="11"/>
-    <line x1="12" y1="8" x2="12" y2="14"/>
-  </svg>
-);
-
-const TrophyIcon = ({ size = 16, className = '' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M8 4h8v5a4 4 0 0 1-8 0V4Z"/><path d="M8 5H5a3 3 0 0 0 3 4"/><path d="M16 5h3a3 3 0 0 1-3 4"/><path d="M12 13v3"/><path d="M9 20h6"/><path d="M10 16h4l.5 4h-5l.5-4Z"/>
-  </svg>
-);
-const WarningIcon = ({ size = 15, className = '' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-  </svg>
-);
-const SignalOffIcon = ({ size = 26, className = '' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M5 12.5a11 11 0 0 1 4-2.5"/><path d="M9.5 8.8A11 11 0 0 1 19 10.5"/><path d="M12.5 15a4 4 0 0 1 3 1.8"/><circle cx="8" cy="19" r="1"/><line x1="2" y1="2" x2="22" y2="22"/>
-  </svg>
-);
-const FlagIcon = ({ size = 26, className = '' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M5 21V4"/><path d="M5 4h13l-3 4 3 4H5"/>
-  </svg>
-);
-
-// ─── GLOBAL TYPE SYSTEM ─────────────────────────────────────────────────────
-// Loaded once (this component is always mounted). Oswald carries headings and
-// badges, IBM Plex Mono carries anything that reads like a stat or a readout,
-// Inter stays as the quiet workhorse for body copy.
-const SqTypeImport = () => (
-  <style>{`
-    @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
-    .sq-display { font-family: 'Oswald', 'Inter', sans-serif; letter-spacing: 0.01em; }
-    .sq-mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
-    .sq-body { font-family: 'Inter', ui-sans-serif, sans-serif; }
+// system font stack, no google fonts import — applied to every descendant so
+// nothing inside the app can accidentally fall back to a non-system typeface
+const SystemType = () => (
+    <style>{`
+    .sq-root, .sq-root * { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; }
+    .sq-mono, .sq-mono * { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+    .sq-large-title { letter-spacing: -0.6px; }
+    .sq-title { letter-spacing: -0.2px; }
+    * { -webkit-tap-highlight-color: transparent; }
+    /* Theme crossfade — kept to cheap, compositor-friendly properties only.
+       box-shadow/backdrop-filter are deliberately excluded here: animating
+       those on many overlapping glass surfaces at once is what causes janky,
+       "unpolished" frame drops, so those stay instant while color/background
+       still crossfade smoothly. */
+    .sq-root, .sq-root :where(div, span, p, h1, h2, h3, button, a, input) {
+      transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease;
+    }
+    svg { transition: stroke 0.2s ease, fill 0.2s ease; }
+    .sq-scroll { -webkit-overflow-scrolling: touch; }
+    @keyframes sq-fade-up { from { opacity: 0; transform: translate3d(0,7px,0); } to { opacity: 1; transform: translate3d(0,0,0); } }
+    @keyframes sq-check-in { 0% { opacity: 0; transform: scale(0.5); } 70% { opacity: 1; transform: scale(1.06); } 100% { opacity: 1; transform: scale(1); } }
+    .sq-anim-in { animation: sq-fade-up 0.32s cubic-bezier(0.22,1,0.36,1) both; will-change: transform, opacity; }
+    .sq-anim-check { animation: sq-check-in 0.4s cubic-bezier(0.22,1,0.36,1) both; }
+    button, a { transition: opacity 0.2s ease-out, transform 0.2s cubic-bezier(0.22,1,0.36,1), background-color 0.25s ease; }
+    button:active { transform: scale(0.96); }
+    @keyframes sq-icon-pop { 0% { opacity: 0; transform: scale(0.6) rotate(-8deg); } 60% { opacity: 1; transform: scale(1.12) rotate(2deg); } 100% { opacity: 1; transform: scale(1) rotate(0deg); } }
+    .sq-icon-tap { transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1); display: inline-flex; will-change: transform; }
+    button:active .sq-icon-tap { transform: scale(1.2) rotate(-6deg); }
+    .sq-icon-pop-in { animation: sq-icon-pop 0.4s cubic-bezier(0.22,1,0.36,1) both; }
+    .sq-tab-icon { transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1); will-change: transform; }
+    .sq-tab-icon-active { transform: scale(1.14) translateY(-1px); }
+    @keyframes sq-drift-a { 0%,100% { transform: translate3d(-6%,-4%,0) scale(1); } 50% { transform: translate3d(8%,10%,0) scale(1.15); } }
+    @keyframes sq-drift-b { 0%,100% { transform: translate3d(10%,6%,0) scale(1.1); } 50% { transform: translate3d(-8%,-8%,0) scale(0.95); } }
+    @keyframes sq-drift-c { 0%,100% { transform: translate3d(-4%,8%,0) scale(0.95); } 50% { transform: translate3d(6%,-10%,0) scale(1.1); } }
+    .sq-orb-a { animation: sq-drift-a 26s ease-in-out infinite; will-change: transform; }
+    .sq-orb-b { animation: sq-drift-b 32s ease-in-out infinite; will-change: transform; }
+    .sq-orb-c { animation: sq-drift-c 22s ease-in-out infinite; will-change: transform; }
+    @media (prefers-reduced-motion: reduce) {
+      .sq-orb-a, .sq-orb-b, .sq-orb-c { animation: none; }
+    }
   `}</style>
 );
 
-// ─── AMBIENT BACKGROUND — a quiet contour map, standing in for a route log ──────
-// Faint elevation-line waypoints instead of glow blobs: it reads as a trail
-// the player is charting, not a decorative gradient.
-const AnimatedBackground = ({ dark }) => {
-  const line = dark ? 'rgba(217,166,74,0.16)' : 'rgba(184,132,42,0.22)';
-  const line2 = dark ? 'rgba(75,107,62,0.14)' : 'rgba(75,107,62,0.16)';
-  const dot = dark ? 'rgba(217,166,74,0.5)' : 'rgba(184,132,42,0.45)';
-  return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden z-0">
-      <SqTypeImport />
-      <svg className="sq-contour sq-contour-a" viewBox="0 0 400 500" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M-20,60 C 60,20 110,100 190,60 C 270,20 320,100 420,60" fill="none" stroke={line} strokeWidth="1.4"/>
-        <path d="M-20,110 C 70,150 130,60 210,110 C 290,160 340,70 420,110" fill="none" stroke={line} strokeWidth="1.4"/>
-        <path d="M-20,430 C 60,390 110,470 190,430 C 270,390 320,470 420,430" fill="none" stroke={line2} strokeWidth="1.4"/>
-        <path d="M-20,468 C 70,500 130,420 210,468 C 290,510 340,430 420,468" fill="none" stroke={line2} strokeWidth="1.4"/>
-        <circle cx="190" cy="60" r="3" fill={dot} />
-        <circle cx="210" cy="468" r="3" fill={dot} />
-      </svg>
-      <style>{`
-        .sq-contour { position: absolute; left: 0; width: 100%; }
-        .sq-contour-a { top: 0; height: 100%; animation: sq-chart-drift 42s ease-in-out infinite; }
-        @keyframes sq-chart-drift { 0%, 100% { transform: translate(0,0); } 50% { transform: translate(-2.5%, 1%); } }
-        @keyframes sq-pop-in { 0% { opacity: 0; transform: scale(0.9) translateY(8px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
-        @keyframes sq-check-in { 0% { opacity: 0; transform: scale(0.4); } 60% { opacity: 1; transform: scale(1.15); } 100% { opacity: 1; transform: scale(1); } }
-        @keyframes sq-icon-float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-4px); } }
-        .sq-anim-pop { animation: sq-pop-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
-        .sq-anim-check { animation: sq-check-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both; }
-        .sq-anim-float { animation: sq-icon-float 3.2s ease-in-out infinite; }
-      `}</style>
+// background blobs
+// 3 slow-drifting blurred color fields, fixed behind everything. this is what
+// the glass cards are actually blurring/tinting — without it the "glass" is
+// just a translucent gray box, which looks flat
+const AmbientBackground = ({ c }) => (
+    <div className="fixed inset-0 pointer-events-none z-0" aria-hidden="true" style={{ overflow: 'hidden' }}>
+      <div className="sq-orb-a" style={{ position: 'absolute', top: '-10%', left: '-15%', width: '75%', height: '42%', borderRadius: '50%', background: c.blue, opacity: 0.16, filter: 'blur(70px)' }} />
+      <div className="sq-orb-b" style={{ position: 'absolute', top: '30%', right: '-20%', width: '70%', height: '46%', borderRadius: '50%', background: c.purple, opacity: 0.13, filter: 'blur(80px)' }} />
+      <div className="sq-orb-c" style={{ position: 'absolute', bottom: '-14%', left: '5%', width: '65%', height: '40%', borderRadius: '50%', background: c.teal, opacity: 0.13, filter: 'blur(75px)' }} />
     </div>
-  );
-};
+);
 
-// ─── QUEST THEMES & CONFIG ───────────────────────────────────────────────────
+// icons
+// SF-Symbols-style icons via lucide-react — clean, rounded, consistent 1.5–2px strokes
+const CheckIcon = ({ size = 12 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12"/>
+    </svg>
+);
+const ChevronIcon = ({ color }) => (
+    <svg width="8" height="14" viewBox="0 0 8 14" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1 7 7 1 13"/></svg>
+);
+const BackChevron = ({ color }) => (
+    <svg width="11" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+);
+const IOSShareIcon = () => (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>
+    </svg>
+);
+const IOSAddIcon = () => (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="4" ry="4"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
+    </svg>
+);
+const AndroidMenuIcon = () => (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="19" r="2.2"/></svg>
+);
+const AndroidAddIcon = () => (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/><line x1="9" y1="11" x2="15" y2="11"/><line x1="12" y1="8" x2="12" y2="14"/>
+    </svg>
+);
+const TrophyIcon = ({ size = 16 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 4h8v5a4 4 0 0 1-8 0V4Z"/><path d="M8 5H5a3 3 0 0 0 3 4"/><path d="M16 5h3a3 3 0 0 1-3 4"/><path d="M12 13v3"/><path d="M9 20h6"/><path d="M10 16h4l.5 4h-5l.5-4Z"/>
+    </svg>
+);
+const WarningIcon = ({ size = 15 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+);
+const SignalOffIcon = ({ size = 24 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12.5a11 11 0 0 1 4-2.5"/><path d="M9.5 8.8A11 11 0 0 1 19 10.5"/><path d="M12.5 15a4 4 0 0 1 3 1.8"/><circle cx="8" cy="19" r="1"/><line x1="2" y1="2" x2="22" y2="22"/>
+    </svg>
+);
+const FlagIcon = ({ size = 24 }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 21V4"/><path d="M5 4h13l-3 4 3 4H5"/>
+    </svg>
+);
+
+// quest icons — mapped straight onto Lucide (SF-Symbols-style) components.
+// Each is a drop-in React component, so existing call sites (which pass
+// size/color/style props) work unchanged.
 const QuestSvg = {
-  cup: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3h10l-1 12a4 4 0 0 1-4 4h0a4 4 0 0 1-4-4L7 3Z"/><path d="M9 3v3"/><path d="M15 3v3"/></svg>),
-  smoothie: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2h8l-1 3H9L8 2Z"/><path d="M7 5h10l-1.2 14.2A2 2 0 0 1 13.8 21h-3.6a2 2 0 0 1-2-1.8L7 5Z"/><path d="M7.6 11h8.8"/></svg>),
-  dumbbell: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9v6"/><path d="M2 10v4"/><path d="M20 9v6"/><path d="M22 10v4"/><path d="M6.5 8v8"/><path d="M17.5 8v8"/><path d="M6.5 12h11"/></svg>),
-  run: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="13" cy="4" r="1.6"/><path d="M9.5 21l2-5 2.2 1.8L16 21"/><path d="M6 14l3-3 3 1 3.5-3.5"/><path d="M9 11 7 8"/></svg>),
-  bike: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="17" r="3.2"/><circle cx="18" cy="17" r="3.2"/><path d="M6 17l4-8h4l3 8"/><path d="M10 9h4"/><path d="M13 5h3l2 4"/></svg>),
-  footsteps: (p) => (<svg {...p} viewBox="0 0 24 24" fill="currentColor" stroke="none"><ellipse cx="8.3" cy="15.6" rx="2.3" ry="3.5" transform="rotate(-12 8.3 15.6)"/><circle cx="6.6" cy="11" r="0.95"/><circle cx="8" cy="10.1" r="0.95"/><circle cx="9.4" cy="10.3" r="0.9"/><circle cx="10.6" cy="11" r="0.8"/><ellipse cx="15.9" cy="8.6" rx="2.3" ry="3.5" transform="rotate(10 15.9 8.6)"/><circle cx="14.1" cy="4" r="0.95"/><circle cx="15.5" cy="3.2" r="0.95"/><circle cx="16.9" cy="3.4" r="0.9"/><circle cx="18.1" cy="4.1" r="0.8"/></svg>),
-  legs: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="4" r="1.6"/><path d="M12 6v5"/><path d="M12 11 8 14v7"/><path d="M12 11l4 3v7"/><path d="M8 21h2"/><path d="M14 21h2"/></svg>),
-  core: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="7" y="3.5" width="10" height="17" rx="4.5"/><path d="M12 3.5v17"/><path d="M7.5 9.5h9"/><path d="M7.5 14.5h9"/></svg>),
-  stopwatch: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="13.5" r="7.2"/><path d="M12 13.5V9.2"/><path d="M9.5 2.5h5"/><path d="M18 5.5l1.4-1.4"/></svg>),
-  bar: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 5h16"/><circle cx="12" cy="9" r="1.6"/><path d="M12 10.6v4"/><path d="M9 6.5l2 3"/><path d="M15 6.5l-2 3"/><path d="M10 14.6l-1.6 4"/><path d="M14 14.6l1.6 4"/></svg>),
-  droplet: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3s6 6.5 6 10.5a6 6 0 0 1-12 0C6 9.5 12 3 12 3Z"/></svg>),
-  leaf: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 5c-9 0-15 6-15 15 9 0 15-6 15-15Z"/><path d="M6 19 18 6"/></svg>),
-  bowl: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12h16a8 6 0 0 1-16 0Z"/><path d="M12 12V5"/><path d="M9 7l3-2 3 2"/></svg>),
-  pot: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 11h16v3a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5v-3Z"/><path d="M2 11h20"/><path d="M6 11V8h12v3"/></svg>),
-  moon: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"/></svg>),
-  lotus: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 21c-4-1-6-3.5-6-7 3 0 6 1.5 6 5 0-3.5 3-5 6-5 0 3.5-2 6-6 7Z"/><path d="M12 21V9"/><path d="M8 9c0-3 2-6 4-7 2 1 4 4 4 7"/></svg>),
-  stretch: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="4" r="1.6"/><path d="M12 6v5"/><path d="M6 8l6 3 6-3"/><path d="M12 11l-3 9"/><path d="M12 11l3 9"/></svg>),
-  bolt: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>),
-  flame: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c4 0 7-2.7 7-6.5 0-3-2-5-3-7-.3 2-1.5 3-2.5 2.2.7-2.3-.2-4.7-2-6.2C11 7 8 9 8 13c-1-.6-1.5-1.8-1.5-3.2C5.3 11.2 5 13 5 15.2 5 19 8 22 12 22Z"/></svg>),
-  pencil: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="M14 6l4 4"/></svg>),
-  snowflake: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20M4.5 7l15 10M19.5 7l-15 10"/></svg>),
-  wind: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 13h15a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 18h9a2 0 1 0-2-2"/></svg>),
-  rope: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 20c4-8 12-8 16 0"/><path d="M4 4c4 8 12 8 16 0"/></svg>),
-  target: (p) => (<svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.6" fill="currentColor"/></svg>),
+  cup: GlassWater,
+  smoothie: CupSoda,
+  dumbbell: Dumbbell,
+  run: PersonStanding,
+  bike: Bike,
+  footsteps: Footprints,
+  legs: Footprints,
+  core: CircleDot,
+  stopwatch: Timer,
+  bar: ChevronsUp,
+  droplet: Droplet,
+  leaf: Leaf,
+  bowl: Utensils,
+  pot: CookingPot,
+  moon: Moon,
+  lotus: Flower2,
+  stretch: Move,
+  bolt: Zap,
+  flame: Flame,
+  pencil: Pencil,
+  snowflake: Snowflake,
+  wind: Wind,
+  rope: Waves,
+  target: Target,
 };
 
-// Eight "enamel" tones, each standing in for a category of quest — strength,
-// endurance, heat, recovery, core, fuel, flexibility, cold — cycled across the
-// pool instead of a different neon gradient per card.
-const SQ_BADGE = {
-  brass: 'bg-[#B8842A]', moss: 'bg-[#4B6B3E]', ember: 'bg-[#B24A24]',
-  steelBlue: 'bg-[#45606B]', clay: 'bg-[#9C3B3B]', teal: 'bg-[#2E6B63]',
-  plum: 'bg-[#6B4C6B]', steel: 'bg-[#5B6470]',
-};
+// Quest categories map to system colors, not a rotating decorative palette —
+// each color means the same category everywhere in the app.
+const CAT = { strength: 'orange', cardio: 'red', mind: 'indigo', recover: 'purple', fuel: 'green', cold: 'teal', track: 'blue' };
 const QUEST_THEME = {
-  q1:  { icon: 'dumbbell', grad: SQ_BADGE.brass },     q2:  { icon: 'legs',      grad: SQ_BADGE.clay },
-  q3:  { icon: 'run',      grad: SQ_BADGE.moss },       q4:  { icon: 'bar',       grad: SQ_BADGE.brass },
-  q5:  { icon: 'footsteps',grad: SQ_BADGE.moss },       q6:  { icon: 'cup',       grad: SQ_BADGE.teal },
-  q7:  { icon: 'lotus',    grad: SQ_BADGE.steelBlue },  q8:  { icon: 'stretch',   grad: SQ_BADGE.plum },
-  q9:  { icon: 'bowl',     grad: SQ_BADGE.teal },       q10: { icon: 'moon',      grad: SQ_BADGE.steelBlue },
-  q11: { icon: 'bolt',     grad: SQ_BADGE.brass },      q12: { icon: 'core',      grad: SQ_BADGE.clay },
-  q13: { icon: 'pencil',   grad: SQ_BADGE.plum },       q14: { icon: 'smoothie',  grad: SQ_BADGE.teal },
-  q15: { icon: 'stopwatch',grad: SQ_BADGE.steel },      q16: { icon: 'bike',      grad: SQ_BADGE.moss },
-  q17: { icon: 'rope',     grad: SQ_BADGE.plum },       q18: { icon: 'droplet',   grad: SQ_BADGE.steelBlue },
-  q19: { icon: 'leaf',     grad: SQ_BADGE.teal },       q20: { icon: 'pot',       grad: SQ_BADGE.teal },
-  q21: { icon: 'wind',     grad: SQ_BADGE.steelBlue },  q22: { icon: 'footsteps', grad: SQ_BADGE.moss },
-  q23: { icon: 'legs',     grad: SQ_BADGE.clay },       q24: { icon: 'moon',      grad: SQ_BADGE.steelBlue },
-  q25: { icon: 'snowflake',grad: SQ_BADGE.steel },
-  q26: { icon: 'legs',     grad: SQ_BADGE.clay },       q27: { icon: 'core',      grad: SQ_BADGE.clay },
-  q28: { icon: 'bolt',     grad: SQ_BADGE.brass },      q29: { icon: 'core',      grad: SQ_BADGE.clay },
-  q30: { icon: 'stretch',  grad: SQ_BADGE.plum },       q31: { icon: 'flame',     grad: SQ_BADGE.ember },
+  q1:  { icon: 'dumbbell', cat: CAT.strength }, q2:  { icon: 'legs',      cat: CAT.strength },
+  q3:  { icon: 'run',      cat: CAT.cardio },    q4:  { icon: 'bar',       cat: CAT.strength },
+  q5:  { icon: 'footsteps',cat: CAT.track },      q6:  { icon: 'cup',       cat: CAT.fuel },
+  q7:  { icon: 'lotus',    cat: CAT.mind },       q8:  { icon: 'stretch',   cat: CAT.recover },
+  q9:  { icon: 'bowl',     cat: CAT.fuel },        q10: { icon: 'moon',      cat: CAT.recover },
+  q11: { icon: 'bolt',     cat: CAT.cardio },      q12: { icon: 'core',      cat: CAT.strength },
+  q13: { icon: 'pencil',   cat: CAT.mind },        q14: { icon: 'smoothie',  cat: CAT.fuel },
+  q15: { icon: 'stopwatch',cat: CAT.recover },     q16: { icon: 'bike',      cat: CAT.cardio },
+  q17: { icon: 'rope',     cat: CAT.cardio },      q18: { icon: 'droplet',   cat: CAT.recover },
+  q19: { icon: 'leaf',     cat: CAT.fuel },        q20: { icon: 'pot',       cat: CAT.fuel },
+  q21: { icon: 'wind',     cat: CAT.mind },        q22: { icon: 'footsteps', cat: CAT.track },
+  q23: { icon: 'legs',     cat: CAT.strength },    q24: { icon: 'moon',      cat: CAT.recover },
+  q25: { icon: 'snowflake',cat: CAT.cold },
+  q26: { icon: 'legs',     cat: CAT.strength },    q27: { icon: 'core',      cat: CAT.strength },
+  q28: { icon: 'bolt',     cat: CAT.cardio },      q29: { icon: 'core',      cat: CAT.cardio },
+  q30: { icon: 'stretch',  cat: CAT.recover },     q31: { icon: 'flame',     cat: CAT.cardio },
 };
 
 const QUEST_ABOUT = {
@@ -608,103 +636,103 @@ const QUEST_ABOUT = {
 const QUEST_QUOTES = ["Small steps every day lead to big changes.", "Discipline is choosing between what you want now and what you want most.", "Progress, not perfection.", "The body achieves what the mind believes.", "One quest at a time.", "Consistency beats intensity.", "You didn't come this far to only come this far."];
 const QUEST_QUOTE = { q1: "Strength grows one rep at a time.", q2: "Every squat builds a stronger foundation.", q3: "Miles don't lie — you earned this one.", q4: "Small steps every day lead to big changes.", q5: "One step at a time is still progress.", q6: "Small steps every day lead to big changes.", q7: "A quiet mind carries the loudest strength.", q8: "Flexibility today, resilience tomorrow.", q9: "You fueled the body that carries you.", q10: "Rest is where the real gains happen.", q11: "Energy in motion stays in motion.", q12: "A strong core holds everything else together.", q13: "The pen remembers what the mind forgets.", q14: "Good fuel, good day.", q15: "Stillness can be the hardest work of all.", q16: "Every mile ridden is a mile earned.", q17: "Rhythm builds more than just your legs.", q18: "Discomfort today, discipline for life.", q19: "Progress, not perfection.", q20: "What you cook is what you become.", q21: "Breathe in control, breathe out doubt.", q22: "One step at a time is still progress.", q23: "Balance is built one side at a time.", q24: "Tonight's rest is tomorrow's edge.", q25: "You didn't come this far to only come this far." };
 
-const QuestIconBadge = ({ questId, size = 96, dark, floating = false }) => {
-  const theme = QUEST_THEME[questId] || { icon: 'target', grad: SQ_BADGE.brass };
+// flat icon tile, one color one glyph, no gradient/gloss nonsense
+const QuestIconBadge = ({ questId, size = 88, c }) => {
+  const theme = QUEST_THEME[questId] || { icon: 'target', cat: 'blue' };
   const Icon = QuestSvg[theme.icon] || QuestSvg.target;
+  const color = c[theme.cat];
   return (
-    <div className={`relative flex items-center justify-center rounded-full ${theme.grad} ${floating ? 'sq-anim-float' : ''}`}
-      style={{ width: size, height: size, backgroundImage: 'linear-gradient(165deg, rgba(255,255,255,0.3), rgba(255,255,255,0) 45%, rgba(0,0,0,0.15) 100%)', boxShadow: `inset 0 1px 1px rgba(255,255,255,0.35), inset 0 -4px 7px rgba(0,0,0,0.3), 0 3px 6px rgba(0,0,0,0.18), 0 8px 16px -6px rgba(0,0,0,0.35)` }}>
-      <div className="absolute inset-[4px] rounded-full border border-white/20" style={{ borderStyle: 'dashed' }} />
-      <Icon width={Math.round(size * 0.42)} height={Math.round(size * 0.42)} className="text-white relative z-10" />
-    </div>
-  );
-};
-
-const ProgressRing = ({ pct, size = 56, stroke = 5, dark }) => {
-  const r = (size - stroke) / 2;
-  const c = 2 * Math.PI * r;
-  const offset = c - (pct / 100) * c;
-  return (
-    <div className="relative" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={dark ? '#3a352b' : '#ded5c0'} strokeWidth={stroke} />
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="url(#sq-ring-gradient)" strokeWidth={stroke} strokeLinecap="round" strokeDasharray={c} style={{ strokeDashoffset: offset, transition: 'stroke-dashoffset 0.8s cubic-bezier(0.22,1,0.36,1)' }} />
-        <defs>
-          <linearGradient id="sq-ring-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#D9A64A" />
-            <stop offset="100%" stopColor="#B8842A" />
-          </linearGradient>
-        </defs>
-      </svg>
-      <div className="absolute inset-0 flex items-center justify-center">
-        <span className={`text-[11px] font-bold ${dark ? 'text-white' : 'text-stone-900'}`}>{Math.round(pct)}%</span>
+      <div
+          style={{
+            width: size, height: size, borderRadius: size * 0.36,
+            background: color, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+          }}
+      >
+        <Icon className="sq-icon-pop-in sq-icon-tap" width={Math.round(size * 0.44)} height={Math.round(size * 0.44)} strokeWidth={1.75} color="#FFFFFF" style={{ color: '#FFFFFF' }} />
       </div>
-    </div>
   );
 };
 
-// ─── STAT CHIP (mini dashboard tile) ───────────────────────────────────────────
-const StatChip = ({ icon, label, value, dark, accent }) => (
-  <div className={`rounded-[10px] px-2 py-3 flex flex-col items-center justify-center text-center gap-1 ${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100 shadow-[0_1px_2px_rgba(38,32,20,0.06),0_10px_24px_-8px_rgba(38,32,20,0.18)]'}`}>
-    <span className={accent || (dark ? 'text-[#D9A64A]' : 'text-[#B8842A]')}>{icon}</span>
-    <span className={`sq-mono text-[15px] font-bold leading-tight ${accent || (dark ? 'text-white' : 'text-stone-900')}`}>{value}</span>
-    <span className={`text-[9px] font-bold uppercase tracking-wider ${dark ? 'text-stone-500' : 'text-stone-400'}`}>{label}</span>
-  </div>
+// smaller version for list rows
+const QuestRowIcon = ({ questId, c, muted }) => {
+  const theme = QUEST_THEME[questId] || { icon: 'target', cat: 'blue' };
+  const Icon = QuestSvg[theme.icon] || QuestSvg.target;
+  const color = c[theme.cat];
+  return (
+      <div style={{ width: 30, height: 30, borderRadius: 12, background: muted ? c.fill : color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <Icon className="sq-icon-pop-in sq-icon-tap" width={16} height={16} strokeWidth={1.75} color={muted ? c.labelTertiary : '#FFFFFF'} style={{ color: muted ? c.labelTertiary : '#FFFFFF' }} />
+      </div>
+  );
+};
+
+// like the activity rings but just one flat stroke, no glow
+const ProgressRing = ({ pct, size = 46, stroke = 5, c }) => {
+  const r = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference - (pct / 100) * circumference;
+  return (
+      <div className="relative" style={{ width: size, height: size }}>
+        <svg width={size} height={size} className="-rotate-90">
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={c.fill} strokeWidth={stroke} />
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={c.blue} strokeWidth={stroke} strokeLinecap="round"
+                  strokeDasharray={circumference} style={{ strokeDashoffset: offset, transition: 'stroke-dashoffset 0.6s cubic-bezier(0.22,1,0.36,1)' }} />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="sq-mono" style={{ fontSize: 11, fontWeight: 600, color: c.label }}>{Math.round(pct)}%</span>
+        </div>
+      </div>
+  );
+};
+
+// little stat tile
+const StatChip = ({ label, value, c, accentColor }) => (
+    <div style={{ ...glassStyle(c), borderRadius: 20, padding: '14px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <span className="sq-mono" style={{ fontSize: 20, fontWeight: 600, color: accentColor || c.label, lineHeight: 1 }}>{value}</span>
+      <span style={{ fontSize: 11, fontWeight: 500, color: c.labelSecondary }}>{label}</span>
+    </div>
 );
 
-// ─── CONFETTI BURST ───────────────────────────────────────────────────────────
-const CONFETTI_COLORS = ['#B8842A', '#D9A64A', '#4B6B3E', '#6B8F5A', '#B24A24', '#EDE7D8'];
-const Confetti = ({ count = 24, big = false }) => {
+// confetti
+const Confetti = ({ count = 22, big = false, c }) => {
+  const colors = [c.blue, c.green, c.orange, c.purple, c.teal];
   const pieces = useMemo(() => {
-    const total = big ? Math.round(count * 1.7) : count;
+    const total = big ? Math.round(count * 1.6) : count;
     return Array.from({ length: total }).map((_, i) => ({
       id: i,
       left: Math.random() * 100,
-      delay: Math.random() * 0.35,
-      duration: 1.5 + Math.random() * 1.3,
-      color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
-      w: 5 + Math.random() * 6,
-      h: 3 + Math.random() * 5,
+      delay: Math.random() * 0.3,
+      duration: 1.3 + Math.random() * 1.1,
+      color: colors[i % colors.length],
+      w: 5 + Math.random() * 5,
+      h: 3 + Math.random() * 4,
       rot: Math.round(Math.random() * 360),
-      drift: Math.round((Math.random() - 0.5) * 160),
+      drift: Math.round((Math.random() - 0.5) * 140),
     }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [count, big]);
 
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden z-20" aria-hidden="true">
-      {pieces.map(p => (
-        <span key={p.id} className="sq-confetti-piece" style={{
-          left: `${p.left}%`,
-          '--sq-drift': `${p.drift}px`,
-          '--sq-rot': `${p.rot}deg`,
-          animationDelay: `${p.delay}s`,
-          animationDuration: `${p.duration}s`,
-          background: p.color,
-          width: p.w,
-          height: p.h,
-        }} />
-      ))}
-      <style>{`
-        .sq-confetti-piece { position: absolute; top: -6%; border-radius: 2px; opacity: 0.95; animation-name: sq-confetti-fall; animation-timing-function: cubic-bezier(0.35,0,0.65,1); animation-fill-mode: forwards; }
-        @keyframes sq-confetti-fall {
-          0%   { transform: translate(0, 0) rotate(0deg); opacity: 1; }
-          85%  { opacity: 1; }
-          100% { transform: translate(var(--sq-drift), 115vh) rotate(var(--sq-rot)); opacity: 0; }
-        }
+      <div className="pointer-events-none absolute inset-0 overflow-hidden z-20" aria-hidden="true">
+        {pieces.map(p => (
+            <span key={p.id} className="sq-confetti-piece" style={{
+              left: `${p.left}%`, '--sq-drift': `${p.drift}px`, '--sq-rot': `${p.rot}deg`,
+              animationDelay: `${p.delay}s`, animationDuration: `${p.duration}s`,
+              background: p.color, width: p.w, height: p.h,
+            }} />
+        ))}
+        <style>{`
+        .sq-confetti-piece { position: absolute; top: -6%; border-radius: 2px; opacity: 0.9; animation-name: sq-confetti-fall; animation-timing-function: cubic-bezier(0.35,0,0.65,1); animation-fill-mode: forwards; }
+        @keyframes sq-confetti-fall { 0% { transform: translate(0,0) rotate(0deg); opacity: 1; } 85% { opacity: 1; } 100% { transform: translate(var(--sq-drift), 115vh) rotate(var(--sq-rot)); opacity: 0; } }
       `}</style>
-    </div>
+      </div>
   );
 };
 
-// ─── USERNAME ONBOARDING MODAL (shown once, powers the leaderboard) ──────────
-function UsernameModal({ onSubmit, dark }) {
+// pick a username
+function UsernameModal({ onSubmit, c }) {
   const [name, setName] = useState('');
   const [error, setError] = useState(null);
-
-  const cardBg = dark ? 'bg-stone-900' : 'bg-white';
-  const txt = dark ? 'text-white' : 'text-stone-900';
-  const sub = dark ? 'text-stone-400' : 'text-stone-500';
-  const inputBg = dark ? 'bg-stone-800 border-stone-700 text-white placeholder-stone-500' : 'bg-stone-50 border-stone-200 text-stone-900 placeholder-stone-400';
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -717,392 +745,463 @@ function UsernameModal({ onSubmit, dark }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
-      <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-stone-800' : 'border-stone-100'}`}>
-        <div className="mx-auto w-16 h-16 rounded-full bg-[#B8842A] flex items-center justify-center mb-4"
-          style={{ boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.35), inset 0 -4px 7px rgba(0,0,0,0.3), 0 6px 16px -4px rgba(184,132,42,0.5)' }}>
-          <TrophyIcon size={26} className="text-white" />
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-5 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
+        <div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 340, padding: '28px 24px 20px', textAlign: 'center' }}>
+          <div style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+            <TrophyIcon size={24} />
+            <style>{`div > svg { color: #fff; }`}</style>
+          </div>
+          <h2 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label }}>Pick a name</h2>
+          <p style={{ fontSize: 13, lineHeight: 1.4, color: c.labelSecondary, marginTop: 6 }}>
+            This is how you'll appear on the leaderboard. You can only set it once.
+          </p>
+          <form onSubmit={handleSubmit} style={{ marginTop: 18 }}>
+            <input
+                type="text" value={name} autoFocus maxLength={20}
+                onChange={e => { setName(e.target.value); setError(null); }}
+                placeholder="QuestMaster99"
+                style={{ width: '100%', borderRadius: 14, border: `1px solid ${c.separator}`, background: c.bgSecondary, color: c.label, padding: '11px 14px', fontSize: 15, fontWeight: 500, textAlign: 'center', outline: 'none' }}
+            />
+            {error && <p style={{ color: c.red, fontSize: 12, fontWeight: 500, marginTop: 8 }}>{error}</p>}
+            <button type="submit" style={{ width: '100%', marginTop: 14, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: '#FFFFFF', background: c.blue }}>
+              Continue
+            </button>
+          </form>
+          <p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 12 }}>Only your name, level, and XP are shared.</p>
         </div>
-        <h2 className={`sq-display text-[18px] font-semibold ${txt}`}>Pick your adventurer name</h2>
-        <p className={`text-[13px] mt-1.5 leading-relaxed ${sub}`}>
-          This is how you'll show up on the worldwide leaderboard. You can only set it once, so choose wisely.
-        </p>
-        <form onSubmit={handleSubmit} className="mt-5">
-          <input
-            type="text"
-            value={name}
-            onChange={e => { setName(e.target.value); setError(null); }}
-            placeholder="e.g. QuestMaster99"
-            maxLength={20}
-            autoFocus
-            className={`w-full rounded-[10px] border px-4 py-3 text-[15px] font-semibold text-center outline-none focus:ring-2 focus:ring-[#B8842A]/50 transition-all ${inputBg}`}
-          />
-          {error && <p className="text-rose-500 text-[12px] font-semibold mt-2">{error}</p>}
-          <button type="submit"
-            className="w-full mt-4 py-3.5 rounded-[12px] text-[15px] font-bold sq-display tracking-wide text-white bg-[#B8842A] active:scale-[0.98] transition-transform"
-            style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 20px -6px rgba(184,132,42,0.55)' }}>
-            Join the Leaderboard
-          </button>
-        </form>
-        <p className={`text-[10px] mt-3 ${dark ? 'text-stone-600' : 'text-stone-400'}`}>
-          Only your name, level, and XP are shared — nothing else about you.
-        </p>
       </div>
-    </div>
   );
 }
 
-// ─── LEADERBOARD SCREEN ────────────────────────────────────────────────────────
-function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syncError, onRetrySync }) {
+// leaderboard
+function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syncError, onRetrySync, c }) {
   const { entries, status, errorDetail } = useLeaderboard();
-  const txt = dark ? 'text-white' : 'text-stone-900';
-  const sub = dark ? 'text-stone-400' : 'text-stone-500';
-  const cardBg = dark ? 'bg-stone-900/70' : 'bg-white';
-  const sep = dark ? 'border-stone-800' : 'border-stone-100';
 
   const myRank = useMemo(() => {
     const idx = entries.findIndex(e => e.id === myUid);
     return idx === -1 ? null : idx + 1;
   }, [entries, myUid]);
 
-  const RANK_TIER = { 1: 'bg-[#B8842A] text-white', 2: 'bg-[#8b9199] text-white', 3: 'bg-[#B24A24] text-white' };
+  const RANK_COLOR = { 1: c.yellow, 2: c.gray, 3: c.orange };
 
   return (
-    <div className="sq-anim-pop relative z-10 min-h-screen flex flex-col">
-      <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
-        <button onClick={onBack}
-          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
-        <p className={`sq-display text-[15px] font-semibold uppercase tracking-wide ${txt}`}>Worldwide Leaderboard</p>
-        <div className="w-9 h-9" />
-      </div>
-
-      {syncError && (
-        <div className="px-4 mb-3">
-          <div className={`rounded-[14px] px-4 py-3 flex items-start gap-2.5 ${dark ? 'bg-rose-500/10 border border-rose-500/20' : 'bg-rose-50 border border-rose-100'}`}>
-            <WarningIcon size={15} className={`flex-shrink-0 mt-0.5 ${dark ? 'text-rose-300' : 'text-rose-600'}`} />
-            <div className="flex-1 min-w-0">
-              <p className={`text-[12px] font-medium leading-snug ${dark ? 'text-rose-300' : 'text-rose-600'}`}>
-                Your last score didn't save to the leaderboard: {syncError}
-              </p>
-              {onRetrySync && (
-                <button onClick={onRetrySync}
-                  className={`mt-1.5 text-[11px] font-bold underline ${dark ? 'text-rose-300' : 'text-rose-600'}`}>
-                  Try again
-                </button>
-              )}
-            </div>
-          </div>
+      <div className="sq-anim-in relative z-10 min-h-screen flex flex-col">
+        <div className="flex items-center px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
+          <button onClick={onBack} className="flex items-center gap-1" style={{ color: c.blue }}>
+            <BackChevron color={c.blue} />
+            <span style={{ fontSize: 17 }}>Quests</span>
+          </button>
         </div>
-      )}
-
-      {myRank && (
-        <div className="px-4 mb-3">
-          <div className={`rounded-[14px] px-4 py-3 flex items-center gap-3 bg-[#B8842A]`}
-            style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 20px -6px rgba(184,132,42,0.5)' }}>
-            <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white font-extrabold text-[13px] sq-mono flex-shrink-0">
-              #{myRank}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-white font-bold text-[14px] truncate">{myUsername} (You)</p>
-              <p className="text-white/70 text-[11px] font-medium sq-mono">Lv {myLevel} · {myXp} XP this level</p>
-            </div>
-          </div>
+        <div className="px-4 pb-2">
+          <h1 className="sq-large-title" style={{ fontSize: 30, fontWeight: 700, color: c.label }}>Leaderboard</h1>
         </div>
-      )}
 
-      <div className="flex-1 px-4 pb-8 overflow-y-auto scroll-ios">
-        {status === 'loading' && (
-          <div className="flex flex-col items-center justify-center py-16 gap-3">
-            <div className="w-8 h-8 border-4 border-white/20 border-t-[#B8842A] rounded-full animate-spin" />
-            <p className={`text-[13px] font-medium ${sub}`}>Loading rankings…</p>
-          </div>
+        {syncError && (
+            <div className="px-4 mb-3">
+              <div style={{ borderRadius: 16, padding: '10px 14px', display: 'flex', gap: 10, background: dark ? 'rgba(255,69,58,0.14)' : 'rgba(255,59,48,0.08)' }}>
+                <WarningIcon size={15} />
+                <div style={{ flex: 1, color: c.red }}>
+                  <p style={{ fontSize: 12, fontWeight: 500, lineHeight: 1.4 }}>Your last score didn't save: {syncError}</p>
+                  {onRetrySync && <button onClick={onRetrySync} style={{ fontSize: 11, fontWeight: 600, textDecoration: 'underline', marginTop: 4 }}>Try again</button>}
+                </div>
+              </div>
+            </div>
         )}
 
-        {status === 'error' && (
-          <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6">
-            <SignalOffIcon size={26} className={`mb-1 ${dark ? 'text-stone-600' : 'text-stone-300'}`} />
-            <p className={`text-[14px] font-bold ${txt}`}>Can't reach the leaderboard</p>
-            <p className={`text-[12px] ${sub}`}>
-              {errorDetail || 'Check your connection, or the backend may not be configured yet.'}
-            </p>
-            <p className={`text-[11px] mt-2 max-w-xs ${dark ? 'text-stone-600' : 'text-stone-400'}`}>
-              In the Firebase console, double-check Firestore Database and Anonymous Auth are both enabled, and that your security rules are published.
-            </p>
-          </div>
+        {myRank && (
+            <div className="px-4 mb-3">
+              <div style={{ borderRadius: 20, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, background: c.blue }}>
+                <div style={{ width: 34, height: 34, borderRadius: 999, background: 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 13 }} className="sq-mono">
+                  #{myRank}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ color: '#fff', fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{myUsername} (You)</p>
+                  <p className="sq-mono" style={{ color: 'rgba(255,255,255,0.75)', fontSize: 11, fontWeight: 500 }}>Level {myLevel} · {myXp} XP this level</p>
+                </div>
+              </div>
+            </div>
         )}
 
-        {status === 'ready' && entries.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6">
-            <FlagIcon size={26} className={`mb-1 ${dark ? 'text-stone-600' : 'text-stone-300'}`} />
-            <p className={`text-[14px] font-bold ${txt}`}>No rankings yet</p>
-            <p className={`text-[12px] ${sub}`}>
-              {myLevel > 1 || myXp > 0
-                ? "You've made progress locally, but it hasn't reached the server yet. Try completing another quest, or reopen this screen in a moment."
-                : 'Complete a quest to be the first on the board.'}
-            </p>
-          </div>
-        )}
+        <div className="flex-1 sq-scroll overflow-y-auto px-4 pb-10">
+          {status === 'loading' && (
+              <div className="flex flex-col items-center justify-center py-16 gap-3">
+                <div style={{ width: 26, height: 26, border: `2.5px solid ${c.fill}`, borderTopColor: c.blue, borderRadius: '50%' }} className="animate-spin" />
+                <p style={{ fontSize: 13, color: c.labelSecondary }}>Loading rankings…</p>
+              </div>
+          )}
 
-        {status === 'ready' && entries.length > 0 && (
-          <div className={`${cardBg} border ${dark ? 'border-white/5' : 'border-stone-100 shadow-[0_1px_2px_rgba(38,32,20,0.06),0_10px_24px_-8px_rgba(38,32,20,0.18)]'} rounded-[20px] overflow-hidden`}>
-            {entries.map((entry, i) => {
-              const rank = i + 1;
-              const isMe = entry.id === myUid;
-              return (
-                <div key={entry.id}>
-                  {i > 0 && <div className={`border-t ${sep} ml-[58px]`} />}
-                  <div className={`flex items-center gap-3 px-4 py-3 ${isMe ? (dark ? 'bg-amber-500/10' : 'bg-amber-50') : ''}`}>
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[12px] font-bold sq-mono ${
-                      RANK_TIER[rank] || (dark ? 'bg-stone-800 text-stone-400' : 'bg-stone-100 text-stone-500')
-                    }`}>
-                      {rank}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-[14px] font-semibold truncate ${isMe ? 'text-amber-400' : txt}`}>
-                        {entry.username || 'Adventurer'}{isMe ? ' (You)' : ''}
-                      </p>
-                      <p className={`text-[11px] font-medium ${sub}`}>Lv {entry.level ?? 1}</p>
-                    </div>
-                    <span className={`text-[12px] font-bold flex-shrink-0 ${dark ? 'text-stone-400' : 'text-stone-500'}`}>
+          {status === 'error' && (
+              <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6" style={{ color: c.labelTertiary }}>
+                <SignalOffIcon size={24} />
+                <p style={{ fontSize: 14, fontWeight: 600, color: c.label }}>Can't reach the leaderboard</p>
+                <p style={{ fontSize: 12, color: c.labelSecondary }}>{errorDetail || 'Check your connection, or the backend may not be configured yet.'}</p>
+              </div>
+          )}
+
+          {status === 'ready' && entries.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6" style={{ color: c.labelTertiary }}>
+                <FlagIcon size={24} />
+                <p style={{ fontSize: 14, fontWeight: 600, color: c.label }}>No rankings yet</p>
+                <p style={{ fontSize: 12, color: c.labelSecondary }}>
+                  {myLevel > 1 || myXp > 0 ? "Your progress hasn't reached the server yet. Complete another quest and check back." : 'Complete a quest to be the first on the board.'}
+                </p>
+              </div>
+          )}
+
+          {status === 'ready' && entries.length > 0 && (
+              <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+                {entries.map((entry, i) => {
+                  const rank = i + 1;
+                  const isMe = entry.id === myUid;
+                  return (
+                      <div key={entry.id}>
+                        {i > 0 && <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: isMe ? c.fill : 'transparent' }}>
+                          <div className="sq-mono" style={{ width: 30, height: 30, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, background: RANK_COLOR[rank] || c.fill, color: RANK_COLOR[rank] ? '#fff' : c.labelSecondary }}>
+                            {rank}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ fontSize: 14, fontWeight: 600, color: c.label, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {entry.username || 'Adventurer'}{isMe ? ' (You)' : ''}
+                            </p>
+                            <p style={{ fontSize: 11, color: c.labelSecondary }}>Level {entry.level ?? 1}</p>
+                          </div>
+                          <span className="sq-mono" style={{ fontSize: 12, fontWeight: 600, color: c.labelSecondary, flexShrink: 0 }}>
                       {(entry.totalXpEarned ?? 0).toLocaleString()} XP
                     </span>
+                        </div>
+                      </div>
+                  );
+                })}
+              </div>
+          )}
+        </div>
+      </div>
+  );
+}
+
+// history tab
+function groupLabelForDate(ts) {
+  const d = new Date(ts);
+  const startOf = (date) => { const x = new Date(date); x.setHours(0, 0, 0, 0); return x.getTime(); };
+  const today = startOf(Date.now());
+  const yesterday = today - ONE_DAY_MS;
+  const day = startOf(ts);
+  if (day === today) return 'Today';
+  if (day === yesterday) return 'Yesterday';
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: sameYear ? undefined : 'numeric' });
+}
+
+function HistoryScreen({ history, dark, onToggleTheme, c }) {
+  const groups = useMemo(() => {
+    const sorted = [...history].sort((a, b) => b.ts - a.ts);
+    const out = [];
+    let current = null;
+    for (const entry of sorted) {
+      const label = groupLabelForDate(entry.ts);
+      if (!current || current.label !== label) { current = { label, items: [] }; out.push(current); }
+      current.items.push(entry);
+    }
+    return out;
+  }, [history]);
+
+  const totalXp = useMemo(() => history.reduce((sum, e) => sum + (e.xp || 0), 0), [history]);
+
+  return (
+      <div className="relative z-10 flex flex-col flex-1 sq-anim-in">
+        <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
+          <div className="flex items-center justify-between">
+            <h1 className="sq-large-title" style={{ fontSize: 30, fontWeight: 700, color: c.label }}>History</h1>
+            <button onClick={onToggleTheme} aria-label="Toggle theme"
+                    style={{ ...glassStyle(c), width: 32, height: 32, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
+              <span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
+            </button>
+          </div>
+          <p style={{ fontSize: 13, color: c.labelSecondary, marginTop: 2 }}>Every quest you've ever completed</p>
+        </div>
+
+        <div className="flex-1 sq-scroll overflow-y-auto px-4 pt-2 space-y-5" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
+          <div className="grid grid-cols-3 gap-2.5 sq-anim-in">
+            <StatChip label="Completed" value={history.length} c={c} />
+            <StatChip label="Total XP" value={totalXp.toLocaleString()} c={c} />
+            <StatChip label="Days logged" value={groups.length} c={c} />
+          </div>
+
+          {groups.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-2 text-center px-6" style={{ color: c.labelTertiary }}>
+                <FlagIcon size={24} />
+                <p style={{ fontSize: 14, fontWeight: 600, color: c.label }}>No history yet</p>
+                <p style={{ fontSize: 12, color: c.labelSecondary }}>Quests you complete will show up here, forever.</p>
+              </div>
+          ) : (
+              groups.map(group => (
+                  <div key={group.label}>
+                    <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 6, paddingLeft: 2 }}>
+                      {group.label}
+                    </p>
+                    <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+                      {group.items.map((entry, i) => (
+                          <div key={entry.id}>
+                            {i > 0 && <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 14px' }}>
+                              <QuestRowIcon questId={entry.questId} c={c} />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <p style={{ fontSize: 15, fontWeight: 500, color: c.label, lineHeight: 1.3 }}>{entry.text}</p>
+                                <p className="sq-mono" style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>
+                                  {new Date(entry.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                                  {entry.leveledUp ? ' · Level up' : ''}
+                                </p>
+                              </div>
+                              <span className="sq-mono" style={{ fontSize: 12, fontWeight: 700, color: c.green, flexShrink: 0 }}>+{entry.xp}</span>
+                            </div>
+                          </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+              ))
+          )}
+        </div>
       </div>
-    </div>
   );
 }
 
-// ─── INSTALL PROMPT ONBOARDING MODAL ──────────────────────────────────────────
-function DeviceInstallPrompt({ onDismiss, dark }) {
+// bottom tab bar — native iOS floating dock: heavy frosted glass, no sliding
+// pill highlight, iOS system blue for the active tab and iOS system gray
+// for inactive tabs.
+function TabBar({ activeTab, onChange, c }) {
+  const items = [
+    { key: 'quests', label: 'Quests', Icon: CheckSquare },
+    { key: 'history', label: 'History', Icon: HistoryIcon },
+  ];
+  return (
+      <div style={{ position: 'fixed', left: '50%', bottom: 'max(env(safe-area-inset-bottom), 16px)', transform: 'translateX(-50%)', zIndex: 50 }}>
+        <div
+            className="backdrop-blur-2xl"
+            style={{
+              ...glassStyle(c, true),
+              borderRadius: 999,
+              padding: '6px 6px',
+              display: 'flex',
+              width: 216,
+            }}
+        >
+          {items.map(({ key, label, Icon }) => {
+            const active = activeTab === key;
+            const color = active ? c.blue : c.gray;
+            return (
+                <button
+                    key={key}
+                    onClick={() => onChange(key)}
+                    style={{
+                      flex: 1,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 3,
+                      padding: '8px 0 7px',
+                      borderRadius: 999,
+                      color,
+                      background: active ? c.fill : 'transparent',
+                      transition: 'background-color 0.25s ease',
+                    }}
+                >
+                  <span className={`sq-tab-icon ${active ? 'sq-tab-icon-active' : ''}`}>
+                    <Icon size={21} strokeWidth={active ? 2.1 : 1.75} color={color} />
+                  </span>
+                  <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: -0.1, color }}>{label}</span>
+                </button>
+            );
+          })}
+        </div>
+      </div>
+  );
+}
+
+// add to home screen prompt
+function DeviceInstallPrompt({ onDismiss, c }) {
   const [step, setStep] = useState(0);
-  const [os, setOs] = useState(null); // 'ios' or 'android'
-  
-  const cardBg = dark ? 'bg-stone-900' : 'bg-white';
-  const txt = dark ? 'text-white' : 'text-stone-900';
-  const sub = dark ? 'text-stone-400' : 'text-stone-500';
-  const pill = dark ? 'bg-stone-800' : 'bg-stone-100';
+  const [os, setOs] = useState(null);
 
-  const nextStep = () => {
-    if (step === 1) setStep(2);
-    else onDismiss();
-  };
+  const nextStep = () => { if (step === 1) setStep(2); else onDismiss(); };
+
+  const rowStyle = { width: '100%', padding: '13px 16px', borderRadius: 18, fontSize: 15, fontWeight: 500, textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: c.bgSecondary, color: c.label };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sq-anim-pop" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
-      <div className={`w-full max-w-sm rounded-[24px] ${cardBg} shadow-2xl p-6 text-center border ${dark ? 'border-stone-800' : 'border-stone-100'}`}>
-        
-        {step === 0 && (
-          <>
-            <h3 className={`sq-display text-xl font-semibold mb-2 ${txt}`}>Install QuestDaily</h3>
-            <p className={`text-sm mb-6 ${sub}`}>Which device are you using?</p>
-            <div className="flex flex-col gap-3">
-              <button onClick={() => { setOs('ios'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#B8842A] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 18px -6px rgba(184,132,42,0.5)' }}>
-                Apple (iOS)
-              </button>
-              <button onClick={() => { setOs('android'); setStep(1); }} className="w-full py-4 rounded-[14px] text-[15px] font-semibold bg-[#4B6B3E] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 18px -6px rgba(75,107,62,0.5)' }}>
-                Android
-              </button>
-              <button onClick={onDismiss} className={`w-full mt-2 py-3 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>
-                Maybe Later
-              </button>
-            </div>
-          </>
-        )}
+      <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
+        <div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 340, padding: 20, textAlign: 'center' }}>
+          {step === 0 && (
+              <>
+                <h3 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label, marginBottom: 2 }}>Add to Home Screen</h3>
+                <p style={{ fontSize: 13, color: c.labelSecondary, marginBottom: 16 }}>Which device are you using?</p>
+                <div className="flex flex-col gap-2">
+                  <button onClick={() => { setOs('ios'); setStep(1); }} style={rowStyle}>
+                    <span>iPhone or iPad</span><ChevronIcon color={c.labelTertiary} />
+                  </button>
+                  <button onClick={() => { setOs('android'); setStep(1); }} style={rowStyle}>
+                    <span>Android</span><ChevronIcon color={c.labelTertiary} />
+                  </button>
+                  <button onClick={onDismiss} style={{ width: '100%', padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: c.blue, marginTop: 4 }}>
+                    Not Now
+                  </button>
+                </div>
+              </>
+          )}
 
-        {step > 0 && os === 'ios' && (
-          <>
-            <h3 className={`sq-display text-xl font-semibold mb-2 ${txt}`}>Install on iOS</h3>
-            <p className={`text-sm mb-6 ${sub}`}>Add this app to your home screen.</p>
-            <div className={`relative mb-8 ${pill} rounded-2xl p-5 flex flex-col items-center justify-center border ${dark ? 'border-white/5' : 'border-black/5'}`}>
-              <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-[#B8842A] text-white mb-3">
-                {step === 1 ? <IOSShareIcon /> : <IOSAddIcon />}
-              </div>
-              <p className={`text-sm font-semibold ${txt} mb-1`}>
-                {step === 1 ? 'Step 1: Tap the Share button' : 'Step 2: Add to Home Screen'}
-              </p>
-              <p className={`text-xs ${sub}`}>
-                {step === 1 ? 'Look for the share icon in your Safari menu bar below.' : 'Scroll down the share menu and select this option.'}
-              </p>
-            </div>
-            <div className="flex gap-3">
-              {step === 2 && (
-                <button onClick={() => setStep(1)} className={`flex-1 py-3.5 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>Back</button>
-              )}
-              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#B8842A] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 18px -6px rgba(184,132,42,0.5)' }}>
-                {step === 1 ? 'Next' : 'Got it!'}
-              </button>
-            </div>
-          </>
-        )}
+          {step > 0 && os === 'ios' && (
+              <>
+                <h3 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label, marginBottom: 2 }}>Install on iOS</h3>
+                <p style={{ fontSize: 13, color: c.labelSecondary, marginBottom: 16 }}>Step {step} of 2</p>
+                <div style={{ background: c.bgSecondary, borderRadius: 20, padding: 20, marginBottom: 16 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 999, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
+                    {step === 1 ? <IOSShareIcon /> : <IOSAddIcon />}
+                  </div>
+                  <p style={{ fontSize: 14, fontWeight: 600, color: c.label, marginBottom: 4 }}>
+                    {step === 1 ? 'Tap the Share button' : 'Tap Add to Home Screen'}
+                  </p>
+                  <p style={{ fontSize: 12, color: c.labelSecondary }}>
+                    {step === 1 ? 'Find it in the Safari toolbar.' : 'Scroll down the share sheet to find it.'}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  {step === 2 && <button onClick={() => setStep(1)} style={{ flex: 1, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, background: c.bgSecondary, color: c.label }}>Back</button>}
+                  <button onClick={nextStep} style={{ flex: 2, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, background: c.blue, color: '#fff' }}>
+                    {step === 1 ? 'Next' : 'Done'}
+                  </button>
+                </div>
+              </>
+          )}
 
-        {step > 0 && os === 'android' && (
-          <>
-            <h3 className={`sq-display text-xl font-semibold mb-2 ${txt}`}>Install on Android</h3>
-            <p className={`text-sm mb-6 ${sub}`}>Add this app to your home screen.</p>
-            <div className={`relative mb-8 ${pill} rounded-2xl p-5 flex flex-col items-center justify-center border ${dark ? 'border-white/5' : 'border-black/5'}`}>
-              <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-[#4B6B3E] text-white mb-3">
-                {step === 1 ? <AndroidMenuIcon /> : <AndroidAddIcon />}
-              </div>
-              <p className={`text-sm font-semibold ${txt} mb-1`}>
-                {step === 1 ? 'Step 1: Tap the menu icon' : 'Step 2: Add to Home Screen'}
-              </p>
-              <p className={`text-xs ${sub}`}>
-                {step === 1 ? 'Look for the 3 vertical dots (usually top right in Chrome).' : 'Select "Add to Home screen" or "Install app" from the menu.'}
-              </p>
-            </div>
-            <div className="flex gap-3">
-              {step === 2 && (
-                <button onClick={() => setStep(1)} className={`flex-1 py-3.5 rounded-[14px] text-sm font-semibold ${pill} ${txt}`}>Back</button>
-              )}
-              <button onClick={nextStep} className="flex-[2] py-3.5 rounded-[14px] text-sm font-semibold bg-[#4B6B3E] text-white active:scale-95 transition-transform" style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.2), 0 8px 18px -6px rgba(75,107,62,0.5)' }}>
-                {step === 1 ? 'Next' : 'Got it!'}
-              </button>
-            </div>
-          </>
-        )}
+          {step > 0 && os === 'android' && (
+              <>
+                <h3 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label, marginBottom: 2 }}>Install on Android</h3>
+                <p style={{ fontSize: 13, color: c.labelSecondary, marginBottom: 16 }}>Step {step} of 2</p>
+                <div style={{ background: c.bgSecondary, borderRadius: 20, padding: 20, marginBottom: 16 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 999, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 12px' }}>
+                    {step === 1 ? <AndroidMenuIcon /> : <AndroidAddIcon />}
+                  </div>
+                  <p style={{ fontSize: 14, fontWeight: 600, color: c.label, marginBottom: 4 }}>
+                    {step === 1 ? 'Tap the menu icon' : 'Tap Add to Home Screen'}
+                  </p>
+                  <p style={{ fontSize: 12, color: c.labelSecondary }}>
+                    {step === 1 ? 'Three dots, usually top right in Chrome.' : 'Select it from the menu, or "Install app".'}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  {step === 2 && <button onClick={() => setStep(1)} style={{ flex: 1, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, background: c.bgSecondary, color: c.label }}>Back</button>}
+                  <button onClick={nextStep} style={{ flex: 2, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, background: c.green, color: '#fff' }}>
+                    {step === 1 ? 'Next' : 'Done'}
+                  </button>
+                </div>
+              </>
+          )}
+        </div>
       </div>
-    </div>
   );
 }
 
-// ─── QUEST DETAIL SCREEN ────────────────────────────────────────────────────────
-function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMarkComplete }) {
-  const txt = dark ? 'text-white' : 'text-stone-900';
-  const sub = dark ? 'text-stone-400' : 'text-stone-500';
-  const pill = dark ? 'bg-stone-800/80' : 'bg-stone-100';
-  const cardBg = dark ? 'bg-stone-900/70' : 'bg-white';
-  const theme = QUEST_THEME[quest.id] || { grad: 'from-amber-500 to-amber-600' };
+// quest detail
+function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMarkComplete, c }) {
   const about = QUEST_ABOUT[quest.id] || 'Stay consistent — every quest you complete adds up to real progress.';
+  const theme = QUEST_THEME[quest.id] || { cat: 'blue' };
+  const accent = c[theme.cat];
 
   return (
-    <div className="sq-anim-pop relative z-10 min-h-screen flex flex-col">
-      <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
-        <button onClick={onBack}
-          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
-        <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${pill}`}>
-          <span className="text-[10px]">⏱</span>
-          <span className={`text-[11px] font-mono font-medium ${dark ? 'text-stone-300' : 'text-stone-600'}`}>{timeLeft}</span>
-        </div>
-        <button onClick={onToggleTheme}
-          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
-          {dark ? <SunIcon /> : <MoonIcon />}
-        </button>
-      </div>
-
-      <div className="px-4">
-        <div className={`relative overflow-hidden rounded-[26px] px-6 pt-10 pb-8 flex flex-col items-center text-center bg-gradient-to-b ${dark ? 'from-[#2a2210] to-[#15120b]' : 'from-amber-50 to-white'} border ${dark ? 'border-white/10' : 'border-stone-100'}`}>
-          <AnimatedBackground dark={dark} />
-          <div className="relative z-10 flex flex-col items-center">
-            <QuestIconBadge questId={quest.id} size={92} dark={dark} floating />
-            <h2 className={`mt-5 text-[22px] font-bold leading-tight max-w-[240px] ${txt}`}>{quest.text}</h2>
-            <span className={`mt-3 px-3 py-1 rounded-full text-xs font-semibold sq-mono ${theme.grad} text-white`}>
-              +{quest.xp} XP
-            </span>
+      <div className="sq-anim-in relative z-10 min-h-screen flex flex-col">
+        <div className="flex items-center justify-between px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
+          <button onClick={onBack} className="flex items-center gap-1" style={{ color: c.blue }}>
+            <BackChevron color={c.blue} /><span style={{ fontSize: 17 }}>Quests</span>
+          </button>
+          <div className="flex items-center gap-3">
+            <span className="sq-mono" style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>{timeLeft}</span>
+            <button onClick={onToggleTheme} style={{ ...glassStyle(c), width: 30, height: 30, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
+              <span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
+            </button>
           </div>
         </div>
-      </div>
 
-      <div className="px-4 mt-5 flex-1">
-        <p className={`text-[11px] font-semibold uppercase tracking-widest mb-1.5 px-1 ${dark ? 'text-stone-500' : 'text-stone-400'}`}>About this quest</p>
-        <div className={`${cardBg} rounded-[16px] p-4 border ${dark ? 'border-white/5' : 'border-stone-100'}`}>
-          <p className={`text-[14px] leading-relaxed ${sub}`}>{about}</p>
+        <div className="px-4 mt-3 flex flex-col items-center text-center">
+          <QuestIconBadge questId={quest.id} size={84} c={c} />
+          <h2 style={{ marginTop: 16, fontSize: 22, fontWeight: 700, color: c.label, maxWidth: 260 }}>{quest.text}</h2>
+          <span className="sq-mono" style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: accent }}>+{quest.xp} XP</span>
+        </div>
+
+        <div className="px-4 mt-8 flex-1">
+          <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 6, paddingLeft: 2 }}>About</p>
+          <div style={{ ...glassStyle(c), borderRadius: 20, padding: 16 }}>
+            <p style={{ fontSize: 14, lineHeight: 1.5, color: c.labelSecondary }}>{about}</p>
+          </div>
+        </div>
+
+        <div className="px-4 pb-8 mt-6">
+          <button onClick={onMarkComplete}
+                  style={{ width: '100%', padding: '15px', borderRadius: 999, fontSize: 16, fontWeight: 600, color: '#fff', background: c.blue }}>
+            Start
+          </button>
         </div>
       </div>
-
-      <div className="px-4 pb-8 mt-6">
-        <button onClick={onMarkComplete}
-          className={`w-full py-4 rounded-[14px] text-[15px] font-bold tracking-wide sq-display text-white ${theme.grad} active:scale-[0.97] transition-transform`}
-          style={{ boxShadow: '0 1px 2px rgba(20,16,8,0.25), 0 10px 22px -8px rgba(0,0,0,0.45)' }}>
-          Start Challenge
-        </button>
-      </div>
-    </div>
   );
 }
 
-// ─── COMPLETION SCREEN ───────────────────────────────────────────────────────────
-function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack }) {
-  const txt = dark ? 'text-white' : 'text-stone-900';
-  const sub = dark ? 'text-stone-400' : 'text-stone-500';
-  const pill = dark ? 'bg-stone-800/80' : 'bg-stone-100';
-  const cardBg = dark ? 'bg-stone-900/70' : 'bg-white';
+// completion screen
+function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack, c }) {
   const quote = useMemo(() => QUEST_QUOTE[quest?.id] || QUEST_QUOTES[Math.floor(Math.random() * QUEST_QUOTES.length)], [quest?.id]);
   const leveledUp = Boolean(quest?.leveledUp);
+  const accent = leveledUp ? c.orange : c.green;
 
   useEffect(() => { haptic(leveledUp ? [25, 40, 25, 40, 70] : [15, 30, 15]); }, [leveledUp]);
 
   return (
-    <div className="sq-anim-pop relative z-10 min-h-screen flex flex-col">
-      <div className="flex items-center justify-between px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 18px)' }}>
-        <button onClick={onBack}
-          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
-        <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full ${pill}`}>
-          <span className="text-[10px]">⏱</span>
-          <span className={`text-[11px] font-mono font-medium ${dark ? 'text-stone-300' : 'text-stone-600'}`}>{timeLeft}</span>
-        </div>
-        <button onClick={onToggleTheme}
-          className={`w-9 h-9 rounded-full flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
-          {dark ? <SunIcon /> : <MoonIcon />}
-        </button>
-      </div>
-
-      <div className="px-4">
-        <div className={`relative overflow-hidden rounded-[26px] px-6 pt-12 pb-10 flex flex-col items-center text-center bg-gradient-to-b ${leveledUp ? (dark ? 'from-[#2a2210] to-[#15120b]' : 'from-amber-50 to-white') : (dark ? 'from-[#0e2318] to-[#081712]' : 'from-emerald-50 to-white')} border ${leveledUp ? (dark ? 'border-amber-400/30' : 'border-amber-100') : (dark ? 'border-emerald-500/20' : 'border-emerald-100')}`}>
-          {leveledUp && <Confetti big />}
-          <div className="relative z-10 flex flex-col items-center">
-            {leveledUp && (
-              <span className="mb-3 inline-flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-widest sq-display bg-[#B8842A] text-white sq-anim-pop"
-                style={{ clipPath: 'polygon(6% 0%,94% 0%,100% 50%,94% 100%,6% 100%,0% 50%)', backgroundImage: 'linear-gradient(165deg, rgba(255,255,255,0.28), rgba(255,255,255,0) 45%, rgba(0,0,0,0.14) 100%)', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }}>
-                <QuestSvg.bolt width={11} height={11} /> Level Up
-              </span>
-            )}
-            <div className={`sq-anim-check w-24 h-24 rounded-full flex items-center justify-center border-2 ${leveledUp ? 'border-amber-400' : 'border-emerald-400'}`}
-              style={{ boxShadow: leveledUp ? '0 0 40px -6px rgba(217,166,74,0.5)' : '0 0 40px -6px rgba(107,143,90,0.5)' }}>
-              <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke={leveledUp ? '#D9A64A' : '#6B8F5A'} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-            </div>
-            <h2 className={`mt-5 text-[22px] font-bold ${txt}`}>Quest Completed!</h2>
-            <span className={`mt-3 px-3 py-1 rounded-full text-xs font-semibold text-white ${leveledUp ? 'bg-amber-500/90' : 'bg-emerald-500/90'}`}>
-              +{quest?.xp ?? 0} XP
-            </span>
+      <div className="sq-anim-in relative z-10 min-h-screen flex flex-col">
+        <div className="flex items-center justify-between px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
+          <button onClick={onBack} className="flex items-center gap-1" style={{ color: c.blue }}>
+            <BackChevron color={c.blue} /><span style={{ fontSize: 17 }}>Quests</span>
+          </button>
+          <div className="flex items-center gap-3">
+            <span className="sq-mono" style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>{timeLeft}</span>
+            <button onClick={onToggleTheme} style={{ ...glassStyle(c), width: 30, height: 30, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
+              <span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
+            </button>
           </div>
         </div>
-      </div>
 
-      <div className="px-4 mt-5 flex-1">
-        <div className={`${cardBg} rounded-[16px] p-5 border ${dark ? 'border-white/5' : 'border-stone-100'} relative`}>
-          <span className={`absolute top-2 left-3 text-3xl leading-none ${dark ? 'text-stone-700' : 'text-stone-200'}`}>&ldquo;</span>
-          <p className={`text-[15px] font-medium text-center leading-relaxed px-3 ${txt}`}>{quote}</p>
-          <span className={`absolute bottom-1 right-3 text-3xl leading-none ${dark ? 'text-stone-700' : 'text-stone-200'}`}>&rdquo;</span>
+        <div className="relative px-4 mt-6 flex flex-col items-center text-center">
+          {leveledUp && <Confetti big c={c} />}
+          {leveledUp && (
+              <span className="sq-mono" style={{ marginBottom: 12, fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', color: '#fff', background: c.orange, padding: '5px 14px', borderRadius: 999 }}>
+            Level up
+          </span>
+          )}
+          <div className="sq-anim-check" style={{ width: 88, height: 88, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: accent }}>
+            <CheckIcon size={38} />
+            <style>{`div > svg { color: #fff; }`}</style>
+          </div>
+          <h2 style={{ marginTop: 18, fontSize: 22, fontWeight: 700, color: c.label }}>Quest complete</h2>
+          <span className="sq-mono" style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: '#fff', background: accent, padding: '4px 12px', borderRadius: 999 }}>
+          +{quest?.xp ?? 0} XP
+        </span>
+        </div>
+
+        <div className="px-4 mt-8 flex-1">
+          <div style={{ ...glassStyle(c), borderRadius: 20, padding: 20, textAlign: 'center' }}>
+            <p style={{ fontSize: 15, fontWeight: 500, lineHeight: 1.5, color: c.label }}>{quote}</p>
+          </div>
+        </div>
+
+        <div className="px-4 pb-8 mt-6">
+          <button onClick={onBack} style={{ width: '100%', padding: '15px', borderRadius: 999, fontSize: 16, fontWeight: 600, color: c.label, background: c.fill }}>
+            Back to Quests
+          </button>
         </div>
       </div>
-
-      <div className="px-4 pb-8 mt-6">
-        <button onClick={onBack}
-          className={`w-full py-4 rounded-[16px] text-[15px] font-semibold ${dark ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-800'} active:opacity-70`}>
-          Back to Quests
-        </button>
-      </div>
-    </div>
   );
 }
 
-// ─── CAMERA / AI MODAL ────────────────────────────────────────────────────────
-function CameraModal({ quest, onConfirm, onCancel, dark }) {
+// camera modal (the big one)
+function CameraModal({ quest, onConfirm, onCancel, c }) {
   const videoRef          = useRef(null);
-  const aiCanvasRef       = useRef(null); 
+  const aiCanvasRef       = useRef(null);
   const skeletonCanvasRef = useRef(null);
   const streamRef         = useRef(null);
   const scanTimerRef      = useRef(null);
@@ -1117,7 +1216,12 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
   const poseLastVideoTimeRef = useRef(-1);
   const smoothedActRef    = useRef(null);
   const smoothedNegRef    = useRef(null);
+  const smoothedSpoofRef  = useRef(null);
+  const spoofNoticeActiveRef = useRef(false);
   const verifyingRef      = useRef(false);
+  const repSpoofSuspectedRef = useRef(false);
+  const smoothedRepSpoofRef  = useRef(null);
+  const repSpoofNoticeActiveRef = useRef(false);
 
   const [phase,         setPhase]         = useState('starting');
   const [camError,      setCamError]      = useState(null);
@@ -1158,8 +1262,8 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
   const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
   const classifierLabels = useMemo(
-    () => [...new Set([...(labels?.activity ?? []), ...activeNegatives])],
-    [labels, activeNegatives]
+      () => [...new Set([...(labels?.activity ?? []), ...activeNegatives])],
+      [labels, activeNegatives]
   );
   const [sourceWarning, setSourceWarning] = useState(null);
 
@@ -1251,15 +1355,13 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           if (evt.status === 'progress' && evt.total) setModelProgress(Math.round((evt.loaded / evt.total) * 100));
         });
         if (!cancelled) { setModelReady(true); setModelProgress(null); }
-      } catch (err) { 
+      } catch (err) {
         if (!cancelled) { setModelError('The AI model could not be loaded. Check your connection and try again.'); setModelProgress(null); }
       }
     })();
     return () => { cancelled = true; };
   }, [modelVersion, quest.reps]);
 
-  // Warm up the larger, more accurate model in the background (low priority)
-  // so the final confirmation pass later doesn't stall on a cold load.
   useEffect(() => {
     if (quest.reps || !modelReady) return undefined;
     let cancelled = false;
@@ -1298,14 +1400,14 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         if (canvas.width !== 224 || canvas.height !== 224) { canvas.width = 224; canvas.height = 224; }
         const context = canvas.getContext('2d');
         if (!context) throw new Error('Canvas 2D context unavailable');
-        
+
         const scale = Math.min(224 / video.videoWidth, 224 / video.videoHeight);
         const width = video.videoWidth * scale;
         const height = video.videoHeight * scale;
         context.fillStyle = '#000';
         context.fillRect(0, 0, 224, 224);
         context.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, (224 - width) / 2, (224 - height) / 2, width, height);
-        
+
         const dataUrl = canvas.toDataURL('image/jpeg', 0.55);
         const classifier = await getClassifier();
         const results = await classifier(dataUrl, classifierLabels);
@@ -1314,37 +1416,41 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
 
         const actScore = getMaxLabelScore(results, labels.activity);
         const negScore = getMaxLabelScore(results, activeNegatives);
+        const spoofScore = getMaxLabelScore(results, ANTI_SPOOF_LABELS);
         setLastLabel(results[0]?.label ?? '');
 
-        // Smooth scores across frames (EMA) so a single blurry/occluded frame
-        // doesn't tank an otherwise-confident read, while still requiring the
-        // signal to be sustained rather than a lucky one-off frame.
         smoothedActRef.current = smoothedActRef.current === null ? actScore : smoothedActRef.current * (1 - SCORE_SMOOTHING) + actScore * SCORE_SMOOTHING;
         smoothedNegRef.current = smoothedNegRef.current === null ? negScore : smoothedNegRef.current * (1 - SCORE_SMOOTHING) + negScore * SCORE_SMOOTHING;
+        smoothedSpoofRef.current = smoothedSpoofRef.current === null ? spoofScore : smoothedSpoofRef.current * (1 - SCORE_SMOOTHING) + spoofScore * SCORE_SMOOTHING;
         const smoothedAct = smoothedActRef.current;
         const smoothedNeg = smoothedNegRef.current;
+        const smoothedSpoof = smoothedSpoofRef.current;
 
         setLiveScore(Math.round(smoothedAct * 100));
-        const passed = smoothedAct > smoothedNeg && smoothedAct >= PASS_THRESHOLD;
+        const spoofSuspected = smoothedSpoof >= SPOOF_BLOCK_THRESHOLD;
+        const passed = !spoofSuspected && (smoothedAct - smoothedNeg) >= PASS_MARGIN && smoothedAct >= PASS_THRESHOLD;
         passStreakRef.current = passed
-          ? Math.min(REQUIRED_PASSES, passStreakRef.current + 1)
-          : Math.max(0, passStreakRef.current - 1);
+            ? Math.min(REQUIRED_PASSES, passStreakRef.current + 1)
+            : Math.max(0, passStreakRef.current - 1);
         setPassStreak(passStreakRef.current);
+        if (spoofSuspected) {
+          spoofNoticeActiveRef.current = true;
+          setNotice('This looks like it\'s coming from a screen or printed photo rather than you, live. Point the camera at yourself doing it in person.');
+        } else if (spoofNoticeActiveRef.current) {
+          spoofNoticeActiveRef.current = false;
+          setNotice(null);
+        }
         if (passStreakRef.current >= REQUIRED_PASSES && !verifyingRef.current && !confirmedRef.current) {
-          // The fast live model is sustained-confident — hand off to the larger,
-          // more accurate model for one final high-quality frame before locking
-          // this in as verified. Keeps the live loop snappy while the moment
-          // that actually counts gets the better model.
           verifyingRef.current = true;
           setVerifying(true);
           runFinalVerification();
         } else if (passed) {
           haptic(8);
         }
-      } catch (err) { 
+      } catch (err) {
         consecutiveErrors += 1;
         if (consecutiveErrors >= 3 && isCurrentRun()) setModelError('AI analysis is temporarily unavailable. Try closing and reopening the camera.');
-      } finally { 
+      } finally {
         isScanningRef.current = false;
         if (isCurrentRun()) { setScanning(false); scheduleNext(consecutiveErrors ? 1000 : 1200); }
       }
@@ -1354,7 +1460,7 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
       try {
         const video = videoRef.current;
         if (!video || !video.videoWidth) throw new Error('no live frame available');
-        const size = 256; // matches the accurate model's native input resolution
+        const size = 256;
         const canvas = document.createElement('canvas');
         canvas.width = size; canvas.height = size;
         const ctx = canvas.getContext('2d');
@@ -1369,7 +1475,8 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
         const results = await staticClassifier(dataUrl, classifierLabels);
         const actScore = getMaxLabelScore(results, labels.activity);
         const negScore = getMaxLabelScore(results, activeNegatives);
-        const finalPass = actScore > negScore && actScore >= PASS_THRESHOLD;
+        const spoofScore = getMaxLabelScore(results, ANTI_SPOOF_LABELS);
+        const finalPass = spoofScore < SPOOF_BLOCK_THRESHOLD && (actScore - negScore) >= PASS_MARGIN && actScore >= PASS_THRESHOLD;
 
         if (!isCurrentRun()) return;
         if (finalPass) {
@@ -1377,19 +1484,21 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
           setConfirmed(true);
           haptic([15, 30, 15]);
         } else {
-          // The accurate model disagreed with the fast live read — don't lock
-          // in a false positive. Back the streak off a bit and keep scanning
-          // rather than throwing a hard error at the user.
+          // fail closed: a second, higher-resolution model disagreed with the
+          // live estimate, so drop most of the streak instead of confirming
+          if (spoofScore >= SPOOF_BLOCK_THRESHOLD) {
+            spoofNoticeActiveRef.current = true;
+            setNotice('This looks like it\'s coming from a screen or printed photo rather than you, live. Point the camera at yourself doing it in person.');
+          }
           passStreakRef.current = Math.max(0, REQUIRED_PASSES - 2);
           setPassStreak(passStreakRef.current);
         }
       } catch {
-        // If the accurate model fails to load (e.g. offline), fall back to
-        // trusting the sustained live streak rather than blocking completion.
-        if (isCurrentRun() && !confirmedRef.current) {
-          confirmedRef.current = true;
-          setConfirmed(true);
-          haptic([15, 30, 15]);
+        // model call failed — fail closed rather than auto-confirming, so a
+        // dropped network request or model hiccup can't be used as a free pass
+        if (isCurrentRun()) {
+          passStreakRef.current = Math.max(0, REQUIRED_PASSES - 2);
+          setPassStreak(passStreakRef.current);
         }
       } finally {
         verifyingRef.current = false;
@@ -1428,9 +1537,18 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                 if (update.counted) {
                   setRepsDone(update.reps);
                   if (update.reps >= quest.reps) {
-                    confirmedRef.current = true;
-                    setConfirmed(true);
-                    haptic([15, 30, 15]);
+                    if (repSpoofSuspectedRef.current) {
+                      // hold one rep short until the screen/photo signal clears —
+                      // this stops a looped video of someone else exercising
+                      // (which pose angles alone can't distinguish from the real thing)
+                      poseStateRef.current.reps = quest.reps - 1;
+                      setRepsDone(quest.reps - 1);
+                      haptic(10);
+                    } else {
+                      confirmedRef.current = true;
+                      setConfirmed(true);
+                      haptic([15, 30, 15]);
+                    }
                   } else {
                     haptic(10);
                   }
@@ -1458,33 +1576,20 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   const Ox = (Wc - Wr) / 2;
                   const Oy = (Hc - Hr) / 2;
 
-                  const mapPt = (pt) => ({
-                    x: Ox + pt.x * Wr,
-                    y: Oy + pt.y * Hr,
-                    vis: pt.visibility ?? 1
-                  });
-
+                  const mapPt = (pt) => ({ x: Ox + pt.x * Wr, y: Oy + pt.y * Hr, vis: pt.visibility ?? 1 });
                   const mapped = landmarks.map(mapPt);
                   const currentPhase = poseStateRef.current.phase;
-                  const lineColor = currentPhase === 'down' ? '#6B8F5A' : '#D9A64A'; 
-                  const shadowColor = currentPhase === 'down' ? 'rgba(74, 222, 128, 0.8)' : 'rgba(56, 189, 248, 0.8)';
+                  const lineColor = currentPhase === 'down' ? '#30D158' : '#0A84FF';
 
                   ctx.save();
-                  ctx.lineWidth = 4;
+                  ctx.lineWidth = 3;
                   ctx.lineCap = 'round';
                   ctx.lineJoin = 'round';
-                  ctx.shadowColor = shadowColor;
-                  ctx.shadowBlur = 10;
                   ctx.strokeStyle = lineColor;
-
                   POSE_CONNECTIONS.forEach(([i, j]) => {
-                    const p1 = mapped[i];
-                    const p2 = mapped[j];
+                    const p1 = mapped[i]; const p2 = mapped[j];
                     if (p1 && p2 && p1.vis > 0.4 && p2.vis > 0.4) {
-                      ctx.beginPath();
-                      ctx.moveTo(p1.x, p1.y);
-                      ctx.lineTo(p2.x, p2.y);
-                      ctx.stroke();
+                      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
                     }
                   });
                   ctx.restore();
@@ -1493,27 +1598,17 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
                   mapped.forEach((pt, idx) => {
                     if (pt.vis > 0.4 && (idx === 0 || (idx >= 11 && idx <= 32))) {
                       const isMajorJoint = [11, 12, 13, 14, 23, 24, 25, 26].includes(idx);
-                      
                       ctx.beginPath();
-                      ctx.arc(pt.x, pt.y, isMajorJoint ? 7 : 5, 0, 2 * Math.PI);
-                      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+                      ctx.arc(pt.x, pt.y, isMajorJoint ? 6 : 4, 0, 2 * Math.PI);
+                      ctx.fillStyle = 'rgba(0,0,0,0.65)';
                       ctx.fill();
-                      ctx.lineWidth = isMajorJoint ? 2.5 : 2;
+                      ctx.lineWidth = isMajorJoint ? 2 : 1.5;
                       ctx.strokeStyle = lineColor;
                       ctx.stroke();
-
                       ctx.beginPath();
-                      ctx.arc(pt.x, pt.y, isMajorJoint ? 3 : 2, 0, 2 * Math.PI);
+                      ctx.arc(pt.x, pt.y, isMajorJoint ? 2.5 : 1.6, 0, 2 * Math.PI);
                       ctx.fillStyle = '#ffffff';
                       ctx.fill();
-
-                      if ([11, 12, 23, 24].includes(idx)) {
-                        ctx.beginPath();
-                        ctx.arc(pt.x, pt.y, 12, 0, 2 * Math.PI);
-                        ctx.lineWidth = 1;
-                        ctx.strokeStyle = shadowColor;
-                        ctx.stroke();
-                      }
                     }
                   });
                   ctx.restore();
@@ -1538,9 +1633,56 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     };
   }, [hasSkeletonTracking, quest.reps, quest.id, phase, confirmed]);
 
+  // rep quests are verified by joint-angle thresholds, which a static photo
+  // can't fake (angles never move) — but a *video* of someone else
+  // exercising, played on another screen and pointed at the camera, would
+  // still cross those thresholds. This runs alongside pose tracking purely
+  // to catch that: it doesn't judge the activity, only whether the feed
+  // looks like it's coming from a screen or printed photo.
+  useEffect(() => {
+    if (!quest.reps || phase !== 'live' || confirmed) return undefined;
+    let cancelled = false;
+    let timer = null;
+
+    const check = async () => {
+      try {
+        const video = videoRef.current;
+        const canvas = aiCanvasRef.current;
+        if (video && canvas && video.videoWidth) {
+          if (canvas.width !== 224 || canvas.height !== 224) { canvas.width = 224; canvas.height = 224; }
+          const ctx = canvas.getContext('2d');
+          const scale = Math.min(224 / video.videoWidth, 224 / video.videoHeight);
+          const w = video.videoWidth * scale, h = video.videoHeight * scale;
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, 224, 224);
+          ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, (224 - w) / 2, (224 - h) / 2, w, h);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+          const classifier = await getClassifier();
+          const results = await classifier(dataUrl, [...ANTI_SPOOF_LABELS, 'a real person exercising in a room']);
+          if (!cancelled) {
+            const spoofScore = getMaxLabelScore(results, ANTI_SPOOF_LABELS);
+            smoothedRepSpoofRef.current = smoothedRepSpoofRef.current === null ? spoofScore : smoothedRepSpoofRef.current * 0.5 + spoofScore * 0.5;
+            const suspected = smoothedRepSpoofRef.current >= SPOOF_BLOCK_THRESHOLD;
+            repSpoofSuspectedRef.current = suspected;
+            if (suspected) {
+              repSpoofNoticeActiveRef.current = true;
+              setNotice('This looks like it\'s coming from a screen or printed photo rather than you, live. Point the camera at yourself doing it in person.');
+            } else if (repSpoofNoticeActiveRef.current) {
+              repSpoofNoticeActiveRef.current = false;
+              setNotice(null);
+            }
+          }
+        }
+      } catch { /* transient — try again next tick */ }
+      finally { if (!cancelled) timer = window.setTimeout(check, 2500); }
+    };
+    timer = window.setTimeout(check, 1500);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [quest.reps, phase, confirmed]);
+
   const retryCamera = () => { scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); setSourceWarning(null); };
-  const flipCamera = () => { 
-    clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; smoothedActRef.current = null; smoothedNegRef.current = null; verifyingRef.current = false; setVerifying(false); resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
+  const flipCamera = () => {
+    clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; smoothedActRef.current = null; smoothedNegRef.current = null; smoothedSpoofRef.current = null; spoofNoticeActiveRef.current = false; repSpoofSuspectedRef.current = false; smoothedRepSpoofRef.current = null; repSpoofNoticeActiveRef.current = false; verifyingRef.current = false; setVerifying(false); resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
     if (skeletonCanvasRef.current) {
       const ctx = skeletonCanvasRef.current.getContext('2d');
       ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
@@ -1566,15 +1708,19 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
             return;
           }
           if (!authCheck.hasCameraMetadata) {
-            setSourceWarning("Heads up — this photo has no camera metadata, so we can't fully confirm it's an original. Live camera capture is the most reliable option.");
+            setSourceWarning("This photo has no camera metadata, so we can't fully confirm it's an original. Live camera capture is the most reliable option.");
           }
         }
         const classifier = await getStaticClassifier();
         const results = await classifier(dataUrl, classifierLabels);
         const actScore = getMaxLabelScore(results, labels.activity);
         const negScore = getMaxLabelScore(results, activeNegatives);
+        const spoofScore = getMaxLabelScore(results, ANTI_SPOOF_LABELS);
         setLiveScore(Math.round(actScore * 100)); setLastLabel(results[0]?.label ?? '');
-        if (actScore > negScore && actScore >= (PASS_THRESHOLD - 0.05)) {
+        if (spoofScore >= SPOOF_BLOCK_THRESHOLD) {
+          setPassStreak(0);
+          setNotice('This looks like a photo of a screen or a printed photo rather than an original shot. Please upload something you photographed directly.');
+        } else if ((actScore - negScore) >= PASS_MARGIN && actScore >= PASS_THRESHOLD) {
           setPassStreak(REQUIRED_PASSES); confirmedRef.current = true; accepted = true; setConfirmed(true); haptic([15, 30, 15]);
         } else { setPassStreak(0); setNotice("Verification failed. Please make sure you upload a clear activity summary log showing distance and elapsed time metrics."); }
       } catch (err) { } finally { setScanning(false); setUploading(false); if (!accepted) { setUploadedProof(null); retryCamera(); } }
@@ -1601,231 +1747,196 @@ function CameraModal({ quest, onConfirm, onCancel, dark }) {
     onConfirm(canvas.toDataURL('image/jpeg', 0.82));
   };
 
-  const meterColor = liveScore >= PASS_THRESHOLD * 100 ? 'bg-emerald-500' : liveScore >= 15 ? 'bg-amber-400' : 'bg-rose-500';
-  const bg = dark ? 'bg-stone-950' : 'bg-white';
-  const txt = dark ? 'text-white' : 'text-stone-900';
-  const sub = dark ? 'text-stone-400' : 'text-stone-500';
-  const pill = dark ? 'bg-stone-800/80' : 'bg-stone-100';
+  const meterColor = liveScore >= PASS_THRESHOLD * 100 ? c.green : liveScore >= 15 ? c.orange : c.red;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end justify-center" style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}>
-      <div className={`relative ${bg} w-full h-[95vh] max-w-lg rounded-t-[32px] overflow-hidden shadow-2xl flex flex-col`} style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 16px)' }}>
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-40 overflow-hidden opacity-60 z-0">
-          <AnimatedBackground dark={dark} />
-        </div>
-
-        <div className="relative z-10 flex justify-center pt-4 pb-2">
-          <div className={`w-12 h-1.5 rounded-full ${dark ? 'bg-stone-700' : 'bg-stone-300'}`} />
-        </div>
-
-        <div className={`relative z-10 flex items-center justify-center px-6 py-2 pb-4`}>
-          <div className="text-center">
-            <p className={`sq-display text-[15px] font-semibold uppercase tracking-wide ${txt}`}>Quest Check-In</p>
-            <p className={`text-[11px] font-medium ${sub} mt-0.5 max-w-[220px] truncate`}>{uiSubtext}</p>
+      <div className="fixed inset-0 z-[60] flex items-end justify-center" style={{ background: 'rgba(0,0,0,0.5)' }}>
+        <div style={{ background: c.bg, width: '100%', height: '95vh', borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: 'max(env(safe-area-inset-bottom), 14px)' }}>
+          <div className="flex justify-center pt-3 pb-2">
+            <div style={{ width: 36, height: 5, borderRadius: 999, background: c.fill }} />
           </div>
-        </div>
 
-        <div className="relative flex-1 bg-black overflow-hidden mx-4 rounded-3xl shadow-inner border border-white/10">
-          <video ref={videoRef} autoPlay playsInline muted className={`w-full h-full object-cover transition-opacity duration-500 ${phase === 'live' && !uploadedProof ? 'opacity-100' : 'opacity-0'}`} />
-
-          <canvas
-            ref={skeletonCanvasRef}
-            className={`absolute inset-0 w-full h-full pointer-events-none object-cover z-10 transition-opacity duration-500 ${phase === 'live' && !uploadedProof && hasSkeletonTracking ? 'opacity-100' : 'opacity-0'}`}
-          />
-
-          {phase === 'live' && !uploadedProof && labels?.bodyParts && (
-            <div className="absolute inset-0 pointer-events-none border-[2px] border-dashed border-[#D9A64A]/40 m-5 rounded-2xl z-10">
-              <div className="absolute top-4 left-4 bg-black/75 backdrop-blur-md px-3 py-2 rounded-xl border border-[#D9A64A]/50 shadow-2xl">
-                <div className="flex items-center gap-2 mb-1.5 text-white uppercase font-bold text-[10px] tracking-wider sq-display">
-                  <span className="w-2 h-2 rounded-full bg-[#D9A64A] animate-pulse inline-block" />
-                  Motion Tracker
-                </div>
-                <div className="text-white/60 text-[9px] mb-1 sq-mono">Watching:</div>
-                <div className="flex flex-wrap gap-1.5 max-w-[160px]">
-                  {labels.bodyParts.map((part) => (
-                    <span key={part} className="bg-black/60 text-[#D9A64A] px-1.5 py-0.5 rounded text-[9px] border border-[#D9A64A]/40 font-semibold tracking-wide sq-mono">
-                      {part}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-[#D9A64A]/80 rounded-tl-xl" />
-              <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-[#D9A64A]/80 rounded-tr-xl" />
-              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-[#D9A64A]/80 rounded-bl-xl" />
-              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-[#D9A64A]/80 rounded-br-xl" />
+          <div className="flex items-center justify-center px-6 pb-3">
+            <div className="text-center">
+              <p style={{ fontSize: 15, fontWeight: 600, color: c.label }}>Quest check-in</p>
+              <p style={{ fontSize: 11, color: c.labelSecondary, marginTop: 2, maxWidth: 240, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{uiSubtext}</p>
             </div>
-          )}
-
-          {uploadedProof && (
-            <img src={uploadedProof} alt="Uploaded verification" className="absolute inset-0 w-full h-full object-cover" />
-          )}
-
-          {phase === 'starting' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-stone-900">
-              <div className="w-10 h-10 border-4 border-white/20 border-t-[#B8842A] rounded-full animate-spin" />
-              <p className="text-white/70 text-xs font-medium tracking-wide">Opening camera…</p>
-            </div>
-          )}
-
-          {phase === 'error' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center bg-stone-900">
-              <p className="text-white font-bold text-[15px]">{camError === 'permission' ? 'Camera Access Blocked' : 'No Camera Found'}</p>
-              <p className="text-white/60 text-[13px] leading-relaxed mb-2">
-                {camError === 'permission' ? 'Open this app in a new tab and allow camera access when prompted.' : quest.reps ? 'This quest needs a live camera. Check your camera and try again.' : 'Upload a photo instead.'}
-              </p>
-              <button onClick={retryCamera} className="bg-[#B8842A] text-white text-[13px] font-semibold px-6 py-2.5 rounded-full active:scale-95 transition-transform">
-                Try Camera Again
-              </button>
-            </div>
-          )}
-
-          {(modelError || notice) && (
-            <div className="absolute inset-x-4 top-4 rounded-xl bg-red-500/90 backdrop-blur border border-red-400 px-4 py-3 text-center shadow-2xl z-30">
-              <p className="text-[13px] font-medium leading-relaxed text-white">{modelError || notice}</p>
-              <button onClick={() => setNotice(null)} className="text-[11px] font-bold text-white/70 block w-full mt-2 uppercase tracking-wider">Dismiss</button>
-            </div>
-          )}
-
-          {!modelError && !notice && sourceWarning && (
-            <div className="absolute inset-x-4 top-4 rounded-xl bg-amber-500/90 backdrop-blur border border-amber-400 px-4 py-3 text-center shadow-2xl z-30">
-              <p className="text-[13px] font-medium leading-relaxed text-white">{sourceWarning}</p>
-              <button onClick={() => setSourceWarning(null)} className="text-[11px] font-bold text-white/70 block w-full mt-2 uppercase tracking-wider">Dismiss</button>
-            </div>
-          )}
-
-          {phase === 'live' && quest.reps && (
-            <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)' }}>
-              {confirmed ? (
-                <div className="flex items-center gap-2.5 bg-green-500/20 w-max px-4 py-2 rounded-full border border-green-500/30 backdrop-blur-md">
-                  <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
-                    <CheckIcon />
-                  </div>
-                  <p className="text-green-50 text-[13px] font-bold tracking-wide">Verified & Locked!</p>
-                </div>
-              ) : poseError ? (
-                <p className="text-rose-300 text-[12px] font-semibold">{poseError}</p>
-              ) : !poseReady ? (
-                <p className="text-white/80 text-[11px] font-bold tracking-widest uppercase mb-2 sq-display">Getting ready to track your reps…</p>
-              ) : (
-                <>
-                  <div className="flex items-end justify-between mb-2">
-                    <p className="text-white/90 text-[13px] font-semibold tracking-wide drop-shadow-md">{repCue}</p>
-                    <p className="text-white text-[13px] font-black tracking-widest bg-[#B8842A] px-3 py-1 rounded-lg">
-                      {repsDone} / {quest.reps} REPS
-                    </p>
-                  </div>
-                  <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden shadow-inner">
-                    <div className="h-full bg-green-400 transition-all duration-300 ease-out rounded-full" style={{ width: `${Math.min(100, (repsDone / quest.reps) * 100)}%` }} />
-                  </div>
-                  <p className="text-white/40 text-[9px] font-mono mt-1.5 truncate uppercase tracking-widest">{repPhase === 'up' ? 'Ready position' : 'Mid-rep'}</p>
-                </>
-              )}
-            </div>
-          )}
-
-          {phase === 'live' && !quest.reps && modelReady && (
-            <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)' }}>
-              {confirmed ? (
-                <div className="flex items-center gap-2.5 bg-green-500/20 w-max px-4 py-2 rounded-full border border-green-500/30 backdrop-blur-md">
-                  <div className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
-                    <CheckIcon />
-                  </div>
-                  <p className="text-green-50 text-[13px] font-bold tracking-wide">Verified & Locked!</p>
-                </div>
-              ) : verifying ? (
-                <div className="flex items-center gap-2.5 bg-[#B8842A]/20 w-max px-4 py-2 rounded-full border border-[#B8842A]/30 backdrop-blur-md">
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin flex-shrink-0" />
-                  <p className="text-white text-[13px] font-bold tracking-wide">Double-checking the shot…</p>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-end justify-between mb-2">
-                    <p className="text-white/90 text-[13px] font-semibold tracking-wide drop-shadow-md">
-                      {scanning ? 'Scanning environment…' : `${liveScore}% confidence`}
-                    </p>
-                    <div className="flex items-center gap-1.5">
-                      {Array.from({ length: REQUIRED_PASSES }).map((_, i) => (
-                          <div key={i} className={`w-2 h-2 rounded-full transition-all duration-300 ${i < passStreak ? 'bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)]' : 'bg-white/30'}`} />
-                      ))}
-                    </div>
-                  </div>
-                  
-                  <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden shadow-inner">
-                    <div className={`h-full ${meterColor} transition-all duration-700 ease-out rounded-full`} style={{ width: `${liveScore}%` }} />
-                  </div>
-                  {lastLabel && <p className="text-white/40 text-[9px] font-mono mt-1.5 truncate uppercase tracking-widest">{lastLabel}</p>}
-                </>
-              )}
-            </div>
-          )}
-
-          {phase === 'live' && !quest.reps && !modelReady && !modelError && (
-            <div className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-12 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%)' }}>
-              <p className="text-white/80 text-[11px] font-bold tracking-widest uppercase mb-2 sq-display">Getting ready… {modelProgress ?? 0}%</p>
-              <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden">
-                <div className="h-full bg-[#B8842A] transition-all duration-300 rounded-full shadow-[0_0_10px_rgba(184,132,42,0.8)]" style={{ width: `${modelProgress ?? 0}%` }} />
-              </div>
-            </div>
-          )}
-          <canvas ref={aiCanvasRef} className="hidden" />
-        </div>
-
-        {quest.duration && (
-          <div className={`px-5 py-3.5 mx-4 mt-4 rounded-[18px] border flex items-center justify-between shadow-sm ${dark ? 'bg-stone-900 border-stone-800' : 'bg-stone-50 border-stone-200'}`}>
-            <div className="flex flex-col">
-              <span className={`text-[10px] font-bold uppercase tracking-widest ${dark ? 'text-stone-500' : 'text-stone-400'}`}>Objective Duration</span>
-              <span className={`text-[22px] leading-none mt-1 font-mono font-black tracking-tight ${txt}`}>{formatTimerString(secondsLeft)}</span>
-            </div>
-            <button onClick={() => setTimerRunning(!timerRunning)} disabled={secondsLeft === 0}
-              className={`px-5 py-2.5 rounded-[12px] text-[13px] font-bold tracking-wide transition-colors shadow-sm ${
-                secondsLeft === 0 ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : timerRunning ? 'bg-rose-500 text-white active:bg-rose-600' : 'bg-[#4B6B3E] text-white active:bg-green-600'
-              }`}>
-              {secondsLeft === 0 ? 'Completed' : timerRunning ? 'Pause Activity' : 'Start Timer'}
-            </button>
           </div>
-        )}
 
-        <div className="px-4 pt-4 pb-2">
-          {phase === 'live' && (
-            <div className="space-y-3">
-              <button onClick={captureAndConfirm} disabled={!confirmed}
-                className={`w-full py-4 rounded-[18px] text-[15px] font-bold tracking-wide transition-all duration-300 ${
-                  confirmed ? 'bg-[#B8842A] text-white shadow-[0_8px_20px_rgba(184,132,42,0.4)] active:scale-[0.98]' : `${pill} ${sub} cursor-not-allowed`
-                }`}>
-                {confirmed ? 'Complete Quest' : verifying ? 'Confirming…' : instructionText}
-              </button>
-              <div className="flex gap-3">
-                <button onClick={flipCamera} className={`${quest.reps ? 'w-full' : 'flex-1'} py-3.5 rounded-[16px] text-[14px] font-semibold ${pill} ${txt} active:opacity-70 transition-opacity`}>
-                  Flip Camera
+          <div className="relative flex-1 mx-4 rounded-3xl overflow-hidden" style={{ background: '#000' }}>
+            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ opacity: phase === 'live' && !uploadedProof ? 1 : 0, transition: 'opacity 0.3s' }} />
+            <canvas ref={skeletonCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none object-cover z-10"
+                    style={{ opacity: phase === 'live' && !uploadedProof && hasSkeletonTracking ? 1 : 0, transition: 'opacity 0.3s' }} />
+
+            {phase === 'live' && !uploadedProof && labels?.bodyParts && (
+                <div className="absolute top-3 left-3 z-10" style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(10px)', borderRadius: 12, padding: '9px 11px' }}>
+                  <div className="flex items-center gap-1.5 mb-1.5" style={{ color: '#fff', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.blue, display: 'inline-block' }} className="animate-pulse" />
+                    Tracking
+                  </div>
+                  <div className="flex flex-wrap gap-1 max-w-[150px]">
+                    {labels.bodyParts.map((part) => (
+                        <span key={part} style={{ background: 'rgba(255,255,255,0.14)', color: '#fff', padding: '2px 7px', borderRadius: 8, fontSize: 9, fontWeight: 500 }} className="sq-mono">
+                    {part}
+                  </span>
+                    ))}
+                  </div>
+                </div>
+            )}
+
+            {uploadedProof && (<img src={uploadedProof} alt="Uploaded verification" className="absolute inset-0 w-full h-full object-cover" />)}
+
+            {phase === 'starting' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                  <div style={{ width: 30, height: 30, border: '2.5px solid rgba(255,255,255,0.2)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />
+                  <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: 500 }}>Opening camera…</p>
+                </div>
+            )}
+
+            {phase === 'error' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
+                  <p style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{camError === 'permission' ? 'Camera access blocked' : 'No camera found'}</p>
+                  <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: 13, lineHeight: 1.5, marginBottom: 4 }}>
+                    {camError === 'permission' ? 'Open this app in a new tab and allow camera access when prompted.' : quest.reps ? 'This quest needs a live camera. Check your camera and try again.' : 'Upload a photo instead.'}
+                  </p>
+                  <button onClick={retryCamera} style={{ background: c.blue, color: '#fff', fontSize: 13, fontWeight: 600, padding: '9px 22px', borderRadius: 999 }}>Try again</button>
+                </div>
+            )}
+
+            {(modelError || notice) && (
+                <div className="absolute inset-x-3 top-3 z-30" style={{ borderRadius: 12, background: 'rgba(255,59,48,0.92)', backdropFilter: 'blur(10px)', padding: '10px 14px' }}>
+                  <p style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.4, color: '#fff' }}>{modelError || notice}</p>
+                  <button onClick={() => setNotice(null)} style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.75)', marginTop: 6, textTransform: 'uppercase', letterSpacing: 0.3 }}>Dismiss</button>
+                </div>
+            )}
+
+            {!modelError && !notice && sourceWarning && (
+                <div className="absolute inset-x-3 top-3 z-30" style={{ borderRadius: 12, background: 'rgba(255,159,10,0.92)', backdropFilter: 'blur(10px)', padding: '10px 14px' }}>
+                  <p style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.4, color: '#fff' }}>{sourceWarning}</p>
+                  <button onClick={() => setSourceWarning(null)} style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.75)', marginTop: 6, textTransform: 'uppercase', letterSpacing: 0.3 }}>Dismiss</button>
+                </div>
+            )}
+
+            {phase === 'live' && quest.reps && (
+                <div className="absolute inset-x-0 bottom-0 px-4 pb-4 pt-10 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.75), transparent)' }}>
+                  {confirmed ? (
+                      <div className="flex items-center gap-2 w-max px-3 py-1.5 rounded-full" style={{ background: 'rgba(48,209,88,0.2)' }}>
+                        <div style={{ width: 18, height: 18, borderRadius: '50%', background: c.green, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CheckIcon size={10} /></div>
+                        <p style={{ color: '#DFFBE8', fontSize: 12, fontWeight: 600 }}>Verified</p>
+                      </div>
+                  ) : poseError ? (
+                      <p style={{ color: '#FF9F9A', fontSize: 12, fontWeight: 500 }}>{poseError}</p>
+                  ) : !poseReady ? (
+                      <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, fontWeight: 600 }}>Getting ready to track your reps…</p>
+                  ) : (
+                      <>
+                        <div className="flex items-end justify-between mb-2">
+                          <p style={{ color: 'rgba(255,255,255,0.9)', fontSize: 13, fontWeight: 500 }}>{repCue}</p>
+                          <p className="sq-mono" style={{ color: '#fff', fontSize: 12, fontWeight: 700, background: c.blue, padding: '4px 10px', borderRadius: 8 }}>
+                            {repsDone} / {quest.reps} reps
+                          </p>
+                        </div>
+                        <div style={{ width: '100%', height: 4, borderRadius: 999, background: 'rgba(255,255,255,0.2)', overflow: 'hidden' }}>
+                          <div style={{ height: '100%', background: c.green, width: `${Math.min(100, (repsDone / quest.reps) * 100)}%`, transition: 'width 0.3s ease-out' }} />
+                        </div>
+                      </>
+                  )}
+                </div>
+            )}
+
+            {phase === 'live' && !quest.reps && modelReady && (
+                <div className="absolute inset-x-0 bottom-0 px-4 pb-4 pt-10 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.75), transparent)' }}>
+                  {confirmed ? (
+                      <div className="flex items-center gap-2 w-max px-3 py-1.5 rounded-full" style={{ background: 'rgba(48,209,88,0.2)' }}>
+                        <div style={{ width: 18, height: 18, borderRadius: '50%', background: c.green, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CheckIcon size={10} /></div>
+                        <p style={{ color: '#DFFBE8', fontSize: 12, fontWeight: 600 }}>Verified</p>
+                      </div>
+                  ) : verifying ? (
+                      <div className="flex items-center gap-2 w-max px-3 py-1.5 rounded-full" style={{ background: 'rgba(10,132,255,0.2)' }}>
+                        <div style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />
+                        <p style={{ color: '#fff', fontSize: 12, fontWeight: 600 }}>Confirming…</p>
+                      </div>
+                  ) : (
+                      <>
+                        <div className="flex items-end justify-between mb-2">
+                          <p style={{ color: 'rgba(255,255,255,0.9)', fontSize: 13, fontWeight: 500 }}>{scanning ? 'Scanning…' : `${liveScore}% confidence`}</p>
+                          <div className="flex items-center gap-1">
+                            {Array.from({ length: REQUIRED_PASSES }).map((_, i) => (
+                                <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: i < passStreak ? c.green : 'rgba(255,255,255,0.3)', transition: 'background 0.3s' }} />
+                            ))}
+                          </div>
+                        </div>
+                        <div style={{ width: '100%', height: 4, borderRadius: 999, background: 'rgba(255,255,255,0.2)', overflow: 'hidden' }}>
+                          <div style={{ height: '100%', background: meterColor, width: `${liveScore}%`, transition: 'width 0.5s ease-out' }} />
+                        </div>
+                        {lastLabel && <p className="sq-mono" style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, marginTop: 6, textTransform: 'uppercase', letterSpacing: 0.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{lastLabel}</p>}
+                      </>
+                  )}
+                </div>
+            )}
+
+            {phase === 'live' && !quest.reps && !modelReady && !modelError && (
+                <div className="absolute inset-x-0 bottom-0 px-4 pb-4 pt-10 z-20" style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.7), transparent)' }}>
+                  <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, fontWeight: 600, marginBottom: 8 }}>Getting ready… {modelProgress ?? 0}%</p>
+                  <div style={{ width: '100%', height: 4, borderRadius: 999, background: 'rgba(255,255,255,0.2)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', background: c.blue, width: `${modelProgress ?? 0}%`, transition: 'width 0.3s' }} />
+                  </div>
+                </div>
+            )}
+            <canvas ref={aiCanvasRef} className="hidden" />
+          </div>
+
+          {quest.duration && (
+              <div className="mx-4 mt-4" style={{ padding: '13px 16px', borderRadius: 20, background: c.bgElevated, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary }}>Duration</span>
+                  <p className="sq-mono" style={{ fontSize: 20, fontWeight: 700, color: c.label, marginTop: 2 }}>{formatTimerString(secondsLeft)}</p>
+                </div>
+                <button onClick={() => setTimerRunning(!timerRunning)} disabled={secondsLeft === 0}
+                        style={{ padding: '10px 20px', borderRadius: 12, fontSize: 13, fontWeight: 600, color: '#fff', background: secondsLeft === 0 ? c.gray : timerRunning ? c.red : c.green, opacity: secondsLeft === 0 ? 0.5 : 1 }}>
+                  {secondsLeft === 0 ? 'Done' : timerRunning ? 'Pause' : 'Start'}
                 </button>
-                {!quest.reps && (
-                <label className={`flex-1 py-3.5 rounded-[16px] text-[14px] font-semibold ${pill} ${txt} text-center cursor-pointer active:opacity-70 transition-opacity ${questType === 'map' ? 'ring-2 ring-[#B8842A] bg-[#B8842A]/10 text-[#B8842A]' : ''}`}>
-                  Upload Photo
+              </div>
+          )}
+
+          <div className="px-4 pt-4 pb-1">
+            {phase === 'live' && (
+                <div className="space-y-2.5">
+                  <button onClick={captureAndConfirm} disabled={!confirmed}
+                          style={{ width: '100%', padding: '15px', borderRadius: 999, fontSize: 16, fontWeight: 600, color: confirmed ? '#fff' : c.labelTertiary, background: confirmed ? c.blue : c.fill }}>
+                    {confirmed ? 'Complete quest' : verifying ? 'Confirming…' : instructionText}
+                  </button>
+                  <div className="flex gap-2.5">
+                    <button onClick={flipCamera} style={{ flex: quest.reps ? '1 1 100%' : 1, padding: '13px', borderRadius: 999, fontSize: 14, fontWeight: 600, background: c.fill, color: c.label }}>
+                      Flip camera
+                    </button>
+                    {!quest.reps && (
+                        <label style={{ flex: 1, padding: '13px', borderRadius: 999, fontSize: 14, fontWeight: 600, textAlign: 'center', cursor: 'pointer', background: questType === 'map' ? c.bgElevated : c.fill, color: questType === 'map' ? c.blue : c.label, border: questType === 'map' ? `1.5px solid ${c.blue}` : 'none' }}>
+                          Upload photo
+                          <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+                        </label>
+                    )}
+                  </div>
+                </div>
+            )}
+
+            {(phase === 'error' || phase === 'starting') && !quest.reps && (
+                <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '15px', borderRadius: 999, fontSize: 16, fontWeight: 600, background: c.fill, color: c.label, cursor: 'pointer' }}>
+                  Upload a photo
                   <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
                 </label>
-                )}
-              </div>
-            </div>
-          )}
+            )}
 
-          {(phase === 'error' || phase === 'starting') && !quest.reps && (
-            <label className={`flex items-center justify-center w-full py-4 rounded-[18px] text-[15px] font-bold ${pill} ${txt} cursor-pointer active:opacity-70 transition-opacity`}>
-              Upload a Photo
-              <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
-            </label>
-          )}
-
-          <button onClick={handleCancel}
-            className={`w-full mt-3 py-4 rounded-[18px] text-[15px] font-bold tracking-wide ${pill} ${txt} active:scale-[0.98] transition-transform`}>
-            Cancel
-          </button>
+            <button onClick={handleCancel} style={{ width: '100%', marginTop: 10, padding: '15px', borderRadius: 999, fontSize: 16, fontWeight: 600, background: 'transparent', color: c.red }}>
+              Cancel
+            </button>
+          </div>
         </div>
       </div>
-    </div>
   );
 }
 
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+// main app
 export default function QuestDailyApp() {
   const [isMounted, setIsMounted] = useState(false);
   const uid = useAnonymousAuth();
@@ -1842,13 +1953,14 @@ export default function QuestDailyApp() {
   const [quests, setQuests] = useState([]);
   const [lastReset, setLastReset] = useState(0);
   const [proofImages, setProofImages] = useState({});
+  const [history, setHistory] = useState([]);
+  const [activeTab, setActiveTab] = useState('quests');
 
   useEffect(() => {
     setIsMounted(true);
     const savedDark = localStorage.getItem('sq_dark');
     setDark(savedDark !== null ? savedDark === 'true' : window.matchMedia('(prefers-color-scheme: dark)').matches);
-    
-    // Using "_v2" here guarantees it will pop up for everyone again
+
     if (!localStorage.getItem('sq_has_seen_install_v2')) {
       setShowInstallPrompt(true);
     }
@@ -1860,6 +1972,7 @@ export default function QuestDailyApp() {
     setUsername(localStorage.getItem('sq_username') || null);
     setLastReset(parseInt(localStorage.getItem('sq_lastReset')) || 0);
     setProofImages(JSON.parse(localStorage.getItem('sq_proofs')) || {});
+    setHistory(JSON.parse(localStorage.getItem('sq_history')) || []);
 
     const savedQuests = JSON.parse(localStorage.getItem('sq_quests')) || [];
     const anyDone = savedQuests.some(q => q.completed);
@@ -1894,22 +2007,18 @@ export default function QuestDailyApp() {
   const retryLeaderboardSync = () => {
     if (uid && username) {
       syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned })
-        .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
+          .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
     }
   };
 
-  // Once both an anonymous UID and a username exist, make sure the player has
-  // a leaderboard doc (covers first-time setup, returning after a while, and
-  // any completion that happened before anonymous auth had finished signing in).
-  // Per-completion updates are handled separately in handleProofConfirm.
   useEffect(() => {
     if (uid && username) {
       syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned })
-        .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
+          .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid, username]);
-  
+
   const [timeLeft,  setTimeLeft]  = useState('--:--:--');
   const [proofModalId,   setProofModalId]   = useState(null);
   const [viewingProof, setViewingProof] = useState(null);
@@ -1956,8 +2065,9 @@ export default function QuestDailyApp() {
       localStorage.setItem('sq_quests', JSON.stringify(quests));
       localStorage.setItem('sq_lastReset', lastReset);
       localStorage.setItem('sq_proofs', JSON.stringify(proofImages));
+      localStorage.setItem('sq_history', JSON.stringify(history));
     }
-  }, [level, xp, totalXpEarned, streak, quests, lastReset, proofImages, isMounted]);
+  }, [level, xp, totalXpEarned, streak, quests, lastReset, proofImages, history, isMounted]);
 
   const applyXpChange = useCallback((amount) => {
     const startLevel = levelRef.current;
@@ -1968,8 +2078,6 @@ export default function QuestDailyApp() {
     xpRef.current = newXp; levelRef.current = newLevel;
     setXp(newXp); setLevel(newLevel);
 
-    // Lifetime XP only ever goes up — it's the leaderboard's ranking metric,
-    // separate from "current XP toward next level" which resets each level.
     let newTotal = totalXpEarnedRef.current;
     if (amount > 0) {
       newTotal += amount;
@@ -1980,11 +2088,11 @@ export default function QuestDailyApp() {
     return { leveledUp: newLevel > startLevel, newXp, newLevel, newTotal };
   }, []);
 
- const handleQuestClick = (quest) => {
-  if (quest.completed) return;
-  haptic(6);
-  setDetailQuestId(quest.id);
-};
+  const handleQuestClick = (quest) => {
+    if (quest.completed) return;
+    haptic(6);
+    setDetailQuestId(quest.id);
+  };
 
   const handleProofConfirm = (questId, img) => {
     const quest = quests.find(q => q.id === questId);
@@ -1993,7 +2101,12 @@ export default function QuestDailyApp() {
     setQuests(prev => prev.map(q => q.id === questId ? { ...q, completed: true, progress: 0 } : q));
     const { leveledUp, newXp, newLevel, newTotal } = applyXpChange(quest?.xp ?? 0);
 
-    // Bump the daily streak once per calendar day, the first time a quest is completed that day.
+    setHistory(prev => {
+      const entry = { id: `${questId}-${Date.now()}`, questId, text: quest.text, xp: quest.xp, ts: Date.now(), leveledUp };
+      const next = [entry, ...prev];
+      return next.length > 500 ? next.slice(0, 500) : next;
+    });
+
     const todayStr = new Date().toDateString();
     const lastStreakDate = localStorage.getItem('sq_streak_date');
     if (lastStreakDate !== todayStr) {
@@ -2002,12 +2115,8 @@ export default function QuestDailyApp() {
       localStorage.setItem('sq_streak_date', todayStr);
     }
 
-    // Push the freshly-computed stats straight to the leaderboard — no
-    // waiting on a state update/re-render, so it reflects instantly. If this
-    // fails (e.g. anonymous auth hasn't finished signing in yet), the
-    // catch-all effect above will retry once `uid` becomes available.
     syncLeaderboardEntry(uid, { username, level: newLevel, xp: newXp, totalXpEarned: newTotal })
-      .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
+        .then(res => setLeaderboardSyncError(res.ok ? null : res.error));
 
     setProofModalId(null);
     setDetailQuestId(null);
@@ -2023,198 +2132,163 @@ export default function QuestDailyApp() {
 
   if (!isMounted) return null;
 
+  const c = dark ? C.dark : C.light;
   const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
   const allDone = quests.length > 0 && quests.every(q => q.completed);
-  const greetingHour = new Date().getHours();
-  const greeting = greetingHour < 5 ? 'Late night grind'
-    : greetingHour < 12 ? 'Good morning, Adventurer'
-    : greetingHour < 18 ? 'Good afternoon, Adventurer'
-    : 'Good evening, Adventurer';
 
-  const bg       = dark ? 'bg-stone-950'  : 'bg-[#EDE7D8]';
-  const cardBg   = dark ? 'bg-stone-900'   : 'bg-white';
-  const txt      = dark ? 'text-white'    : 'text-stone-900';
-  const sub      = dark ? 'text-stone-400' : 'text-stone-500';
-  const sep      = dark ? 'border-stone-800' : 'border-stone-100';
-  const secLabel = dark ? 'text-stone-500' : 'text-stone-400';
   const completedCount = quests.filter(q => q.completed).length;
   const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
   return (
-    <div className={`${bg} min-h-screen flex flex-col items-center transition-colors duration-200`}>
-      <div className="relative w-full max-w-[430px] flex flex-col min-h-screen overflow-hidden shadow-2xl bg-inherit">
-        
-        <AnimatedBackground dark={dark} />
+      <div className="sq-root" style={{ background: c.bg, minHeight: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: 'background-color 0.3s ease' }}>
+        <SystemType />
+        <div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg }}>
+          <AmbientBackground c={c} />
 
-        {isMounted && !username && <UsernameModal onSubmit={handleSetUsername} dark={dark} />}
+          {isMounted && !username && <UsernameModal onSubmit={handleSetUsername} c={c} />}
+          {username && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} c={c} />}
 
-        {username && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} dark={dark} />}
+          {proofModal && (
+              <CameraModal quest={proofModal} c={c}
+                           onConfirm={img => handleProofConfirm(proofModal.id, img)}
+                           onCancel={handleCancelProof} />
+          )}
 
-        {proofModal && (
-          <CameraModal quest={proofModal} dark={dark}
-            onConfirm={img => handleProofConfirm(proofModal.id, img)}
-            onCancel={handleCancelProof} />
-        )}
-
-        {viewingProof && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 sq-anim-pop"
-            style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
-            onClick={() => setViewingProof(null)}>
-            <img src={viewingProof} alt="proof" className="max-w-full max-h-full rounded-[24px] shadow-2xl" />
-          </div>
-        )}
-
-        {showLeaderboard ? (
-          <LeaderboardScreen dark={dark} onBack={() => setShowLeaderboard(false)}
-            myUid={uid} myUsername={username} myLevel={level} myXp={xp}
-            syncError={leaderboardSyncError} onRetrySync={retryLeaderboardSync} />
-        ) : completionQuest ? (
-          <CompletionScreen quest={completionQuest} dark={dark} timeLeft={timeLeft}
-            onToggleTheme={() => setDark(d => !d)}
-            onBack={() => setCompletionQuest(null)} />
-        ) : detailQuest ? (
-          <QuestDetailScreen quest={detailQuest} dark={dark} timeLeft={timeLeft}
-            onToggleTheme={() => setDark(d => !d)}
-            onBack={() => setDetailQuestId(null)}
-            onMarkComplete={() => setProofModalId(detailQuest.id)} />
-        ) : (
-          <>
-            <div className={`relative z-10 safe-top px-3 pb-3 transition-colors duration-200`}>
-              <div className="flex items-center justify-between pt-2">
-                <div className="flex items-center gap-2.5">
-                  <LogoIcon size={34} dark={dark} />
-                  <div>
-                    <h1 className={`sq-display text-[21px] font-semibold uppercase tracking-wide leading-none ${txt}`}>QuestDaily</h1>
-                    <p className={`text-[11px] font-medium mt-1.5 ${secLabel}`}>{greeting}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {streak > 0 && (
-                    <div className={`flex items-center gap-1 px-2.5 py-1 rounded-[8px] ${dark ? 'bg-[#B24A24]/15' : 'bg-[#B24A24]/10'}`}>
-                      <QuestSvg.flame width={12} height={12} className={dark ? 'text-[#e08a63]' : 'text-[#B24A24]'} />
-                      <span className={`sq-mono text-[11px] font-bold ${dark ? 'text-[#e08a63]' : 'text-[#B24A24]'}`}>{streak}</span>
-                    </div>
-                  )}
-                  <div className={`flex items-center gap-1 px-2.5 py-1 rounded-[8px] ${dark ? 'bg-stone-800/80' : 'bg-stone-100'}`}>
-                    <QuestSvg.stopwatch width={11} height={11} className={dark ? 'text-stone-400' : 'text-stone-500'} />
-                    <span className={`sq-mono text-[11px] font-medium ${dark ? 'text-stone-300' : 'text-stone-600'}`}>{timeLeft}</span>
-                  </div>
-                  <button onClick={() => setShowLeaderboard(true)}
-                    className={`w-8 h-8 rounded-[8px] flex items-center justify-center ${dark ? 'bg-stone-800/80 text-[#D9A64A]' : 'bg-stone-100 text-[#B8842A]'} active:opacity-70 transition-colors`}
-                    aria-label="Worldwide leaderboard">
-                    <TrophyIcon size={15} />
-                  </button>
-                  <button onClick={() => setDark(d => !d)}
-                    className={`w-8 h-8 rounded-[8px] flex items-center justify-center ${dark ? 'bg-stone-800/80 text-stone-300' : 'bg-stone-100 text-stone-600'} active:opacity-70 transition-colors`}>
-                    {dark ? <SunIcon /> : <MoonIcon />}
-                  </button>
-                </div>
+          {viewingProof && (
+              <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 sq-anim-in"
+                   style={{ background: 'rgba(0,0,0,0.85)' }}
+                   onClick={() => setViewingProof(null)}>
+                <img src={viewingProof} alt="proof" className="max-w-full max-h-full rounded-2xl" />
               </div>
-              <div className="mt-3.5 flex items-center gap-2">
-                <span className="sq-display inline-flex items-center justify-center bg-[#B8842A] text-white text-[10px] font-semibold tracking-wide"
-                  style={{ padding: '3px 11px 3px 9px', clipPath: 'polygon(12% 0%,100% 0%,100% 100%,12% 100%,0% 50%)', backgroundImage: 'linear-gradient(165deg, rgba(255,255,255,0.28), rgba(255,255,255,0) 45%, rgba(0,0,0,0.14) 100%)', filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.35))' }}>
-                  LV {level}
-                </span>
-                <span className={`text-[11px] font-medium ${sub}`}>{getLevelTitle(level)}</span>
-                <span className={`ml-auto sq-mono text-[11px] font-semibold ${dark ? 'text-stone-500' : 'text-stone-400'}`}>{xp} / {xpRequired} XP</span>
-              </div>
-              <div className={`mt-2 h-1.5 w-full rounded-full overflow-hidden ${dark ? 'bg-stone-800' : 'bg-stone-200'}`}
-                style={{ boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.18)' }}>
-                <div
-                  className="h-full rounded-full bg-[#B8842A] transition-[width] duration-700 ease-out"
-                  style={{ width: `${xpPct}%`, backgroundImage: 'linear-gradient(180deg, rgba(255,255,255,0.35), rgba(255,255,255,0) 60%)' }}
-                />
-              </div>
-            </div>
+          )}
 
-            <div className="relative z-10 flex-1 scroll-ios px-3 pt-1 pb-8 space-y-5">
-              <div className="grid grid-cols-3 gap-2 sq-anim-pop">
-                <StatChip icon={<QuestSvg.bolt width={15} height={15} />} label="Level" value={level} dark={dark} />
-                <StatChip icon={<QuestSvg.flame width={15} height={15} />} label="Streak" value={`${streak}d`} dark={dark} accent={streak > 0 ? (dark ? 'text-[#e08a63]' : 'text-[#B24A24]') : undefined} />
-                <StatChip icon={<CheckIcon />} label="Today" value={`${completedCount}/${quests.length || 0}`} dark={dark} accent={allDone ? (dark ? 'text-[#8fbb78]' : 'text-[#4B6B3E]') : undefined} />
-              </div>
-
-              <div className={`${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100 shadow-[0_1px_2px_rgba(38,32,20,0.06),0_10px_24px_-8px_rgba(38,32,20,0.18)]'} rounded-[20px] px-4 py-4 flex items-center justify-between sq-anim-pop`}>
-                <div>
-                  <p className={`text-[14px] font-bold ${txt}`}>Daily Progress</p>
-                  <p className={`text-[12px] mt-0.5 font-medium ${sub}`}>{completedCount} / {quests.length} completed</p>
-                </div>
-                <ProgressRing pct={dailyPct} dark={dark} />
-              </div>
-
-              <div>
-                <p className={`text-[11px] font-bold uppercase tracking-widest ${secLabel} mb-2.5 px-1`}>
-                  Today's Objectives
-                </p>
-
-                <div className={`${dark ? 'bg-stone-900/70 border border-white/5' : 'bg-white border border-stone-100 shadow-[0_1px_2px_rgba(38,32,20,0.06),0_10px_24px_-8px_rgba(38,32,20,0.18)]'} rounded-[20px] overflow-hidden`}>
-                  {quests.map((quest, i) => {
-                    const qTheme = QUEST_THEME[quest.id] || { icon: 'target', grad: 'from-amber-500 to-amber-600' };
-                    const QIcon = QuestSvg[qTheme.icon] || QuestSvg.target;
-                    return (
-                    <div key={quest.id}>
-                      {i > 0 && <div className={`border-t ${sep} ml-[66px]`} />}
-                      <button onClick={() => { if (!quest.completed) handleQuestClick(quest); }}
-                        className={`w-full flex items-center gap-3.5 px-4 py-[18px] text-left active:bg-black/5 active:scale-[0.99] transition-all`}>
-                        <div className="relative flex-shrink-0">
-                          <div className={`w-9 h-9 rounded-full flex items-center justify-center ${qTheme.grad} transition-all duration-300 ${quest.completed ? 'opacity-40 saturate-50' : ''}`}
-                            style={quest.completed ? undefined : { backgroundImage: 'linear-gradient(165deg, rgba(255,255,255,0.3), rgba(255,255,255,0) 45%, rgba(0,0,0,0.15) 100%)', boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.3), inset 0 -2px 4px rgba(0,0,0,0.25), 0 3px 8px -2px rgba(0,0,0,0.3)' }}>
-                            <QIcon width={16} height={16} className="text-white" />
-                          </div>
-                          {quest.completed && (
-                            <div className={`absolute -bottom-1 -right-1 rounded-full bg-[#4B6B3E] border-2 ${dark ? 'border-stone-900' : 'border-white'} flex items-center justify-center shadow-[0_0_8px_rgba(75,107,62,0.6)]`} style={{ width: 18, height: 18 }}>
-                              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                            </div>
-                          )}
-                        </div>
-                        <span className={`flex-1 text-[15px] font-semibold leading-snug transition-colors ${quest.completed ? (dark ? 'text-stone-600 line-through' : 'text-stone-400 line-through') : txt}`}>
-                          {quest.text}
-                          {!quest.completed && quest.progress > 0 && (
-                            <span className="ml-2 align-middle text-[10px] font-bold uppercase tracking-wide text-[#B8842A] bg-[#B8842A]/10 px-1.5 py-0.5 rounded-full">
-                              In progress
-                            </span>
-                          )}
-                        </span>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {quest.completed && proofImages[quest.id] && (
-                            <button onClick={e => { e.stopPropagation(); setViewingProof(proofImages[quest.id]); }}
-                              className="w-7 h-7 rounded-md overflow-hidden flex-shrink-0 ring-1 ring-black/10 shadow-sm active:scale-95 transition-transform">
-                              <img src={proofImages[quest.id]} alt="proof" className="w-full h-full object-cover" />
-                            </button>
-                          )}
-                          <span className={`text-[13px] font-bold ${quest.completed ? 'text-[#4B6B3E]' : dark ? 'text-stone-500' : 'text-stone-400'}`}>+{quest.xp}</span>
-                          {quest.completed ? (
-                            <span className={`text-[10px] font-bold ${dark ? 'text-stone-600' : 'text-stone-300'}`}>XP</span>
-                          ) : (
-                            <span className={`text-[11px] ${dark ? 'text-stone-600' : 'text-stone-300'}`}>
-                              <svg width="8" height="14" viewBox="0 0 8 14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1 7 7 1 13"/></svg>
-                            </span>
-                          )}
-                        </div>
+          {showLeaderboard ? (
+              <LeaderboardScreen dark={dark} c={c} onBack={() => setShowLeaderboard(false)}
+                                 myUid={uid} myUsername={username} myLevel={level} myXp={xp}
+                                 syncError={leaderboardSyncError} onRetrySync={retryLeaderboardSync} />
+          ) : completionQuest ? (
+              <CompletionScreen quest={completionQuest} dark={dark} c={c} timeLeft={timeLeft}
+                                onToggleTheme={() => setDark(d => !d)} onBack={() => setCompletionQuest(null)} />
+          ) : detailQuest ? (
+              <QuestDetailScreen quest={detailQuest} dark={dark} c={c} timeLeft={timeLeft}
+                                 onToggleTheme={() => setDark(d => !d)} onBack={() => setDetailQuestId(null)}
+                                 onMarkComplete={() => setProofModalId(detailQuest.id)} />
+          ) : activeTab === 'history' ? (
+              <HistoryScreen history={history} dark={dark} c={c} onToggleTheme={() => setDark(d => !d)} />
+          ) : (
+              <div className="relative z-10 flex flex-col flex-1 sq-anim-in">
+                {/* Header */}
+                <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
+                  <div className="flex items-center justify-between">
+                    <h1 className="sq-large-title" style={{ fontSize: 32, fontWeight: 800, color: c.label }}>QuestDaily</h1>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setShowLeaderboard(true)} aria-label="Leaderboard"
+                              style={{ ...glassStyle(c), width: 32, height: 32, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.blue }}>
+                        <span className="sq-icon-tap"><TrophyIcon size={15} /></span>
+                      </button>
+                      <button onClick={() => setDark(d => !d)} aria-label="Toggle theme"
+                              style={{ ...glassStyle(c), width: 32, height: 32, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
+                        <span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
                       </button>
                     </div>
-                    );
-                  })}
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-2.5">
+                <span className="sq-mono" style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: c.blue, padding: '3px 9px', borderRadius: 8 }}>
+                  LV {level}
+                </span>
+                    <span style={{ fontSize: 12, fontWeight: 500, color: c.labelSecondary }}>{getLevelTitle(level)}</span>
+                    <span className="sq-mono ml-auto" style={{ fontSize: 11, fontWeight: 600, color: c.labelTertiary }}>{xp} / {xpRequired} XP</span>
+                  </div>
+                  <div style={{ marginTop: 8, height: 5, width: '100%', borderRadius: 999, background: c.fill, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', borderRadius: 999, width: `${xpPct}%`, background: c.blue, transition: 'width 0.6s cubic-bezier(0.22,1,0.36,1)' }} />
+                  </div>
+                </div>
+
+                <div className="flex-1 sq-scroll overflow-y-auto px-4 pt-2 space-y-4" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
+                  <div style={{ ...glassStyle(c), borderRadius: 20, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14 }} className="sq-anim-in">
+                    <ProgressRing pct={dailyPct} c={c} size={44} />
+                    <div className="flex-1" style={{ minWidth: 0 }}>
+                      <p style={{ fontSize: 14, fontWeight: 600, color: c.label }}>Daily progress</p>
+                      <p style={{ fontSize: 12, marginTop: 2, color: c.labelSecondary }}>{completedCount} of {quests.length} quests done</p>
+                    </div>
+                    {streak > 0 && (
+                        <div className="flex flex-col items-center flex-shrink-0" style={{ paddingLeft: 12, borderLeft: `1px solid ${c.separator}` }}>
+                          <QuestSvg.flame width={15} height={15} strokeWidth={1.75} style={{ color: c.orange }} />
+                          <span className="sq-mono" style={{ fontSize: 12, fontWeight: 700, color: c.orange, marginTop: 2 }}>{streak}d</span>
+                        </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>
+                      Today
+                    </p>
+                    <div className="flex flex-col gap-2.5">
+                      {quests.map((quest, i) => (
+                          <button key={quest.id}
+                                  onClick={() => { if (!quest.completed) handleQuestClick(quest); }}
+                                  className="sq-anim-in"
+                                  style={{
+                                    ...glassStyle(c),
+                                    width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+                                    padding: '14px 14px', textAlign: 'left', borderRadius: 20,
+                                    opacity: quest.completed ? 0.7 : 1,
+                                    animationDelay: `${Math.min(i, 8) * 0.035}s`,
+                                  }}>
+                            <div className="relative flex-shrink-0">
+                              <QuestRowIcon questId={quest.id} c={c} muted={quest.completed} />
+                              {quest.completed && (
+                                  <div style={{ position: 'absolute', bottom: -3, right: -3, width: 16, height: 16, borderRadius: '50%', background: c.green, border: `2px solid ${c.bgElevated}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <CheckIcon size={8} />
+                                    <style>{`div > svg { color: #fff; }`}</style>
+                                  </div>
+                              )}
+                            </div>
+                            <span style={{ flex: 1, fontSize: 15, fontWeight: 500, lineHeight: 1.3, color: quest.completed ? c.labelTertiary : c.label, textDecoration: quest.completed ? 'line-through' : 'none' }}>
+                        {quest.text}
+                              {!quest.completed && quest.progress > 0 && (
+                                  <span className="sq-mono" style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: c.blue, background: c.fill, padding: '2px 7px', borderRadius: 999 }}>
+                            In progress
+                          </span>
+                              )}
+                      </span>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {quest.completed && proofImages[quest.id] && (
+                                  <button onClick={e => { e.stopPropagation(); setViewingProof(proofImages[quest.id]); }}
+                                          style={{ width: 26, height: 26, borderRadius: 10, overflow: 'hidden', flexShrink: 0 }}>
+                                    <img src={proofImages[quest.id]} alt="proof" className="w-full h-full object-cover" />
+                                  </button>
+                              )}
+                              <span className="sq-mono" style={{ fontSize: 12, fontWeight: 700, color: quest.completed ? c.green : c.labelTertiary }}>+{quest.xp}</span>
+                              {!quest.completed && <span className="sq-icon-tap"><ChevronIcon color={c.labelTertiary} /></span>}
+                            </div>
+                          </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {allDone && (
+                      <div style={{ ...glassStyle(c), borderRadius: 20, padding: 24, textAlign: 'center' }} className="sq-anim-in">
+                        <TrophyIcon size={26} style={{ color: c.orange, margin: '0 auto 10px' }} />
+                        <p style={{ fontSize: 15, fontWeight: 600, color: c.label }}>All quests complete</p>
+                        <p style={{ fontSize: 13, marginTop: 4, color: c.labelSecondary }}>Rest up. New quests when the timer hits zero.</p>
+                      </div>
+                  )}
+
+                  {quests.length > 0 && (
+                      <p style={{ fontSize: 11, fontWeight: 500, textAlign: 'center', color: c.labelTertiary, padding: '0 16px 8px' }}>
+                        Checked on your device — nothing you record ever leaves your phone.
+                      </p>
+                  )}
                 </div>
               </div>
+          )}
 
-              {allDone && (
-                <div className={`relative overflow-hidden rounded-[20px] p-6 text-center border sq-anim-pop bg-gradient-to-b ${dark ? 'from-[#2a2210] to-[#15120b] border-white/5' : 'from-amber-50 to-white border-stone-100 shadow-[0_1px_2px_rgba(38,32,20,0.06),0_10px_24px_-8px_rgba(38,32,20,0.18)]'}`}>
-                  <TrophyIcon size={30} className={`mx-auto mb-3 relative z-10 ${dark ? 'text-[#D9A64A]' : 'text-[#B8842A]'}`} />
-                  <p className={`sq-display font-semibold text-[16px] relative z-10 ${txt}`}>All Quests Complete</p>
-                  <p className={`text-sm mt-1.5 font-medium relative z-10 ${sub}`}>Rest up. New quests when the timer hits zero.</p>
-                </div>
-              )}
-
-              {quests.length > 0 && (
-                <p className={`text-[11px] font-medium text-center ${secLabel} px-4 pb-2 uppercase tracking-wide`}>
-                  Every quest is checked right on your device <br/> nothing you record ever leaves your phone
-                </p>
-              )}
-            </div>
-          </>
-        )}
+          {isMounted && username && !showLeaderboard && !completionQuest && !detailQuest && !proofModal && (
+              <TabBar activeTab={activeTab} onChange={setActiveTab} c={c} />
+          )}
+        </div>
       </div>
-    </div>
   );
 }
