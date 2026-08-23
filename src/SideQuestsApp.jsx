@@ -5,13 +5,17 @@ import { pipeline, env } from '@huggingface/transformers';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as exifr from 'exifr';
 import { initializeApp, getApps } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 import {
-  Sun, Moon, CheckSquare, History as HistoryIcon,
+  getAuth, onAuthStateChanged, signOut, deleteUser,
+  createUserWithEmailAndPassword, signInWithEmailAndPassword,
+} from 'firebase/auth';
+import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
+import {
+  Sun, Moon, CheckSquare, History as HistoryIcon, Settings as SettingsIcon,
   Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Timer, ChevronsUp,
   Droplet, Leaf, Utensils, CookingPot, Flower2, Move, Zap, Flame,
   Pencil, Snowflake, Wind, Waves, Target, GlassWater, CupSoda,
+  LogOut, Eye, EyeOff, Lock, AtSign, Camera, Trash2, ShieldCheck, Sparkles, ListChecks,
 } from 'lucide-react';
 
 // firebase / leaderboard stuff
@@ -93,17 +97,195 @@ async function fetchRemoteHistory(uid) {
   }
 }
 
-// anonymous auth so the device has a stable uid, no account/password needed
-function useAnonymousAuth() {
-  const [uid, setUid] = useState(null);
+// account system
+// -----------------------------------------------------------------------
+// Firebase Auth doesn't have native "username + password" accounts — it
+// wants an email. So a username is mapped to a deterministic, fake-but-
+// validly-formatted email (`somebody` -> `somebody@questdaily-users.app`)
+// and Firebase Auth is used normally underneath. This means:
+//   - usernames are case-insensitive (the email is always lowercased)
+//   - there's no real inbox behind that address, so Firebase's built-in
+//     "forgot password" email reset can't work here — if that's needed
+//     later it requires collecting a real email address at signup instead
+// A `usernames/{usernameLower}` doc is the source of truth for "is this
+// username taken" and for looking up the display-cased username on login;
+// the account's own profile lives in `users/{uid}`.
+const USERNAME_EMAIL_DOMAIN = 'questdaily-users.app';
+const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
+
+function usernameToEmail(usernameLower) {
+  return `${usernameLower}@${USERNAME_EMAIL_DOMAIN}`;
+}
+
+function validateUsername(raw) {
+  const trimmed = raw.trim();
+  if (!USERNAME_RE.test(trimmed)) return 'Username must be 3-20 characters: letters, numbers, and underscores only.';
+  return null;
+}
+
+function validatePassword(raw) {
+  if (raw.length < 6) return 'Password must be at least 6 characters.';
+  if (raw.length > 128) return 'Password is too long.';
+  return null;
+}
+
+function friendlyAuthError(err) {
+  const code = err?.code || '';
+  if (code === 'auth/email-already-in-use') return 'That username is already taken.';
+  if (code === 'auth/weak-password') return 'Password must be at least 6 characters.';
+  if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') return 'Incorrect username or password.';
+  if (code === 'auth/user-not-found') return 'No account found with that username.';
+  if (code === 'auth/too-many-requests') return 'Too many attempts — try again in a bit.';
+  if (code === 'auth/network-request-failed') return "Can't reach the server. Check your connection.";
+  if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
+  if (code === 'auth/invalid-email') return 'That username can\'t be used. Try a different one.';
+  if (code === 'permission-denied' || code === 'firestore/permission-denied') {
+    return "Your database's security rules are blocking this — the 'usernames', 'users', and 'leaderboard' collections in Firestore need read/write rules set up. This is a Firebase Console configuration step, not something wrong with what you typed.";
+  }
+  return err?.message ? `Something went wrong: ${err.message}` : 'Something went wrong. Please try again.';
+}
+
+// Creates a brand-new account. Reserves the username first (so two people
+// racing on the same name get a clean "taken" error instead of a confusing
+// Firebase Auth error), then creates the Auth user, then writes the
+// username reservation + profile doc. If the profile writes fail after the
+// Auth user was already created, the reservation is rolled back so the
+// username isn't permanently stuck on a half-created account.
+async function signUpAccount(usernameRaw, password) {
+  const username = usernameRaw.trim();
+  const usernameLower = username.toLowerCase();
+  const usernameDoc = doc(db, 'usernames', usernameLower);
+
+  let existing;
+  try {
+    existing = await getDoc(usernameDoc);
+  } catch (err) {
+    console.error('Username availability check failed:', err);
+    throw err; // surfaced via friendlyAuthError, including the permission-denied case
+  }
+  if (existing.exists()) {
+    const err = new Error('That username is already taken.');
+    err.code = 'auth/email-already-in-use';
+    throw err;
+  }
+
+  const cred = await createUserWithEmailAndPassword(auth, usernameToEmail(usernameLower), password);
+  try {
+    await Promise.all([
+      setDoc(usernameDoc, { uid: cred.user.uid, username }),
+      setDoc(doc(db, 'users', cred.user.uid), { username, createdAt: Date.now() }),
+    ]);
+  } catch (err) {
+    console.error('Failed to finish account setup:', err);
+    throw err;
+  }
+  return { uid: cred.user.uid, username };
+}
+
+// Logs into an existing account. Looks up the reservation doc first purely
+// to recover the original display-cased username (login itself only needs
+// the deterministic email, so a typo'd case still signs in fine).
+async function logInAccount(usernameRaw, password) {
+  const username = usernameRaw.trim();
+  const usernameLower = username.toLowerCase();
+  const cred = await signInWithEmailAndPassword(auth, usernameToEmail(usernameLower), password);
+
+  let displayUsername = username;
+  try {
+    const snap = await getDoc(doc(db, 'usernames', usernameLower));
+    if (snap.exists() && snap.data()?.username) displayUsername = snap.data().username;
+  } catch { /* non-fatal — fall back to what they typed */ }
+
+  return { uid: cred.user.uid, username: displayUsername };
+}
+
+async function logOutAccount() {
+  await signOut(auth);
+}
+
+// profile pictures
+// -----------------------------------------------------------------------
+// There's no Firebase Storage bucket wired up here, so photos are stored
+// as compressed, center-cropped JPEG data URLs directly on the Firestore
+// profile doc (and mirrored onto the leaderboard doc so avatars show up
+// there too). Firestore caps a document at ~1MB, so the image is resized
+// down hard first — 256x256 at moderate JPEG quality lands well under
+// 100KB in practice, comfortably inside that limit with room to spare.
+const AVATAR_SIZE = 256;
+const AVATAR_QUALITY = 0.8;
+
+function resizeImageToSquareDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (!file.type?.startsWith('image/')) { reject(new Error('Please choose an image file.')); return; }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side) / 2;
+        const sy = (img.height - side) / 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = AVATAR_SIZE; canvas.height = AVATAR_SIZE;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
+        resolve(canvas.toDataURL('image/jpeg', AVATAR_QUALITY));
+      };
+      img.onerror = () => reject(new Error('That file doesn\'t look like a valid image.'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('Could not read that file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function updateProfilePhoto(uid, dataUrl) {
+  await Promise.all([
+    setDoc(doc(db, 'users', uid), { photoURL: dataUrl }, { merge: true }),
+    setDoc(doc(db, 'leaderboard', uid), { photoURL: dataUrl }, { merge: true }),
+  ]);
+}
+
+// Best-effort cleanup of everything an account owns before the Auth user
+// itself is deleted: the full history subcollection (deleted doc-by-doc,
+// since Firestore has no client-side "delete a collection" call), the
+// profile doc, the leaderboard entry, and the username reservation so the
+// name becomes available again.
+async function deleteAccountData(uid, usernameLower) {
+  let historyDocs = [];
+  try {
+    const historySnap = await getDocs(collection(db, 'users', uid, 'history'));
+    historyDocs = historySnap.docs;
+  } catch (err) {
+    console.error('Could not list history for deletion (continuing with the rest):', err);
+  }
+  await Promise.all(historyDocs.map(d => deleteDoc(d.ref).catch(() => {})));
+
+  const results = await Promise.allSettled([
+    deleteDoc(doc(db, 'users', uid)),
+    deleteDoc(doc(db, 'leaderboard', uid)),
+    usernameLower ? deleteDoc(doc(db, 'usernames', usernameLower)) : Promise.resolve(),
+  ]);
+  const failure = results.find(r => r.status === 'rejected');
+  if (failure) {
+    // At least one core doc failed to delete — surface it rather than
+    // silently leaving orphaned data, so the person sees why the account
+    // wasn't fully removed instead of it just quietly not working.
+    console.error('Account data cleanup partially failed:', failure.reason);
+    throw failure.reason;
+  }
+}
+
+// tracks the signed-in Firebase user (or null once auth has resolved and
+// nobody's signed in) — the account system's version of the old anonymous
+// uid hook.
+function useAuthUser() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, user => {
-      if (user) setUid(user.uid);
-      else signInAnonymously(auth).catch(err => console.error('Anonymous auth failed:', err));
-    });
+    const unsub = onAuthStateChanged(auth, u => { setUser(u); setLoading(false); });
     return unsub;
   }, []);
-  return uid;
+  return { user, loading };
 }
 
 // live top-100, onSnapshot keeps it updated in realtime so no polling needed
@@ -527,6 +709,7 @@ const SystemType = () => (
     }
     svg { transition: stroke 0.2s ease, fill 0.2s ease; }
     .sq-scroll { -webkit-overflow-scrolling: touch; }
+    .sq-icon-fff svg { color: #fff; }
     @keyframes sq-fade-up { from { opacity: 0; transform: translate3d(0,7px,0); } to { opacity: 1; transform: translate3d(0,0,0); } }
     @keyframes sq-check-in { 0% { opacity: 0; transform: scale(0.5); } 70% { opacity: 1; transform: scale(1.06); } 100% { opacity: 1; transform: scale(1); } }
     .sq-anim-in { animation: sq-fade-up 0.32s cubic-bezier(0.22,1,0.36,1) both; will-change: transform, opacity; }
@@ -545,6 +728,8 @@ const SystemType = () => (
     .sq-orb-a { animation: sq-drift-a 26s ease-in-out infinite; will-change: transform; }
     .sq-orb-b { animation: sq-drift-b 32s ease-in-out infinite; will-change: transform; }
     .sq-orb-c { animation: sq-drift-c 22s ease-in-out infinite; will-change: transform; }
+    .sq-confetti-piece { position: absolute; top: -6%; border-radius: 2px; opacity: 0.9; animation-name: sq-confetti-fall; animation-timing-function: cubic-bezier(0.35,0,0.65,1); animation-fill-mode: forwards; }
+    @keyframes sq-confetti-fall { 0% { transform: translate(0,0) rotate(0deg); opacity: 1; } 85% { opacity: 1; } 100% { transform: translate(var(--sq-drift), 115vh) rotate(var(--sq-rot)); opacity: 0; } }
     @media (prefers-reduced-motion: reduce) {
       .sq-orb-a, .sq-orb-b, .sq-orb-c { animation: none; }
     }
@@ -555,65 +740,89 @@ const SystemType = () => (
 // 3 slow-drifting blurred color fields, fixed behind everything. this is what
 // the glass cards are actually blurring/tinting — without it the "glass" is
 // just a translucent gray box, which looks flat
-const AmbientBackground = ({ c }) => (
-    <div className="fixed inset-0 pointer-events-none z-0" aria-hidden="true" style={{ overflow: 'hidden' }}>
-      <div className="sq-orb-a" style={{ position: 'absolute', top: '-10%', left: '-15%', width: '75%', height: '42%', borderRadius: '50%', background: c.blue, opacity: 0.16, filter: 'blur(70px)' }} />
-      <div className="sq-orb-b" style={{ position: 'absolute', top: '30%', right: '-20%', width: '70%', height: '46%', borderRadius: '50%', background: c.purple, opacity: 0.13, filter: 'blur(80px)' }} />
-      <div className="sq-orb-c" style={{ position: 'absolute', bottom: '-14%', left: '5%', width: '65%', height: '40%', borderRadius: '50%', background: c.teal, opacity: 0.13, filter: 'blur(75px)' }} />
-    </div>
-);
+const AmbientBackground = React.memo(function AmbientBackground({ c }) {
+  return (
+      <div className="fixed inset-0 pointer-events-none z-0" aria-hidden="true" style={{ overflow: 'hidden' }}>
+        <div className="sq-orb-a" style={{ position: 'absolute', top: '-10%', left: '-15%', width: '75%', height: '42%', borderRadius: '50%', background: c.blue, opacity: 0.16, filter: 'blur(70px)' }} />
+        <div className="sq-orb-b" style={{ position: 'absolute', top: '30%', right: '-20%', width: '70%', height: '46%', borderRadius: '50%', background: c.purple, opacity: 0.13, filter: 'blur(80px)' }} />
+        <div className="sq-orb-c" style={{ position: 'absolute', bottom: '-14%', left: '5%', width: '65%', height: '40%', borderRadius: '50%', background: c.teal, opacity: 0.13, filter: 'blur(75px)' }} />
+      </div>
+  );
+});
 
 // icons
 // SF-Symbols-style icons via lucide-react — clean, rounded, consistent 1.5–2px strokes
-const CheckIcon = ({ size = 12 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="20 6 9 17 4 12"/>
-    </svg>
-);
-const ChevronIcon = ({ color }) => (
-    <svg width="8" height="14" viewBox="0 0 8 14" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1 7 7 1 13"/></svg>
-);
-const BackChevron = ({ color }) => (
-    <svg width="11" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-);
-const IOSShareIcon = () => (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>
-    </svg>
-);
-const IOSAddIcon = () => (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="18" height="18" rx="4" ry="4"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
-    </svg>
-);
-const AndroidMenuIcon = () => (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="19" r="2.2"/></svg>
-);
-const AndroidAddIcon = () => (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/><line x1="9" y1="11" x2="15" y2="11"/><line x1="12" y1="8" x2="12" y2="14"/>
-    </svg>
-);
-const TrophyIcon = ({ size = 16 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8 4h8v5a4 4 0 0 1-8 0V4Z"/><path d="M8 5H5a3 3 0 0 0 3 4"/><path d="M16 5h3a3 3 0 0 1-3 4"/><path d="M12 13v3"/><path d="M9 20h6"/><path d="M10 16h4l.5 4h-5l.5-4Z"/>
-    </svg>
-);
-const WarningIcon = ({ size = 15 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-    </svg>
-);
-const SignalOffIcon = ({ size = 24 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M5 12.5a11 11 0 0 1 4-2.5"/><path d="M9.5 8.8A11 11 0 0 1 19 10.5"/><path d="M12.5 15a4 4 0 0 1 3 1.8"/><circle cx="8" cy="19" r="1"/><line x1="2" y1="2" x2="22" y2="22"/>
-    </svg>
-);
-const FlagIcon = ({ size = 24 }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M5 21V4"/><path d="M5 4h13l-3 4 3 4H5"/>
-    </svg>
-);
+const CheckIcon = React.memo(function CheckIcon({ size = 12 }) {
+  return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+  );
+});
+const ChevronIcon = React.memo(function ChevronIcon({ color }) {
+  return (
+      <svg width="8" height="14" viewBox="0 0 8 14" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 1 7 7 1 13"/></svg>
+  );
+});
+const BackChevron = React.memo(function BackChevron({ color }) {
+  return (
+      <svg width="11" height="18" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+  );
+});
+const IOSShareIcon = React.memo(function IOSShareIcon() {
+  return (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/>
+      </svg>
+  );
+});
+const IOSAddIcon = React.memo(function IOSAddIcon() {
+  return (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="4" ry="4"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
+      </svg>
+  );
+});
+const AndroidMenuIcon = React.memo(function AndroidMenuIcon() {
+  return (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="19" r="2.2"/></svg>
+  );
+});
+const AndroidAddIcon = React.memo(function AndroidAddIcon() {
+  return (
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/><line x1="9" y1="11" x2="15" y2="11"/><line x1="12" y1="8" x2="12" y2="14"/>
+      </svg>
+  );
+});
+const TrophyIcon = React.memo(function TrophyIcon({ size = 16 }) {
+  return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 4h8v5a4 4 0 0 1-8 0V4Z"/><path d="M8 5H5a3 3 0 0 0 3 4"/><path d="M16 5h3a3 3 0 0 1-3 4"/><path d="M12 13v3"/><path d="M9 20h6"/><path d="M10 16h4l.5 4h-5l.5-4Z"/>
+      </svg>
+  );
+});
+const WarningIcon = React.memo(function WarningIcon({ size = 15 }) {
+  return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+  );
+});
+const SignalOffIcon = React.memo(function SignalOffIcon({ size = 24 }) {
+  return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 12.5a11 11 0 0 1 4-2.5"/><path d="M9.5 8.8A11 11 0 0 1 19 10.5"/><path d="M12.5 15a4 4 0 0 1 3 1.8"/><circle cx="8" cy="19" r="1"/><line x1="2" y1="2" x2="22" y2="22"/>
+      </svg>
+  );
+});
+const FlagIcon = React.memo(function FlagIcon({ size = 24 }) {
+  return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 21V4"/><path d="M5 4h13l-3 4 3 4H5"/>
+      </svg>
+  );
+});
 
 // quest icons — mapped straight onto Lucide (SF-Symbols-style) components.
 // Each is a drop-in React component, so existing call sites (which pass
@@ -693,7 +902,7 @@ const QUEST_QUOTES = ["Small steps every day lead to big changes.", "Discipline 
 const QUEST_QUOTE = { q1: "Strength grows one rep at a time.", q2: "Every squat builds a stronger foundation.", q3: "Miles don't lie — you earned this one.", q4: "Small steps every day lead to big changes.", q5: "One step at a time is still progress.", q6: "Small steps every day lead to big changes.", q7: "A quiet mind carries the loudest strength.", q8: "Flexibility today, resilience tomorrow.", q9: "You fueled the body that carries you.", q10: "Rest is where the real gains happen.", q11: "Energy in motion stays in motion.", q12: "A strong core holds everything else together.", q13: "The pen remembers what the mind forgets.", q14: "Good fuel, good day.", q15: "Stillness can be the hardest work of all.", q16: "Every mile ridden is a mile earned.", q17: "Rhythm builds more than just your legs.", q18: "Discomfort today, discipline for life.", q19: "Progress, not perfection.", q20: "What you cook is what you become.", q21: "Breathe in control, breathe out doubt.", q22: "One step at a time is still progress.", q23: "Balance is built one side at a time.", q24: "Tonight's rest is tomorrow's edge.", q25: "You didn't come this far to only come this far." };
 
 // flat icon tile, one color one glyph, no gradient/gloss nonsense
-const QuestIconBadge = ({ questId, size = 88, c }) => {
+const QuestIconBadge = React.memo(function QuestIconBadge({ questId, size = 88, c }) {
   const theme = QUEST_THEME[questId] || { icon: 'target', cat: 'blue' };
   const Icon = QuestSvg[theme.icon] || QuestSvg.target;
   const color = c[theme.cat];
@@ -708,10 +917,10 @@ const QuestIconBadge = ({ questId, size = 88, c }) => {
         <Icon className="sq-icon-pop-in sq-icon-tap" width={Math.round(size * 0.44)} height={Math.round(size * 0.44)} strokeWidth={1.75} color="#FFFFFF" style={{ color: '#FFFFFF' }} />
       </div>
   );
-};
+});
 
 // smaller version for list rows
-const QuestRowIcon = ({ questId, c, muted }) => {
+const QuestRowIcon = React.memo(function QuestRowIcon({ questId, c, muted }) {
   const theme = QUEST_THEME[questId] || { icon: 'target', cat: 'blue' };
   const Icon = QuestSvg[theme.icon] || QuestSvg.target;
   const color = c[theme.cat];
@@ -720,10 +929,10 @@ const QuestRowIcon = ({ questId, c, muted }) => {
         <Icon className="sq-icon-pop-in sq-icon-tap" width={16} height={16} strokeWidth={1.75} color={muted ? c.labelTertiary : '#FFFFFF'} style={{ color: muted ? c.labelTertiary : '#FFFFFF' }} />
       </div>
   );
-};
+});
 
 // like the activity rings but just one flat stroke, no glow
-const ProgressRing = ({ pct, size = 46, stroke = 5, c }) => {
+const ProgressRing = React.memo(function ProgressRing({ pct, size = 46, stroke = 5, c }) {
   const r = (size - stroke) / 2;
   const circumference = 2 * Math.PI * r;
   const offset = circumference - (pct / 100) * circumference;
@@ -739,15 +948,37 @@ const ProgressRing = ({ pct, size = 46, stroke = 5, c }) => {
         </div>
       </div>
   );
-};
+});
 
 // little stat tile
-const StatChip = ({ label, value, c, accentColor }) => (
-    <div style={{ ...glassStyle(c), borderRadius: 20, padding: '14px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-      <span className="sq-mono" style={{ fontSize: 20, fontWeight: 600, color: accentColor || c.label, lineHeight: 1 }}>{value}</span>
-      <span style={{ fontSize: 11, fontWeight: 500, color: c.labelSecondary }}>{label}</span>
-    </div>
-);
+const StatChip = React.memo(function StatChip({ label, value, c, accentColor }) {
+  return (
+      <div style={{ ...glassStyle(c), borderRadius: 20, padding: '14px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+        <span className="sq-mono" style={{ fontSize: 20, fontWeight: 600, color: accentColor || c.label, lineHeight: 1 }}>{value}</span>
+        <span style={{ fontSize: 11, fontWeight: 500, color: c.labelSecondary }}>{label}</span>
+      </div>
+  );
+});
+
+// profile picture — shows the account's photo if it has one, otherwise a
+// flat colored circle with the username's first letter. Used in the
+// header, the leaderboard, and the settings screen so avatars look
+// identical everywhere.
+const Avatar = React.memo(function Avatar({ photoURL, username, size = 36, c, ring }) {
+  const initial = (username || '?').trim().charAt(0).toUpperCase() || '?';
+  return (
+      <div style={{
+        width: size, height: size, borderRadius: '50%', flexShrink: 0, overflow: 'hidden',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: photoURL ? 'transparent' : c.blue,
+        boxShadow: ring ? `0 0 0 2px ${c.bgElevated}, 0 0 0 3.5px ${c.blue}` : 'none',
+      }}>
+        {photoURL
+            ? <img src={photoURL} alt={username || 'Profile'} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            : <span style={{ color: '#fff', fontWeight: 700, fontSize: size * 0.42 }}>{initial}</span>}
+      </div>
+  );
+});
 
 // confetti
 const Confetti = ({ count = 22, big = false, c }) => {
@@ -768,6 +999,8 @@ const Confetti = ({ count = 22, big = false, c }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [count, big]);
 
+  // Keyframes/class for confetti pieces live once in <SystemType/> instead of
+  // being re-injected as a fresh <style> tag every time a quest completes.
   return (
       <div className="pointer-events-none absolute inset-0 overflow-hidden z-20" aria-hidden="true">
         {pieces.map(p => (
@@ -777,60 +1010,207 @@ const Confetti = ({ count = 22, big = false, c }) => {
               background: p.color, width: p.w, height: p.h,
             }} />
         ))}
-        <style>{`
-        .sq-confetti-piece { position: absolute; top: -6%; border-radius: 2px; opacity: 0.9; animation-name: sq-confetti-fall; animation-timing-function: cubic-bezier(0.35,0,0.65,1); animation-fill-mode: forwards; }
-        @keyframes sq-confetti-fall { 0% { transform: translate(0,0) rotate(0deg); opacity: 1; } 85% { opacity: 1; } 100% { transform: translate(var(--sq-drift), 115vh) rotate(var(--sq-rot)); opacity: 0; } }
-      `}</style>
       </div>
   );
 };
 
-// pick a username
-function UsernameModal({ onSubmit, c }) {
-  const [name, setName] = useState('');
-  const [error, setError] = useState(null);
+// Ticking countdown — isolated into its own component with local state so a
+// 1-second tick doesn't force the entire quest list / camera / ambient
+// background tree above it to re-render. Parents only re-render when the
+// underlying `lastReset` timestamp actually changes (i.e. once a day).
+function CountdownDisplay({ lastReset, className, style }) {
+  const [text, setText] = useState('--:--:--');
+  useEffect(() => {
+    const tick = () => {
+      const remaining = ONE_DAY_MS - (Date.now() - lastReset);
+      if (remaining <= 0) { setText('00:00:00'); return; }
+      const h = Math.floor((remaining / 3_600_000) % 24);
+      const m = Math.floor((remaining /    60_000) % 60);
+      const s = Math.floor((remaining /     1_000) % 60);
+      setText(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [lastReset]);
+  return <span className={className} style={style}>{text}</span>;
+}
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    const trimmed = name.trim();
-    if (trimmed.length < 3) { setError('At least 3 characters.'); return; }
-    if (trimmed.length > 20) { setError('20 characters max.'); return; }
-    if (!/^[a-zA-Z0-9_ ]+$/.test(trimmed)) { setError('Letters, numbers, and underscores only.'); return; }
-    haptic(15);
-    onSubmit(trimmed);
+// first-run welcome screen — shown once, before any account exists on this
+// device, then never again (a localStorage flag remembers it's been seen).
+// Explains the core loop and specifically calls out where to add a profile
+// photo later, since that lives inside Settings rather than being part of
+// account creation itself.
+function WelcomeScreen({ onContinue, c }) {
+  const steps = [
+    { Icon: ListChecks, title: 'Get a fresh set of quests every day', body: 'A new mix of strength, cardio, mindfulness, and recovery quests unlocks every 24 hours.' },
+    { Icon: ShieldCheck, title: 'Verify with your camera', body: 'On-device AI and pose tracking confirm you actually did it — nothing you record ever leaves your phone.' },
+    { Icon: Sparkles, title: 'Level up and climb the leaderboard', body: 'Earn XP for every quest, build a daily streak, and see how you rank against everyone else.' },
+    { Icon: Camera, title: 'Add a profile photo anytime', body: "Once you're signed in, open Settings → tap your avatar → choose a photo. It syncs to your account automatically." },
+  ];
+  return (
+      <div className="fixed inset-0 z-[100] flex flex-col sq-anim-in" style={{ background: c.bg }}>
+        <div className="flex-1 sq-scroll overflow-y-auto flex flex-col justify-center px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 32px)', paddingBottom: 24 }}>
+          <div className="text-center mb-8">
+            <div className="sq-icon-fff" style={{ width: 76, height: 76, borderRadius: 30, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
+              <TrophyIcon size={34} />
+            </div>
+            <h1 className="sq-large-title" style={{ fontSize: 30, fontWeight: 800, color: c.label, marginBottom: 8 }}>Welcome to QuestDaily</h1>
+            <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.4, maxWidth: 320, margin: '0 auto' }}>
+              A few things to know before you dive in.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            {steps.map(({ Icon, title, body }, i) => (
+                <div key={title} className="sq-anim-in" style={{ ...glassStyle(c), borderRadius: 20, padding: 16, display: 'flex', gap: 14, animationDelay: `${i * 0.06}s` }}>
+                  <div className="sq-icon-fff" style={{ width: 40, height: 40, borderRadius: 14, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <Icon size={19} strokeWidth={1.9} />
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{ fontSize: 14, fontWeight: 600, color: c.label, lineHeight: 1.3 }}>{title}</p>
+                    <p style={{ fontSize: 12.5, color: c.labelSecondary, marginTop: 3, lineHeight: 1.45 }}>{body}</p>
+                  </div>
+                </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="px-6" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 24px)' }}>
+          <button onClick={onContinue} style={{ width: '100%', padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, color: '#fff', background: c.blue }}>
+            Get started
+          </button>
+        </div>
+      </div>
+  );
+}
+
+
+// rest of the app until resolved, same as the old name-picker did, but now
+// backs onto real Firebase Auth accounts instead of a purely local name.
+function AuthModal({ onSignedUp, onLoggedIn, c }) {
+  const [mode, setMode] = useState('signup'); // 'signup' | 'login'
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const switchMode = (next) => {
+    setMode(next); setError(null); setPassword(''); setConfirmPassword(''); setShowPassword(false);
   };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (submitting) return;
+    setError(null);
+
+    const usernameError = validateUsername(username);
+    if (usernameError) { setError(usernameError); return; }
+
+    if (mode === 'signup') {
+      const passwordError = validatePassword(password);
+      if (passwordError) { setError(passwordError); return; }
+      if (password !== confirmPassword) { setError('Passwords don\'t match.'); return; }
+    } else if (!password) {
+      setError('Enter your password.'); return;
+    }
+
+    setSubmitting(true);
+    haptic(10);
+    try {
+      if (mode === 'signup') {
+        const { username: finalUsername } = await signUpAccount(username, password);
+        onSignedUp(finalUsername);
+      } else {
+        const { username: finalUsername } = await logInAccount(username, password);
+        onLoggedIn(finalUsername);
+      }
+    } catch (err) {
+      console.error(`${mode} failed:`, err);
+      setError(friendlyAuthError(err));
+      setSubmitting(false);
+    }
+  };
+
+  const inputStyle = { width: '100%', borderRadius: 14, border: `1px solid ${c.separator}`, background: c.bgSecondary, color: c.label, padding: '11px 40px 11px 40px', fontSize: 15, fontWeight: 500, outline: 'none' };
 
   return (
       <div className="fixed inset-0 z-[100] flex items-center justify-center p-5 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
-        <div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 340, padding: '28px 24px 20px', textAlign: 'center' }}>
-          <div style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+        <div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 360, padding: '28px 24px 22px', textAlign: 'center' }}>
+          <div className="sq-icon-fff" style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
             <TrophyIcon size={24} />
-            <style>{`div > svg { color: #fff; }`}</style>
           </div>
-          <h2 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label }}>Pick a name</h2>
+          <h2 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label }}>
+            {mode === 'signup' ? 'Create your account' : 'Welcome back'}
+          </h2>
           <p style={{ fontSize: 13, lineHeight: 1.4, color: c.labelSecondary, marginTop: 6 }}>
-            This is how you'll appear on the leaderboard. You can only set it once.
+            {mode === 'signup'
+                ? 'Your progress syncs to this account on any device.'
+                : 'Log in to pick up where you left off.'}
           </p>
-          <form onSubmit={handleSubmit} style={{ marginTop: 18 }}>
-            <input
-                type="text" value={name} autoFocus maxLength={20}
-                onChange={e => { setName(e.target.value); setError(null); }}
-                placeholder="QuestMaster99"
-                style={{ width: '100%', borderRadius: 14, border: `1px solid ${c.separator}`, background: c.bgSecondary, color: c.label, padding: '11px 14px', fontSize: 15, fontWeight: 500, textAlign: 'center', outline: 'none' }}
-            />
-            {error && <p style={{ color: c.red, fontSize: 12, fontWeight: 500, marginTop: 8 }}>{error}</p>}
-            <button type="submit" style={{ width: '100%', marginTop: 14, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: '#FFFFFF', background: c.blue }}>
-              Continue
+
+          <form onSubmit={handleSubmit} style={{ marginTop: 18, textAlign: 'left' }}>
+            <div style={{ position: 'relative' }}>
+              <AtSign size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+              <input
+                  type="text" value={username} autoFocus autoCapitalize="none" autoCorrect="off"
+                  maxLength={20}
+                  onChange={e => { setUsername(e.target.value); setError(null); }}
+                  placeholder="Username"
+                  style={{ ...inputStyle, paddingRight: 14 }}
+              />
+            </div>
+
+            <div style={{ position: 'relative', marginTop: 10 }}>
+              <Lock size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+              <input
+                  type={showPassword ? 'text' : 'password'} value={password}
+                  autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                  onChange={e => { setPassword(e.target.value); setError(null); }}
+                  placeholder="Password"
+                  style={inputStyle}
+              />
+              <button type="button" onClick={() => setShowPassword(s => !s)} aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: c.labelTertiary, padding: 4 }}>
+                {showPassword ? <EyeOff size={16} strokeWidth={2} /> : <Eye size={16} strokeWidth={2} />}
+              </button>
+            </div>
+
+            {mode === 'signup' && (
+                <div style={{ position: 'relative', marginTop: 10 }}>
+                  <Lock size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                  <input
+                      type={showPassword ? 'text' : 'password'} value={confirmPassword}
+                      autoComplete="new-password"
+                      onChange={e => { setConfirmPassword(e.target.value); setError(null); }}
+                      placeholder="Confirm password"
+                      style={{ ...inputStyle, paddingRight: 14 }}
+                  />
+                </div>
+            )}
+
+            {error && <p style={{ color: c.red, fontSize: 12, fontWeight: 500, marginTop: 10 }}>{error}</p>}
+
+            <button type="submit" disabled={submitting}
+                    style={{ width: '100%', marginTop: 14, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: '#FFFFFF', background: c.blue, opacity: submitting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              {submitting && <span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,0.35)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
+              {submitting ? (mode === 'signup' ? 'Creating account…' : 'Logging in…') : (mode === 'signup' ? 'Create account' : 'Log in')}
             </button>
           </form>
-          <p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 12 }}>Only your name, level, and XP are shared.</p>
+
+          <button onClick={() => switchMode(mode === 'signup' ? 'login' : 'signup')} disabled={submitting}
+                  style={{ marginTop: 16, fontSize: 13, fontWeight: 500, color: c.blue }}>
+            {mode === 'signup' ? 'Already have an account? Log in' : 'New here? Create an account'}
+          </button>
         </div>
       </div>
   );
 }
 
 // leaderboard
-function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syncError, onRetrySync, c }) {
+function LeaderboardScreen({ dark, onBack, myUid, myUsername, myPhotoURL, myLevel, myXp, syncError, onRetrySync, c }) {
   const { entries, status, errorDetail } = useLeaderboard();
 
   // don't surface a name until they've actually earned XP — someone who's
@@ -880,6 +1260,7 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
                 <div style={{ width: 34, height: 34, borderRadius: 999, background: 'rgba(255,255,255,0.22)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: 13 }} className="sq-mono">
                   #{myRank}
                 </div>
+                <Avatar photoURL={myPhotoURL} username={myUsername} size={34} c={c} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <p style={{ color: '#fff', fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{myUsername} (You)</p>
                   <p className="sq-mono" style={{ color: 'rgba(255,255,255,0.75)', fontSize: 11, fontWeight: 500 }}>Level {myLevel} · {myXp} XP this level</p>
@@ -926,6 +1307,7 @@ function LeaderboardScreen({ dark, onBack, myUid, myUsername, myLevel, myXp, syn
                           <div className="sq-mono" style={{ width: 30, height: 30, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, background: RANK_COLOR[rank] || c.fill, color: RANK_COLOR[rank] ? '#fff' : c.labelSecondary }}>
                             {rank}
                           </div>
+                          <Avatar photoURL={entry.photoURL} username={entry.username} size={30} c={c} />
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <p style={{ fontSize: 14, fontWeight: 600, color: c.label, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {entry.username || 'Adventurer'}{isMe ? ' (You)' : ''}
@@ -1032,13 +1414,146 @@ function HistoryScreen({ history, dark, onToggleTheme, c }) {
   );
 }
 
-// bottom tab bar — native iOS floating dock: heavy frosted glass, no sliding
+// settings tab — profile photo, appearance, account actions. A real
+// settings screen instead of scattering account controls (log out, theme)
+// across other screens.
+function SettingsScreen({
+  username, photoURL, uid, dark, onToggleTheme,
+  onPhotoFile, photoUploading, photoError, onDismissPhotoError,
+  onLogout, onDeleteAccount, c,
+}) {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
+
+  const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', textAlign: 'left' };
+
+  const handleDeleteConfirm = async () => {
+    setDeleting(true); setDeleteError(null);
+    const res = await onDeleteAccount();
+    if (res && !res.ok) { setDeleting(false); setDeleteError(res.error); }
+    // on success this component unmounts (auth state flips to signed-out), nothing more to do
+  };
+
+  return (
+      <div className="relative z-10 flex flex-col flex-1 sq-anim-in">
+        <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
+          <div className="flex items-center justify-between">
+            <h1 className="sq-large-title" style={{ fontSize: 30, fontWeight: 700, color: c.label }}>Settings</h1>
+            <button onClick={onToggleTheme} aria-label="Toggle theme"
+                    style={{ ...glassStyle(c), width: 32, height: 32, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
+              <span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 sq-scroll overflow-y-auto px-4 pt-3 space-y-6" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
+          {/* Profile */}
+          <div style={{ ...glassStyle(c), borderRadius: 20, padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+            <label style={{ position: 'relative', cursor: 'pointer', display: 'inline-block' }}>
+              <Avatar photoURL={photoURL} username={username} size={76} c={c} ring />
+              <div className="sq-icon-fff" style={{ position: 'absolute', bottom: -2, right: -2, width: 26, height: 26, borderRadius: '50%', background: c.blue, border: `2px solid ${c.bgElevated}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {photoUploading
+                    ? <span style={{ width: 11, height: 11, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />
+                    : <Camera size={12} strokeWidth={2} />}
+              </div>
+              <input type="file" accept="image/*" className="hidden" disabled={photoUploading}
+                     onChange={e => { const f = e.target.files?.[0]; if (f) onPhotoFile(f); e.target.value = ''; }} />
+            </label>
+            <p style={{ fontSize: 16, fontWeight: 600, color: c.label, marginTop: 12 }}>{username}</p>
+            <p style={{ fontSize: 12, color: c.labelTertiary, marginTop: 2 }}>Tap your photo to change it</p>
+            {photoError && (
+                <div style={{ marginTop: 10, borderRadius: 12, padding: '8px 12px', background: dark ? 'rgba(255,69,58,0.14)' : 'rgba(255,59,48,0.08)' }}>
+                  <p style={{ fontSize: 12, fontWeight: 500, color: c.red }}>{photoError}</p>
+                  <button onClick={onDismissPhotoError} style={{ fontSize: 11, fontWeight: 700, color: c.red, opacity: 0.75, marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.3 }}>Dismiss</button>
+                </div>
+            )}
+          </div>
+
+          {/* Appearance */}
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Appearance</p>
+            <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+              <div style={rowStyle}>
+                <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.indigo, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  {dark ? <Moon size={15} strokeWidth={1.9} /> : <Sun size={15} strokeWidth={1.9} />}
+                </div>
+                <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Dark mode</span>
+                <button onClick={onToggleTheme} aria-label="Toggle dark mode"
+                        style={{ width: 46, height: 27, borderRadius: 999, background: dark ? c.blue : c.fill, position: 'relative', flexShrink: 0, transition: 'background-color 0.25s ease' }}>
+                  <span style={{ position: 'absolute', top: 2, left: dark ? 21 : 2, width: 23, height: 23, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)', transition: 'left 0.22s cubic-bezier(0.34,1.56,0.64,1)' }} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Account */}
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Account</p>
+            <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+              <button onClick={onLogout} style={rowStyle}>
+                <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.gray, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <LogOut size={14} strokeWidth={1.9} />
+                </div>
+                <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Log out</span>
+                <ChevronIcon color={c.labelTertiary} />
+              </button>
+              <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+              {!confirmingDelete ? (
+                  <button onClick={() => { setConfirmingDelete(true); setDeleteError(null); }} style={rowStyle}>
+                    <div style={{ width: 30, height: 30, borderRadius: 10, background: dark ? 'rgba(255,69,58,0.16)' : 'rgba(255,59,48,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: c.red }}>
+                      <Trash2 size={14} strokeWidth={1.9} />
+                    </div>
+                    <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.red }}>Delete account</span>
+                    <ChevronIcon color={c.labelTertiary} />
+                  </button>
+              ) : (
+                  <div style={{ padding: '14px' }}>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: c.label }}>Delete your account?</p>
+                    <p style={{ fontSize: 12, color: c.labelSecondary, marginTop: 4, lineHeight: 1.4 }}>
+                      This permanently removes your profile, history, and leaderboard entry. This can't be undone.
+                    </p>
+                    {deleteError && <p style={{ fontSize: 12, fontWeight: 500, color: c.red, marginTop: 8 }}>{deleteError}</p>}
+                    <div className="flex gap-2.5" style={{ marginTop: 12 }}>
+                      <button onClick={() => { setConfirmingDelete(false); setDeleteError(null); }} disabled={deleting}
+                              style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.fill, color: c.label }}>
+                        Cancel
+                      </button>
+                      <button onClick={handleDeleteConfirm} disabled={deleting}
+                              style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.red, color: '#fff', opacity: deleting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                        {deleting && <span style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
+                        {deleting ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
+                  </div>
+              )}
+            </div>
+          </div>
+
+          {/* About */}
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>About</p>
+            <div style={{ ...glassStyle(c), borderRadius: 20, padding: '14px 16px' }}>
+              <p style={{ fontSize: 12.5, color: c.labelSecondary, lineHeight: 1.5 }}>
+                Level, XP, streak, quest history, and your profile photo sync to your account.
+                Quest check-in photos and today's quest list stay on this device only.
+              </p>
+              <p className="sq-mono" style={{ fontSize: 10, color: c.labelTertiary, marginTop: 10 }}>QuestDaily · v1.0</p>
+            </div>
+          </div>
+        </div>
+      </div>
+  );
+}
+
+
 // pill highlight, iOS system blue for the active tab and iOS system gray
 // for inactive tabs.
-function TabBar({ activeTab, onChange, c }) {
+const TabBar = React.memo(function TabBar({ activeTab, onChange, c }) {
   const items = [
     { key: 'quests', label: 'Quests', Icon: CheckSquare },
     { key: 'history', label: 'History', Icon: HistoryIcon },
+    { key: 'settings', label: 'Settings', Icon: SettingsIcon },
   ];
   return (
       <div style={{ position: 'fixed', left: '50%', bottom: 'max(env(safe-area-inset-bottom), 16px)', transform: 'translateX(-50%)', zIndex: 50 }}>
@@ -1049,7 +1564,7 @@ function TabBar({ activeTab, onChange, c }) {
               borderRadius: 999,
               padding: '6px 6px',
               display: 'flex',
-              width: 216,
+              width: 300,
             }}
         >
           {items.map(({ key, label, Icon }) => {
@@ -1083,7 +1598,7 @@ function TabBar({ activeTab, onChange, c }) {
         </div>
       </div>
   );
-}
+});
 
 // add to home screen prompt
 function DeviceInstallPrompt({ onDismiss, c }) {
@@ -1100,9 +1615,8 @@ function DeviceInstallPrompt({ onDismiss, c }) {
           {step === 0 && (
               <>
                 <div className="text-center mb-8">
-                  <div style={{ width: 84, height: 84, borderRadius: 32, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
-                    <IOSAddIcon />
-                    <style>{`div > svg { color: #fff; width: 40px; height: 40px; }`}</style>
+                  <div className="sq-icon-fff" style={{ width: 84, height: 84, borderRadius: 32, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+                    <IOSAddIcon style={{ width: 40, height: 40 }} />
                   </div>
                   <h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 8 }}>Add to Home Screen</h3>
                   <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.4 }}>Which device are you using?</p>
@@ -1125,9 +1639,8 @@ function DeviceInstallPrompt({ onDismiss, c }) {
                   <p style={{ fontSize: 14, color: c.labelSecondary, marginBottom: 28 }}>Step {step} of 2</p>
                 </div>
                 <div style={{ ...glassStyle(c), borderRadius: 28, padding: '40px 24px', marginBottom: 20, textAlign: 'center' }}>
-                  <div style={{ width: 72, height: 72, borderRadius: 999, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
-                    {step === 1 ? <IOSShareIcon /> : <IOSAddIcon />}
-                    <style>{`div > svg { width: 30px; height: 30px; }`}</style>
+                  <div className="sq-icon-fff" style={{ width: 72, height: 72, borderRadius: 999, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+                    {step === 1 ? <IOSShareIcon style={{ width: 30, height: 30 }} /> : <IOSAddIcon style={{ width: 30, height: 30 }} />}
                   </div>
                   <p style={{ fontSize: 18, fontWeight: 600, color: c.label, marginBottom: 6 }}>
                     {step === 1 ? 'Tap the Share button' : 'Tap Add to Home Screen'}
@@ -1146,9 +1659,8 @@ function DeviceInstallPrompt({ onDismiss, c }) {
                   <p style={{ fontSize: 14, color: c.labelSecondary, marginBottom: 28 }}>Step {step} of 2</p>
                 </div>
                 <div style={{ ...glassStyle(c), borderRadius: 28, padding: '40px 24px', marginBottom: 20, textAlign: 'center' }}>
-                  <div style={{ width: 72, height: 72, borderRadius: 999, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
-                    {step === 1 ? <AndroidMenuIcon /> : <AndroidAddIcon />}
-                    <style>{`div > svg { width: 30px; height: 30px; }`}</style>
+                  <div className="sq-icon-fff" style={{ width: 72, height: 72, borderRadius: 999, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+                    {step === 1 ? <AndroidMenuIcon style={{ width: 30, height: 30 }} /> : <AndroidAddIcon style={{ width: 30, height: 30 }} />}
                   </div>
                   <p style={{ fontSize: 18, fontWeight: 600, color: c.label, marginBottom: 6 }}>
                     {step === 1 ? 'Tap the menu icon' : 'Tap Add to Home Screen'}
@@ -1180,7 +1692,7 @@ function DeviceInstallPrompt({ onDismiss, c }) {
 }
 
 // quest detail
-function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMarkComplete, c }) {
+function QuestDetailScreen({ quest, dark, onToggleTheme, lastReset, onBack, onMarkComplete, c }) {
   const about = QUEST_ABOUT[quest.id] || 'Stay consistent — every quest you complete adds up to real progress.';
   const theme = QUEST_THEME[quest.id] || { cat: 'blue' };
   const accent = c[theme.cat];
@@ -1192,7 +1704,7 @@ function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMar
             <BackChevron color={c.blue} /><span style={{ fontSize: 17 }}>Quests</span>
           </button>
           <div className="flex items-center gap-3">
-            <span className="sq-mono" style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>{timeLeft}</span>
+            <CountdownDisplay lastReset={lastReset} className="sq-mono" style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }} />
             <button onClick={onToggleTheme} style={{ ...glassStyle(c), width: 30, height: 30, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
               <span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
             </button>
@@ -1223,7 +1735,7 @@ function QuestDetailScreen({ quest, dark, onToggleTheme, timeLeft, onBack, onMar
 }
 
 // completion screen
-function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack, c }) {
+function CompletionScreen({ quest, dark, onToggleTheme, lastReset, onBack, c }) {
   const quote = useMemo(() => QUEST_QUOTE[quest?.id] || QUEST_QUOTES[Math.floor(Math.random() * QUEST_QUOTES.length)], [quest?.id]);
   const leveledUp = Boolean(quest?.leveledUp);
   const accent = leveledUp ? c.orange : c.green;
@@ -1237,7 +1749,7 @@ function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack, c }) {
             <BackChevron color={c.blue} /><span style={{ fontSize: 17 }}>Quests</span>
           </button>
           <div className="flex items-center gap-3">
-            <span className="sq-mono" style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>{timeLeft}</span>
+            <CountdownDisplay lastReset={lastReset} className="sq-mono" style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }} />
             <button onClick={onToggleTheme} style={{ ...glassStyle(c), width: 30, height: 30, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
               <span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
             </button>
@@ -1251,9 +1763,8 @@ function CompletionScreen({ quest, dark, onToggleTheme, timeLeft, onBack, c }) {
             Level up
           </span>
           )}
-          <div className="sq-anim-check" style={{ width: 88, height: 88, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: accent }}>
+          <div className="sq-anim-check sq-icon-fff" style={{ width: 88, height: 88, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: accent }}>
             <CheckIcon size={38} />
-            <style>{`div > svg { color: #fff; }`}</style>
           </div>
           <h2 style={{ marginTop: 18, fontSize: 22, fontWeight: 700, color: c.label }}>Quest complete</h2>
           <span className="sq-mono" style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: '#fff', background: accent, padding: '4px 12px', borderRadius: 999 }}>
@@ -1455,6 +1966,19 @@ function CameraModal({ quest, onConfirm, onCancel, c }) {
     setRepCue('Get in frame');
   }, [quest.reps, quest.progress]);
 
+  // NOTE (perf fix): rep-based quests (pushups/squats/pullups/etc.) are
+  // verified entirely by the MediaPipe pose-angle loop below, which already
+  // runs on every video frame via requestAnimationFrame — that's the real
+  // rep counter. This generic zero-shot classifier scan loop is only needed
+  // to confirm non-rep quest types (action/food/map), so it now bails out
+  // immediately for quest.reps. Previously it ran *concurrently* with the
+  // pose loop for rep quests too: doubling model inference load exactly when
+  // the device is already busiest (running pose tracking every frame), and
+  // — since `confirmed` was a single shared piece of state — it could flip
+  // the "complete quest" button to enabled just from a generic "doing
+  // pushups" label match, without the rep counter having reached the target.
+  // A lightweight, rep-specific anti-spoof check (below) already covers the
+  // "photo/video of someone else" case for this quest type.
   useEffect(() => {
     if (quest.reps) return undefined;
     if (phase !== 'live' || !modelReady || confirmed || uploading || !labels || !classifierLabels.length) return undefined;
@@ -2017,7 +2541,8 @@ function CameraModal({ quest, onConfirm, onCancel, c }) {
 // main app
 export default function QuestDailyApp() {
   const [isMounted, setIsMounted] = useState(false);
-  const uid = useAnonymousAuth();
+  const { user: authUser, loading: authLoading } = useAuthUser();
+  const uid = authUser?.uid ?? null;
 
   const [dark, setDark] = useState(true);
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
@@ -2033,6 +2558,10 @@ export default function QuestDailyApp() {
   const [proofImages, setProofImages] = useState({});
   const [history, setHistory] = useState([]);
   const [activeTab, setActiveTab] = useState('quests');
+  const [photoURL, setPhotoURL] = useState(null);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoError, setPhotoError] = useState(null);
+  const [hasSeenWelcome, setHasSeenWelcome] = useState(true); // defaults true until localStorage is checked, so it never flashes for returning users
 
   useEffect(() => {
     setIsMounted(true);
@@ -2047,8 +2576,8 @@ export default function QuestDailyApp() {
     setXp(parseInt(localStorage.getItem('sq_xp')) || 0);
     setTotalXpEarned(parseInt(localStorage.getItem('sq_totalXpEarned')) || 0);
     setStreak(parseInt(localStorage.getItem('sq_streak')) || 0);
-    setUsername(localStorage.getItem('sq_username') || null);
     setLastReset(parseInt(localStorage.getItem('sq_lastReset')) || 0);
+    setHasSeenWelcome(localStorage.getItem('sq_has_seen_welcome') === 'true');
     setProofImages(JSON.parse(localStorage.getItem('sq_proofs')) || {});
     setHistory(JSON.parse(localStorage.getItem('sq_history')) || []);
 
@@ -2065,38 +2594,62 @@ export default function QuestDailyApp() {
     }
   }, []);
 
-  // once this device has a stable anonymous uid, reconcile with whatever's
-  // already saved in Firestore under that uid: adopt remote progress if
-  // localStorage came back empty (e.g. cleared site data, or a fresh
-  // install that still resolved to the same anonymous session), merge in
-  // any history entries this device hasn't seen yet, and push up any local
-  // entries Firestore doesn't have (covers quests completed before this
-  // syncing existed, or while offline).
-  const cloudSyncedRef = useRef(false);
+  // Pulls this account's synced profile (level/xp/streak), full history, and
+  // profile photo from Firestore and makes it the source of truth locally —
+  // used right after logging in, and again on every app load where a
+  // session is already persisted (Firebase keeps the user signed in across
+  // reloads), so a device always shows whatever the account actually has,
+  // not whatever happened to be cached in this browser's localStorage.
+  //
+  // Importantly, `username` is guaranteed to end up set to *something* once
+  // this resolves — falling back from the `users/{uid}` doc, to the
+  // `leaderboard/{uid}` doc, to the account's own email local-part, to a
+  // generic label — because the app blocks on `username` being set while
+  // showing a full-screen loading state. If every source were empty and
+  // this left username null, that loading screen would never go away.
+  const hydrateAccount = useCallback(async (uidToLoad, fallbackEmail) => {
+    const [profile, remoteHistory, profileDoc] = await Promise.all([
+      fetchRemoteProfile(uidToLoad),
+      fetchRemoteHistory(uidToLoad),
+      getDoc(doc(db, 'users', uidToLoad)).catch(() => null),
+    ]);
+    setLevel(typeof profile?.level === 'number' ? profile.level : 1);
+    setXp(typeof profile?.xp === 'number' ? profile.xp : 0);
+    setTotalXpEarned(typeof profile?.totalXpEarned === 'number' ? profile.totalXpEarned : 0);
+    setStreak(typeof profile?.streak === 'number' ? profile.streak : 0);
+    setHistory(remoteHistory);
+
+    const docUsername = profileDoc?.exists?.() ? profileDoc.data()?.username : null;
+    const emailLocalPart = fallbackEmail ? fallbackEmail.split('@')[0] : null;
+    setUsername(docUsername || profile?.username || emailLocalPart || 'You');
+    setPhotoURL(profileDoc?.exists?.() ? (profileDoc.data()?.photoURL ?? null) : (profile?.photoURL ?? null));
+  }, []);
+
+  // Tracks which uid we've already hydrated so a re-render (or the profile
+  // sync effect below writing back to Firestore) doesn't trigger a refetch
+  // loop — only an actual account change re-hydrates.
+  const hydratedUidRef = useRef(null);
   useEffect(() => {
-    if (!uid || !isMounted || cloudSyncedRef.current) return;
-    cloudSyncedRef.current = true;
-    (async () => {
-      const [profile, remoteHistory] = await Promise.all([fetchRemoteProfile(uid), fetchRemoteHistory(uid)]);
+    if (!isMounted || authLoading) return;
+    if (!authUser) { hydratedUidRef.current = null; return; }
+    if (hydratedUidRef.current === authUser.uid) return;
+    hydratedUidRef.current = authUser.uid;
+    hydrateAccount(authUser.uid, authUser.email);
+  }, [authUser, authLoading, isMounted, hydrateAccount]);
 
-      if (profile && level <= 1 && xp === 0 && totalXpEarned === 0) {
-        if (typeof profile.level === 'number') setLevel(profile.level);
-        if (typeof profile.xp === 'number') setXp(profile.xp);
-        if (typeof profile.totalXpEarned === 'number') setTotalXpEarned(profile.totalXpEarned);
-        if (typeof profile.streak === 'number' && streak === 0) setStreak(profile.streak);
-      }
-
-      setHistory(prevLocal => {
-        const byId = new Map();
-        [...remoteHistory, ...prevLocal].forEach(e => byId.set(e.id, e));
-        const merged = Array.from(byId.values()).sort((a, b) => b.ts - a.ts).slice(0, 500);
-        const remoteIds = new Set(remoteHistory.map(e => e.id));
-        prevLocal.forEach(e => { if (!remoteIds.has(e.id)) syncHistoryEntry(uid, e); });
-        return merged;
-      });
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uid, isMounted]);
+  // Defensive safety net: hydrateAccount above should always resolve
+  // username to something, but if a Firestore call ever hangs indefinitely
+  // instead of resolving or rejecting (a genuine network stall, unlike a
+  // normal failure which is already caught), this guarantees the app still
+  // becomes usable a few seconds later instead of sitting on the loading
+  // screen forever.
+  useEffect(() => {
+    if (!authUser || username) return undefined;
+    const t = setTimeout(() => {
+      setUsername(prev => prev || (authUser.email ? authUser.email.split('@')[0] : 'You'));
+    }, 8000);
+    return () => clearTimeout(t);
+  }, [authUser, username]);
 
   useEffect(() => {
     if (isMounted) {
@@ -2110,9 +2663,76 @@ export default function QuestDailyApp() {
     setShowInstallPrompt(false);
   };
 
-  const handleSetUsername = (name) => {
-    localStorage.setItem('sq_username', name);
-    setUsername(name);
+  // A brand-new account starts from a clean slate — no remote data to fetch,
+  // so just mark it hydrated and let the profile-sync effect below write
+  // the initial (level 1 / 0 xp) doc up to Firestore.
+  const handleSignedUp = (finalUsername) => {
+    hydratedUidRef.current = auth.currentUser?.uid ?? hydratedUidRef.current;
+    setUsername(finalUsername);
+    setLevel(1); setXp(0); setTotalXpEarned(0); setStreak(0); setHistory([]); setProofImages({}); setPhotoURL(null);
+    setActiveTab('quests'); setHasSeenWelcome(true); localStorage.setItem('sq_has_seen_welcome', 'true');
+  };
+
+  const handleLoggedIn = async (finalUsername) => {
+    setUsername(finalUsername); // optimistic — correct casing already resolved during login
+    if (auth.currentUser) {
+      hydratedUidRef.current = auth.currentUser.uid;
+      setProofImages({}); // proof photos are device-local and never synced
+      await hydrateAccount(auth.currentUser.uid, auth.currentUser.email);
+    }
+    setActiveTab('quests'); setHasSeenWelcome(true); localStorage.setItem('sq_has_seen_welcome', 'true');
+  };
+
+  const resetLocalAccountState = () => {
+    hydratedUidRef.current = null;
+    setUsername(null); setPhotoURL(null); setPhotoError(null); setPhotoUploading(false);
+    setLevel(1); setXp(0); setTotalXpEarned(0); setStreak(0); setHistory([]); setProofImages({});
+    setQuests([]); setLastReset(0);
+    setShowLeaderboard(false); setDetailQuestId(null); setCompletionQuest(null); setProofModalId(null);
+    setActiveTab('quests');
+    ['sq_level','sq_xp','sq_totalXpEarned','sq_streak','sq_quests','sq_lastReset','sq_proofs','sq_history','sq_streak_date']
+        .forEach(k => localStorage.removeItem(k));
+  };
+
+  const handleLogout = async () => {
+    haptic(10);
+    try {
+      await logOutAccount();
+    } catch (err) {
+      console.error('Logout failed:', err);
+    }
+    resetLocalAccountState();
+  };
+
+  const handlePhotoFile = async (file) => {
+    if (!uid) return;
+    setPhotoError(null);
+    setPhotoUploading(true);
+    try {
+      const dataUrl = await resizeImageToSquareDataUrl(file);
+      setPhotoURL(dataUrl); // optimistic — update the UI before the write confirms
+      await updateProfilePhoto(uid, dataUrl);
+    } catch (err) {
+      console.error('Profile photo update failed:', err);
+      setPhotoError(err?.message || 'Could not update your photo. Please try again.');
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return { ok: false, error: 'You need to be signed in to do that.' };
+    const usernameLower = username ? username.toLowerCase() : null;
+    try {
+      await deleteAccountData(currentUser.uid, usernameLower);
+      await deleteUser(currentUser);
+      resetLocalAccountState();
+      return { ok: true };
+    } catch (err) {
+      console.error('Account deletion failed:', err);
+      return { ok: false, error: friendlyAuthError(err) };
+    }
   };
 
   const retryLeaderboardSync = () => {
@@ -2122,6 +2742,7 @@ export default function QuestDailyApp() {
     }
   };
 
+
   useEffect(() => {
     if (uid && username) {
       syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned, streak })
@@ -2130,7 +2751,6 @@ export default function QuestDailyApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid, username]);
 
-  const [timeLeft,  setTimeLeft]  = useState('--:--:--');
   const [proofModalId,   setProofModalId]   = useState(null);
   const [viewingProof, setViewingProof] = useState(null);
   const [detailQuestId,     setDetailQuestId]     = useState(null);
@@ -2154,21 +2774,38 @@ export default function QuestDailyApp() {
     setQuests(selected); setLastReset(ts); setProofImages({});
   }, []);
 
+  // Perf fix: this used to hold `timeLeft` as *state on the top-level App
+  // component*, ticking every second and re-rendering the entire tree
+  // (quest list, ambient background, tab bar, etc.) once a second even when
+  // nothing else changed. The visible countdown now lives in its own
+  // <CountdownDisplay> component with local state (see above); this effect
+  // only does the actual bookkeeping — checking whether the daily quest set
+  // has expired — and never calls setState on a tick unless a reset is
+  // actually due, so it no longer causes any per-second re-renders here.
+  const lastResetRef = useRef(lastReset);
+  const questsLenRef = useRef(quests.length);
+  useEffect(() => { lastResetRef.current = lastReset; }, [lastReset]);
+  useEffect(() => { questsLenRef.current = quests.length; }, [quests.length]);
   useEffect(() => {
     if (!isMounted) return;
     const id = setInterval(() => {
-      const now = Date.now(), remaining = ONE_DAY_MS - (now - lastReset);
-      if (remaining <= 0 || quests.length === 0) { generateNewQuests(now); return; }
-      const h = Math.floor((remaining / 3_600_000) % 24);
-      const m = Math.floor((remaining /    60_000) % 60);
-      const s = Math.floor((remaining /     1_000) % 60);
-      setTimeLeft(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`);
+      const now = Date.now();
+      const remaining = ONE_DAY_MS - (now - lastResetRef.current);
+      if (remaining <= 0 || questsLenRef.current === 0) generateNewQuests(now);
     }, 1000);
     return () => clearInterval(id);
-  }, [lastReset, quests.length, generateNewQuests, isMounted]);
+  }, [generateNewQuests, isMounted]);
 
+  // Perf fix: debounce localStorage writes so a burst of related state
+  // updates (e.g. completing a quest touches level/xp/totalXpEarned/streak/
+  // quests/proofImages/history all at once) coalesces into a single
+  // JSON.stringify + write instead of firing on every intermediate state
+  // change during the same batch.
+  const persistTimerRef = useRef(null);
   useEffect(() => {
-    if (isMounted) {
+    if (!isMounted) return undefined;
+    clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = setTimeout(() => {
       localStorage.setItem('sq_level', level);
       localStorage.setItem('sq_xp', xp);
       localStorage.setItem('sq_totalXpEarned', totalXpEarned);
@@ -2177,7 +2814,8 @@ export default function QuestDailyApp() {
       localStorage.setItem('sq_lastReset', lastReset);
       localStorage.setItem('sq_proofs', JSON.stringify(proofImages));
       localStorage.setItem('sq_history', JSON.stringify(history));
-    }
+    }, 300);
+    return () => clearTimeout(persistTimerRef.current);
   }, [level, xp, totalXpEarned, streak, quests, lastReset, proofImages, history, isMounted]);
 
   const applyXpChange = useCallback((amount) => {
@@ -2244,7 +2882,7 @@ export default function QuestDailyApp() {
     setProofModalId(null);
   };
 
-  if (!isMounted) return null;
+  if (!isMounted || authLoading) return null;
 
   const c = dark ? C.dark : C.light;
   const xpPct  = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
@@ -2259,7 +2897,15 @@ export default function QuestDailyApp() {
         <div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg }}>
           <AmbientBackground c={c} />
 
-          {isMounted && !username && <UsernameModal onSubmit={handleSetUsername} c={c} />}
+          {!authUser && !hasSeenWelcome && (
+              <WelcomeScreen c={c} onContinue={() => { haptic(10); setHasSeenWelcome(true); localStorage.setItem('sq_has_seen_welcome', 'true'); }} />
+          )}
+          {!authUser && hasSeenWelcome && <AuthModal onSignedUp={handleSignedUp} onLoggedIn={handleLoggedIn} c={c} />}
+          {authUser && !username && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{ background: c.bg }}>
+                <div style={{ width: 28, height: 28, border: `2.5px solid ${c.fill}`, borderTopColor: c.blue, borderRadius: '50%' }} className="animate-spin" />
+              </div>
+          )}
           {username && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} c={c} />}
 
           {proofModal && (
@@ -2278,17 +2924,23 @@ export default function QuestDailyApp() {
 
           {showLeaderboard ? (
               <LeaderboardScreen dark={dark} c={c} onBack={() => setShowLeaderboard(false)}
-                                 myUid={uid} myUsername={username} myLevel={level} myXp={xp}
+                                 myUid={uid} myUsername={username} myPhotoURL={photoURL} myLevel={level} myXp={xp}
                                  syncError={leaderboardSyncError} onRetrySync={retryLeaderboardSync} />
           ) : completionQuest ? (
-              <CompletionScreen quest={completionQuest} dark={dark} c={c} timeLeft={timeLeft}
+              <CompletionScreen quest={completionQuest} dark={dark} c={c} lastReset={lastReset}
                                 onToggleTheme={() => setDark(d => !d)} onBack={() => setCompletionQuest(null)} />
           ) : detailQuest ? (
-              <QuestDetailScreen quest={detailQuest} dark={dark} c={c} timeLeft={timeLeft}
+              <QuestDetailScreen quest={detailQuest} dark={dark} c={c} lastReset={lastReset}
                                  onToggleTheme={() => setDark(d => !d)} onBack={() => setDetailQuestId(null)}
                                  onMarkComplete={() => setProofModalId(detailQuest.id)} />
           ) : activeTab === 'history' ? (
               <HistoryScreen history={history} dark={dark} c={c} onToggleTheme={() => setDark(d => !d)} />
+          ) : activeTab === 'settings' ? (
+              <SettingsScreen
+                  username={username} photoURL={photoURL} uid={uid} dark={dark} onToggleTheme={() => setDark(d => !d)}
+                  onPhotoFile={handlePhotoFile} photoUploading={photoUploading} photoError={photoError} onDismissPhotoError={() => setPhotoError(null)}
+                  onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} c={c}
+              />
           ) : (
               <div className="relative z-10 flex flex-col flex-1 sq-anim-in">
                 {/* Header */}
@@ -2304,10 +2956,16 @@ export default function QuestDailyApp() {
                               style={{ ...glassStyle(c), width: 32, height: 32, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
                         <span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
                       </button>
+                      <button onClick={() => setActiveTab('settings')} aria-label="Settings">
+                        <Avatar photoURL={photoURL} username={username} size={32} c={c} />
+                      </button>
                     </div>
                   </div>
 
-                  <div className="mt-3 flex items-center gap-2.5">
+                  <div className="mt-3 flex items-center gap-1.5">
+                    <span style={{ fontSize: 12, fontWeight: 500, color: c.labelTertiary }}>{username}</span>
+                  </div>
+                  <div className="mt-1 flex items-center gap-2.5">
                 <span className="sq-mono" style={{ fontSize: 12, fontWeight: 700, color: '#fff', background: c.blue, padding: '3px 9px', borderRadius: 8 }}>
                   LV {level}
                 </span>
@@ -2353,9 +3011,8 @@ export default function QuestDailyApp() {
                             <div className="relative flex-shrink-0">
                               <QuestRowIcon questId={quest.id} c={c} muted={quest.completed} />
                               {quest.completed && (
-                                  <div style={{ position: 'absolute', bottom: -3, right: -3, width: 16, height: 16, borderRadius: '50%', background: c.green, border: `2px solid ${c.bgElevated}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  <div className="sq-icon-fff" style={{ position: 'absolute', bottom: -3, right: -3, width: 16, height: 16, borderRadius: '50%', background: c.green, border: `2px solid ${c.bgElevated}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                     <CheckIcon size={8} />
-                                    <style>{`div > svg { color: #fff; }`}</style>
                                   </div>
                               )}
                             </div>
