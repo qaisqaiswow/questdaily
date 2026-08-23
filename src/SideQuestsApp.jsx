@@ -8,6 +8,8 @@ import { initializeApp, getApps } from 'firebase/app';
 import {
   getAuth, onAuthStateChanged, signOut, deleteUser,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
+  GoogleAuthProvider, signInWithPopup,
+  updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 import {
@@ -16,6 +18,7 @@ import {
   Droplet, Leaf, Utensils, CookingPot, Flower2, Move, Zap, Flame,
   Pencil, Snowflake, Wind, Waves, Target, GlassWater, CupSoda,
   LogOut, Eye, EyeOff, Lock, AtSign, Camera, Trash2, ShieldCheck, Sparkles, ListChecks,
+  Bell, Download, UserCog, KeyRound, ChevronRight, CircleUserRound,
 } from 'lucide-react';
 
 // firebase / leaderboard stuff
@@ -34,6 +37,7 @@ const firebaseConfig = {
 
 const firebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
+const googleProvider = new GoogleAuthProvider();
 const db = getFirestore(firebaseApp);
 const LEADERBOARD_COLLECTION = 'leaderboard';
 const LEADERBOARD_SIZE = 100;
@@ -139,6 +143,8 @@ function friendlyAuthError(err) {
   if (code === 'auth/network-request-failed') return "Can't reach the server. Check your connection.";
   if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
   if (code === 'auth/invalid-email') return 'That username can\'t be used. Try a different one.';
+  if (code === 'auth/popup-blocked') return 'Your browser blocked the sign-in popup. Please allow popups for this site and try again.';
+  if (code === 'auth/account-exists-with-different-credential') return 'That Google account\'s email is already tied to a different sign-in method here.';
   if (code === 'permission-denied' || code === 'firestore/permission-denied') {
     return "Your database's security rules are blocking this — the 'usernames', 'users', and 'leaderboard' collections in Firestore need read/write rules set up. This is a Firebase Console configuration step, not something wrong with what you typed.";
   }
@@ -201,6 +207,127 @@ async function logInAccount(usernameRaw, password) {
 
 async function logOutAccount() {
   await signOut(auth);
+}
+
+// Signs in with a Google popup. Google accounts don't come with a username
+// the person chose, so on a person's very first Google sign-in one is
+// minted automatically from their Google display name (falling back to
+// their email), retried with a random numeric suffix if it's taken — same
+// `usernames` reservation + `users/{uid}` profile doc that the username/
+// password flow creates, so everything downstream (hydration, leaderboard,
+// settings) treats a Google account exactly like any other. Their Google
+// avatar is carried over as the initial profile photo too. Returning users
+// don't need any of this — their `users/{uid}` doc already exists, and the
+// app's normal auth-state hydration effect picks it up the same way a page
+// reload does.
+async function mintUsernameForGoogleUser(user) {
+  const rawBase = user.displayName || (user.email ? user.email.split('@')[0] : 'Player');
+  let base = rawBase.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 16);
+  if (base.length < 3) base = (base + 'Player').slice(0, 16);
+
+  let display = base;
+  let usernameLower = base.toLowerCase();
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const snap = await getDoc(doc(db, 'usernames', usernameLower));
+    if (!snap.exists()) break;
+    const suffix = String(Math.floor(1000 + Math.random() * 9000));
+    display = `${base}${suffix}`.slice(0, 20);
+    usernameLower = display.toLowerCase();
+  }
+
+  await Promise.all([
+    setDoc(doc(db, 'usernames', usernameLower), { uid: user.uid, username: display }),
+    setDoc(doc(db, 'users', user.uid), { username: display, createdAt: Date.now(), photoURL: user.photoURL || null }),
+  ]);
+  if (user.photoURL) {
+    await setDoc(doc(db, 'leaderboard', user.uid), { photoURL: user.photoURL }, { merge: true }).catch(() => {});
+  }
+}
+
+async function signInWithGoogle() {
+  const result = await signInWithPopup(auth, googleProvider);
+  const existing = await getDoc(doc(db, 'users', result.user.uid)).catch(() => null);
+  if (!existing?.exists()) {
+    await mintUsernameForGoogleUser(result.user);
+  }
+  return result.user;
+}
+
+// editing an existing account
+// -----------------------------------------------------------------------
+function getAuthProviderLabel(user) {
+  if (!user) return null;
+  const ids = (user.providerData || []).map(p => p.providerId);
+  if (ids.includes('google.com')) return 'google';
+  if (ids.includes('password')) return 'password';
+  return 'other';
+}
+
+// Renames the account's username. For password accounts this is more than
+// a display change: login derives the (fake) Auth email straight from the
+// username, so the underlying Firebase Auth email has to move in lockstep
+// or the person would be locked out under their new name. That rename can
+// require a recent login — if so, this reauthenticates with the password
+// the caller supplied and retries once. Google accounts skip all of that;
+// their real Google email never changes, so renaming is purely a Firestore
+// metadata update.
+async function updateUsername({ newUsernameRaw, oldUsername, currentPassword }) {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw Object.assign(new Error('You need to be signed in to do that.'), { code: 'auth/no-current-user' });
+
+  const newUsername = newUsernameRaw.trim();
+  const newLower = newUsername.toLowerCase();
+  const oldLower = (oldUsername || '').toLowerCase();
+  const usesPassword = getAuthProviderLabel(currentUser) === 'password';
+
+  if (newLower === oldLower) {
+    // same underlying name, only casing changed (or literally unchanged) —
+    // no Auth email involved, just update the display casing everywhere
+    await Promise.all([
+      setDoc(doc(db, 'usernames', oldLower), { uid: currentUser.uid, username: newUsername }, { merge: true }),
+      setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
+      setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
+    ]);
+    return newUsername;
+  }
+
+  const takenSnap = await getDoc(doc(db, 'usernames', newLower));
+  if (takenSnap.exists()) {
+    throw Object.assign(new Error('That username is already taken.'), { code: 'auth/email-already-in-use' });
+  }
+
+  if (usesPassword) {
+    const newEmail = usernameToEmail(newLower);
+    try {
+      await updateEmail(currentUser, newEmail);
+    } catch (err) {
+      if (err?.code === 'auth/requires-recent-login') {
+        if (!currentPassword) throw err; // caller prompts for the password and retries with it
+        await reauthenticateWithCredential(currentUser, EmailAuthProvider.credential(usernameToEmail(oldLower), currentPassword));
+        await updateEmail(currentUser, newEmail);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  await Promise.all([
+    setDoc(doc(db, 'usernames', newLower), { uid: currentUser.uid, username: newUsername }),
+    setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
+    setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
+  ]);
+  await deleteDoc(doc(db, 'usernames', oldLower)).catch(() => {});
+
+  return newUsername;
+}
+
+// Password-account only. Requires the current password to reauthenticate
+// (Firebase demands a recent login for this regardless of session age).
+async function changeAccountPassword(currentPassword, newPassword) {
+  const currentUser = auth.currentUser;
+  if (!currentUser?.email) throw Object.assign(new Error('You need to be signed in to do that.'), { code: 'auth/no-current-user' });
+  await reauthenticateWithCredential(currentUser, EmailAuthProvider.credential(currentUser.email, currentPassword));
+  await updatePassword(currentUser, newPassword);
 }
 
 // profile pictures
@@ -309,8 +436,16 @@ function useLeaderboard() {
   return { entries, status, errorDetail };
 }
 
-// haptics
+// haptics — gated behind a user preference (Settings → Notifications), so
+// turning it off actually silences every haptic() call app-wide rather than
+// just hiding a toggle that does nothing.
+let hapticsEnabled = true;
+function setHapticsPref(enabled) {
+  hapticsEnabled = enabled;
+  try { localStorage.setItem('sq_haptics_enabled', enabled ? 'true' : 'false'); } catch { /* storage unavailable */ }
+}
 function haptic(pattern = 10) {
+  if (!hapticsEnabled) return;
   try { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(pattern); } catch { /* unsupported */ }
 }
 
@@ -823,6 +958,16 @@ const FlagIcon = React.memo(function FlagIcon({ size = 24 }) {
       </svg>
   );
 });
+const GoogleIcon = React.memo(function GoogleIcon({ size = 18 }) {
+  return (
+      <svg width={size} height={size} viewBox="0 0 48 48">
+        <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12s5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24s8.955,20,20,20s20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
+        <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
+        <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
+        <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
+      </svg>
+  );
+});
 
 // quest icons — mapped straight onto Lucide (SF-Symbols-style) components.
 // Each is a drop-in React component, so existing call sites (which pass
@@ -856,6 +1001,16 @@ const QuestSvg = {
 
 // Quest categories map to system colors, not a rotating decorative palette —
 // each color means the same category everywhere in the app.
+// brand logo — embedded as a data URI (resized + palette-optimized from the
+// uploaded artwork) so the app icon works standalone with no separate asset
+// file or hosting path to manage. White line-art on transparent background,
+// designed to sit inside a solid-color rounded badge the same way the old
+// placeholder trophy icon did.
+const BRAND_LOGO_SRC = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAAFACAMAAAD6TlWYAAADAFBMVEVMaXH////+//////8BBQD+//85Ozyqqqqzs7P///+am5r9/f3////T1NS9wL9qa2r///75+fn8/PwiIiL9/v5/gIBhY2L////8/fyQk5P8/Pt7fn0JCQlMUE75+fdDR0YKCwv///z7+/ianp4HCQgGBgYGBwf8/fhVppP5/PtydHV6fHwNDg4GCAcKCws9Pz6DhISDhIQWGBfKzMsbHR1TVVWAg4HExcS1uLjIycjl5uXCxMNlZ2bc3dypqqrAwcB2d3d2d3bJysnNz85ZWlsgIiJwcXFHSUi4urmqrauCg4Oxs7JjZWR9f37Q0tFNUE7Q0dDJysmgoaHf4N+pq6u/wcC6u7qsra23uLfW19bS09OChIOlpqWvsK+HiYhZXFzo6ehCQ0InKiqztbRmaGeSk5PQ0dGpq6qwsrBtb261t7avsK+dnp7m6Ojc3NxgYmHe397Ky8suMTCRkpPa3NzMzcyVlpW9vr7Y2tmfoJ8mKCdWWFiwsrFBQ0PJysqipKSOkI+en56TlZPt7u23uLjn6eiTlZS/wcGeoJ+WmJfDxMS0tbTc3dxnaGhSU1Ps7e2DhITFxsW1t7aqq6t0dnXFx8Xk5eVvcHDR09NYWlnb3Nu2t7bT1dOqq6ro6ei5urmZmprIyciRk5L3+PiytLKeoJ+mqKfJysn8/fyWmJecnZ2nqKjh4+K9vr1GSUiYmZmQkpGpq6l0dnaUlpaKjIvX2dd9f37IyciNjo7z9PSjpaTv8O86PDu5ublxc3Lf4N/k5eTr7Ozy8vLe391RU1OAgoGYmpheYWGSkpL////+/v79/f3+//////7////+/v3///39//79/fz//v39///+//79/fz//f7//v/9/f/7/Pz6+vr9/f39/fv8//76+/v8/Pv8/Prr7ezl5uXc3d3V1tb9//z9/fr///v///zu7+/19vX///33+Pf8/P3s7u7m5+f+/vn//P76/fzz8/P7///w8fHj4+PT1dP9+/7X2dja29vp6+re397n6ejg4eFMW/0EAAAAyXRSTlMA+wL8AQMCAwH6Bf79BQQF/P7+BPwEP/n8P/w/Bz/+Pw77/T4WEgv+A/4/ISEmG2BAjy5BN2JW/T+T2uJS2cPUL4n9/RhDX0y/EqVVjmj+KeuCYfUi/f37ku66fPrb4Q/oHmL+aGzebel5gUmTPh8l6dYpe8GmpKX10E9zpTXF4ZWBX/bbw4gwvs7C8s42hty67szRmHD1rcVEZGTS7Pfm3be/9bWsePP3MPmyfe9xUN+OxEbMkN5asvCi6X8I4KCqhfhuocnpw/pQJBxXAAAACXBIWXMAAAsTAAALEwEAmpwYAAAgAElEQVR42u19CXwU5fn/O3tlJ9kk7BGz3aaRREgaARUPUBARUKCKQEXwwBvxrrfW+673UY96tF6ttaJVa9Xa1lr76/1/Z3Y/swf7YcN+NjsBDEc+CUdCkPv/PO/M7M4ms5tsstn4+8HYAoFkd+c77/s+1/f5PoTkvCylNnLTxGVxKlBBCEhCTIgKMUoFcXXSW8fzPEd1l1+Q5CZne3s3XD3s2rRp8ybl2tznSv3VGrg2r8Hf8M/syzV71mjXHt0Xm9f0vrSXSr8D+zvtH9VXxW/p2dTT3d3e3uFsb+ra7td/bB4vbzIssK8CAfxfjAp+75JHFhBbuZ0M/rKZiPuUa8+FVxbUN4sKYbnMYy5jXwgdm156dsrlUy946+PPv/rq5h8dc8wxx7PrsBzXd9j/1D8X5BrIi6nfwz4dfMxjfvTJV59f+NZ9F0ydNuXifd2tys2ZPWWiEAgqXwg0QoUbfn+Km5hMg8avhFxy7Xxq5mSB+v3wkv6VLhfPw6sn9y8+/w8/fGDGM5cSG/lffVnI6C/nLb36g7nLdnWz1ehyUQkxDEa2xb1mevs540hJ6aBeuspExk9cSOmoxgTF/St0eRl2e5964pNJP7hpgpt9lz11mazqVfLtvaypK/257QzGsROuv27iHU/t7UAUPSKsPkGSZKeP0kXnXE9MFfk/mZISctiHrY66+oS0YYMkiGUegO/tJY+ffulYeD+4rOWllZVu8r/+slRWlpaWWxUYLz398WUPAYRmV5kYlkRRavI56A0TR5MSe76nn+3Qud1cff36DZHI1q1xXzWl+2+57eSaBkJM1hKTzWYj/6cui81mKrHCadfQsOC08/Y6qNmbFNmVdPL+8w4HQPJ5taqShuW7qNfZujUSTrTW14+iHc89cMgYeEam0koL+T97WSpLTXCTY773yJtvU7Mv2SnIXaLcUU33/azBah34jVeSBf+JV9c2trZu3So11nOOfbfOA/QqSm2W/8PoqRhabKUVYBoP/+0uB+eNy7IYXo8b8MlxZKC2xE1GH76Q1tVu3bo1sb6xvpG+cdLTNbBzS/7Pg5c2ALCXa+751e2Sw9cqhuEodHnoSy+7B+ZygPN32mbeKScAwNZ4Pb/m168Si7XygEFPg6HCQk79026zrzYcFiRB8vHxH5OSAbiEVeTYW2m1S4oAgI311XTqeza71XSgwYfL0GS1k0Pmvk19ErjAkuQq4588sv9tXEqOXEI5kUY2bEzU15t3PzCeVFWRA/Ryg/Ny1buc2cVCMYGjs04k5f3hd9ws3ovfLYXreefzR6I/fQBftlJS+Vg370K/mgbj3P4HcyNYSmbvdpSx2LcMjs3TR5MKGzmwrxIy+ne3Uw9CEqAux5rTc+3iUjJpHaxXyLoERI4ue5WUuskBf9kryZz38VSTRFhW5k2nZ1+DlWT2XjNkriSJhnn5hJrSA9F2GFmTyppz2qvLgpiScpn3PJhtDZaQOd+YfSybI/M99xO77SB4KjJ28uJ+zovZwjafee0k4zVoI0dO5mqDmHiRq9fOI+UHl196EVaQj6ZQPrKxTWqt5XbPNvKowX++l0LqBQ5Lj3nvv4j1IH56BK1k3DTq27phQ0LucMw8ErZrn7OS3E1rG7cmwqKreve/SOlB0HobiFMup/Xrt7bKcjt90t0nu2Vyv9zR2AjR2/pa+uw490HzYWAiTrmR1kN+ICE76d1uU+9//c6aavjXrY21dMpZB9efcZB7yVQKKZZEq+xdfRqpyDQgC87Ff9u6tbZ6/8mk4iBaWdbgFIZSIkn/8p7ekEAu+z7ageuvvm7TPGI9iFW2c/CuvdX168HSJulzR+sQrCJXBOpa1wOAjfH7iekgUtkuK3mxpzopgqfH01+lDzo3mbOLi0uQv6qnJxz0X3JdJvJ7irmWQILbN4mk0lQNc6k3FmgDA7x4LLEfhCmnR/03ygFtwV9Gz2tI7ewXBV5qE2hr8I2jDDzEg1eGuf3eN7RVguQMTycqm9hGJjxHXYFAIOKhPz2IX//H4OlOsxSlMRc9dwGzIyYykZoFuFz0lQZy8ADslwvScBJ1RQWIeOm1aHAt5Ih3KZCFJJHbcxypOohQ/wiOPZe6wJCU0RuOgK8qyNIwL0IS0Et/eNADHNgmXiqbw7BleXo1IjZ+GU0Cp6uMnnsTOZgBHJAdmfAkbaVBKU5nXgJfz2syC7EANdP7D4ZwAw2K5zm5cGRrqw8wI5AF9EUk/2o6eexBCzJQd9rya+psTbQ66cIJZNKWUY1SUODjSw+egGTA5Jc5u2mtLMpceCl5DNLQouCjU8cfPAEHfFUAbB07d+6MO84nX9Pkekl0glt90IfOw46cvNaRBARbNxHgEYYBv8njDwbBefiCdnIrrU12yl0SaeqS5aQPPJryg7iQPDKDM9p5IA9KIqlvbZXrgxefctAE5xeOjFlI47IYCZBWQZZr6VsHMck3MXg19YnNUUrkVXLS0/67gz4MybM+ctQWDsgyIoFKetyx5NQD2oexlZhMJluee7jmFcbZIsBE4OiPD2QTYisdTBWolNxGOcjJEADRnJx34OaxbBV2ctHyh19756b8qHx2cvI/kIcFACbo7RcdqE6g3VpJ7rx2GnVE6OJT8gIBmuxYHpX4IRN9Us2B6cRgM+8pv5hPHY2N7SvgHKvIC0D3HdSFZyDl6c8PyCPQXmK11SyfRjngtCRaOzJL5WQAedU/Ul5CI8Jvmn0gHoGlwH4+4znBXNeKjPpwnPtmTl4wVJHj9vHhCKFljvl3EvcBaDrGnjHVSUf5JOhPjwhinNv7al4AgiMzhZbBCvTQWw44L7qqhFiumiqboX8BWqtpICgIItfzaX4peSt5gnqaEcDHDywA0XSMOePKdjqqTlTa+wOUtdEckx+AJeQz6hGJYKb/PZBSgfYSk9t91fRuB18LmxfFNIAWDjoaEE78Mb+FZCKTtrd0QSi36awDiJAFpmPsGVfWQie+LAna+ouhJkmSXphvVvWsLbSLyPTrcQdKIGyB9sGxl73ZTesaW2VBFNLSJyEK7vB9+QK4YCZtInG65ECphoDpcF/1cLeZBy6zKDRDaTwFoIAAvpl3ffhsmiROet+YAyIOAfGSMWe86QQxhERQCoZaQtGAgp2g/Jqg57rzpSj8gXqJDxgdB0AcYrOWkI8ebnfwLuz9laRQyA8CRUA1DQZVFMvoxXm+Zjn5IeUJfyCUQ2zlUEc7oZvjkF1Kg+D2gU6VYkEkCbayshbfuCe/s6wCstIAoPDAAdDV4L7+7r9QziMw0aygTjgLYVTkngS+Yx4Ui/JKCS5dDQC2X5Xfj/1vrOLe9MUOULAKtymg6QGkKUsi8F0T81tKleSZHgBw35ffWgBtbnYN2cS576OOUaAw5vf3WYE6JHn6+/wAdJNLdzgIXXT0t8qLAQkhW0lVBV5WNcFpteJXVVUlg9NLgjbUzdWNQQkF+kBCTRAytjCsQEHBlYcWhfI8s9LPQkZ6yrcoG11VWm7SpTvuvJRdo3VuVnlp3l30leRfm7j1UluzulsFLQRRZf2YNB0D8O95m9NpAOC0b4nWDQqqYcF6/LjrJv33VyfNPe+Wnyyc/83X33wz6yc/ueXekx776X8n/eD68W6mGGey2iz5RAxvUJ8QaqYB9QxMCyIqzjTaFkGI0yuPyG8z2snlAODl34IVWFlqZZ/nuEc+uGDJ7s1xdX9xTFyS17ZbeMuss/9w9YxL2YK0VtoGfp/vCOD/geOnrEH0YtjyExh+uInxkh2Lj84XwIcBwKkjDCAsPWS6f/dHj0+d8o/VeIMbR9V5RnngKgsnZFEM4x9Hmc1mB1sz7W9Me/2KR09Ffrd9gOknk3siODFe6IUWMAMTVMFLOzJsLcqO+QvyBfA+APCCEQTQYkf43Be9+Ien9jgCuORWdMRbEwkpJrCTHZif6gEVi8X8VJRr61G31U/bZ9172yGkhlRU2S0DEWUj4/6zxuHrkAFAlILVcGMwwn8R/E127Hgvv7yUnbwFAL41cgBWWWEZHXr6w294qMMMmofrYY1gnCVRSQEQoy31tAdZ2ADFsEHsdLnqcDm+/e6FJ0K3lX0A4g6WkgrLcc+3O0bJEXg5iaZ3MNu+q1bRgCCKju5H8wXwQgDw4xECEKPTsaPnzb04CQaw2iuqKwKCUyktepsRMVDtxMLsnbcadvSen/xp3BhQie1fWA5kw8ZOmupjPyuoL0LVX+DJCBjQOdryBvBzAPDCEQHQUgo298RfTfZBVdFVJklpqIK0F36ZG07ddrBgXM5asC97rvzNRRCW9p9TrwIRphnfmEWashup94nFovgnD12aL4BfAYCfjwCANjC6Rx8/HbgRZr4MNG4DOt82KPRaf4ISbmn7jQrq3wCGSS/QU+RnHz+8YQA6sZZScuwSs5w2G5nvEwh46Gf5FTfs5BMA8KuiA2iBtXDEi8/FIbrH25HYWZcBoJBedal7FYReAYR6irl46ljzxCR4KKZ+83fX0jJ14wp9XlMIeOkd+QFoJT8aAQBtpXZy9MTJZvMoV5mgCwhSKyFj62pOWuqCvxaVP2nGVHCUcbT93mtqSElV7vUy7mJoS029UJ+T1kun5wvgMQDg8qIWNS1VxH3EaQtXO6rjgj4Xor+dzANK3bZUu2VtJwcD6neAtRY5M+245VM3KcluToANdAd1RoKa66J/B+UXH30qvzMQAIwS+qNiAmirJEe/CAqPXH2CafLrUMuAUtD9SUiffoLu+AoohkcIsa9Xuniz895JULXMHtEdt8ecbBXVlxNpnyXohbyANU8AuwiUk63FI1SQ0Ue9WU/rfOw2YjH9MqBCr4WoOwFp7y2nuSJ+TCz7QyEBpMc5B/3HHa82ZNmFFmJ5nvrCCSm1g9PvzXx1cI0cu/IjuVjJ8c5iAlhVSuac1MPVNW4ALooUFdW92TuxmXL5NJurrhgNRJSlV/5BVBLzkObzR8EREX2cY+9txGS1G3KBJm3ikzJI8groA2nLWgMQJlFISX7LXXnlRkvI8e1EKBqAleSIK3aDvHJjJCKhoiYVhL4Oc2rVCan/Cbo/KLAG+yxWvz8YgK9kn5l/90FSYZQXrXmY1jJpcgYfIhiUAgHNwVwJDK0kv+mMvFKqoJbfQ5LHFwdAk5U8M1XinclOEXX+U65I33AjY+OKmlERMtZM1kvm6IpfX9JXubSKLF/tCAupCA5jnsSGAMBeVhYJwSWJnUleviJfADeTjqIAaAEi97V7+Lo4EAKktoBqVkXDJZgywxqWQjoSScUjhkj60bmu99Bps929TkI7aXiKegOCnxlhEf8TpQiG1qCazzV1tYFk+3bRQ/+ZV0oVFMf2kPbji0AtgsjjkOnVDi+eVKwGJgWNggEDOyxkrNSs36/5O5CIaGvyOnrOGWOpsGQc9y9TM9uvbPOyX9rawutb6aa3bqAtTV1b14st25voW6PzIRlgswjpPmz4AawkYzEhJ6IiOKARxf0j0KxrT/VYxL4+dI4NrIEjhRNhkL5fcjiptOtcmFOREa6PCBnYINV0Qc2CL/ZyHqdr585mJ31/TH4AHr6D9Aw/gFXkopOinEdCFgC4v7DTAgHDpST0LjYKvfMJhl9qsSyY0uaYEMbTzEcfOnNMOjtqJ6dhU4fO5AuhqCAmGrl9H5EK9ylPyA5PfGdnO32hIU8A95PNww5gOfnoNVpd5g9Go9pRhVGE0HcD9ooN8rsCKP8qRPF0E6EVmo+flALDTm5a7ABzFBBS06iEEKS6W9vpfxrQuR+zfCFn9tZWgxWuyusMPGQv2fyd4QUQtMCX7uVcaE1j6YRBwPAEQ9xEIR280X6NbsaPY75eoWo0N4tl1fSVv6phfgX5KYhqCCzTmCK0iWHZGXjjZAze7NDnde3XZse6PLvOAcB1ZM/wAgjatr/p4bzoqiphKyTfgJwS9dMsKVMt8BWoIOS1FAWWh0DHRDkwwyvoaUpoCyfgLOoKCizn4/drM9xE0Qe9IVY1Qm+450c/eroh347DQ3aTfcOqN+YmR9/t5GTm6/sDURXAQFYAM6JfmtNqZNvJwDf1o5FNcvMPVU5BO7S1+aKSFnX4VQDbknTHWalUVEnql28TgFXk6PsoV8ZwCfjTGzdgAGAaPn0QTNVkYSAwwFUo4PBA9DG99G51eZGjb6eNUQleI6AHELSa/pD2gaEwbc135EwJ+d6uYQWwitx0Ja1W8vVK0jmm5p9ymeCQGuCq9wn3vUoxEakcoRK9Zvt5QcLvTYprD1EWIPZVeuVwAvwWFkRrPylwa+4aGi2IAbjlu8MGIOzf13GciWI1grqAwdgGCAM5+RQ/KJ1EyXgF9gd4YCuFgJP+OhWE/IT6ZCwJ+zN+AknRdvItBhD275W0vhXJjGxipXLH7B78/oEfajHF/Pj9KReyz2NQcU8fmLCH+R5VohME/4I+OSxAuCvooRe5fccN8dYBwK+HD8BKctPrIP0tKXvG71d/gf/FjABMm4yUwxtQbUJUATDAfj4WCfRdgbpcjfqTXjp1grKDTWQ6rW3FuUhwDKrfgz9ZRl8YqtjV98mh35C1wwSgDfdvbWtCYoQUsBr+9AGeIxjL2K2w3IIBhcXs11ZvLBJUANQ9BqFPYYWO0pSEqshla8zJRFjaKGWALDh6PhpqiyAAOGwrEHoA/gP7F+IqKPzHdJ6zMYZaoCumb1JQLA/zGVnaWbUggaDQ+zRN+d2plxPpunFEmZo5+nFaL4tSQhJ1L45dDa83DPUmh3MFIoO9rnG9JK2CjxwJZlR+/VkAxGWGxTbYs3C3cjLpVdhZyWQSbECEgR+M9PpxIZ3/Su/gqIs+r+RVoBS3i8JsOJbGYFGKQLGKIvLJM4cs92cbNgBhesTPAjDbYL0oYd4X1lE06tetvhzLMNTV1eT1xl19rG8rsLUA27BkdHr2ip8FXrhZSY2WkPupIxhEShGWfmE7YJonJkDScOht+mwF7jh8GAAsIb9pr4PZGjAVVoAPHxUiUT8+/NwAipLoSno9PJBemtZ8vfjs82/9+98/+ODvf7/v7GWT13UDPg6YRB13sWSebh0L+n1MMc8TK6O3H8tMCJwkU2kZpCHV1YdMIsxjyT5QLK4g31YAreSuPVx9OAwfGtlWgl9XzNYD6M+opAtNTXWAnXPH5Sd9Ne+662+aMEE9pMZPmLBg3HUz/v3ElLVOSrfxPlnAwEaf+gpk5GTAwt6hhMFVZPYeXoz607yaVbCF28Qk3f/00KnhwwUgKDnMctRjyi0chfx99qgrxO4qwhZPWZOHo4GHlp1z+kcpnqi1nF32lF2/648nLIaxq3xTkyip6S92/AUkHZEBDlKHRhOykp8D9zmVB1IeYyLc4qS3kqE3uNmGB0A7GY2iPgBPNAoZJIN8QOrEZ+Ul3HSil6Py7X97eY67hg0wZhOMtRWCf4Tpv2z8b437xNtu3EMd1fV9kl3wxMBZBGsRls3fKE1HIPr8JHXprbMgYcIw6ev6TQHai4YHQIt99GOwh3CXRqOBqMJLVvasUsDuA6cE/F369pMvP+1mqy47+dlWWY6UzAlHvTNLcDg8YmrVsdeOYq3KL4kwEJn+0qbZ4IdQ3EVfb8aqsJNefEQBOiyHB0CQ1ktWC37V6mYEDTrbod0OZKlF3uFY+8JsuNvy0v7J93ZbJaQ/j33kltWgeJAOnwVWW8drp9ha13i/sr5KlVS+pF/7WBp2Ao3IRAoD4P4CAwgH6+2wa7T0vaG1VbmmaC8l2czRv3x2XAM0L9gGrBUG5MyGSdO7oXVVz7PytyE8Ozvj0YcuYesLhCbPg6BOMSwqgJArFGEo0k+/tQBaIfT0QOQRi+li3F4Rh3b+Y5szR/f/EIIGa1WeJCUrqZn0sNPsERXvUTUQcMaFXU76nDuVcudcMc3ca28udnnaHy3EXQ/HFraS+6NmoVczn54PkLqAWRSDUvbmx48kFfn0zWhbGZptbJNeE81lgj/kDynIREMhUYb19ZgmC7Gc1onpVIXGs0madz1dMAD7W4EWUz7aejYybjeVFd5xJlFSg1PlKIM/5hdHUW7qiWNJ6SAdMmA7VJ621+FpgcMP/E3wbOAXsavL4/+j5iRfSGuFjJqfgAoTSfPkYwvRIPj9AW/hgTb5QcPMBdQXSAEopMvYmWsQblSUfdy6B4ipqmRIbfwnvy5X+0RZZLQreFmpq4lfe6KSCrSTG6HHC9e6oKvYR0E1e/qYIgFosde8fPlTn00Y4NtVkOVdnBTIzBILGssgRVVDSyg7OfrEghpSNSRvwm4iYx7Y4XCuBgBVux6op5NPVb3AMRfT+rAUy3yGIWhs/VtBuvQHsIVLyYMdfBm9YGBdeDZy5yyHU0zFCDQFm/b8MX6IiLGdgF/1ps8aCiB6BnXTE5+inmQrxt00Aqehh/6PUitiWsWyqJFhtLME51icUDgAcxoRG3l6EW3vWAGsJdNANjABkX5IPUmSriCpDxeCGzZC3AGeRmc1vf0at7WkIBqK5KK5/ur6cEiQGD4cVEMqtJSaL4kANgv6Bk1aNAAhl3ElbU8maz3AeSgZgBbSdzaZ40gAlIR0fi7Vj8DG8wZCQEkJ19fTxa8WbPx4JRn973a+XhY2sgyDmb7MVjaMnrmAOhmlkh27abocT88pDoBWkKWoT8aT8Q5+8QCmtaAL6MT1h+E9qyCKKj1Xb0QwVeqlc48toNSFjYyd8TbIOkcY/ZduVsrlIJUwmcY1Sir2GKq/BooFYCW5bB8HWxISwk7625r++iIryJnto2DHSCm7kW4y0qeOxbgHtpC9pLD8w2seougyB4IinXWKCuBZa6mcPgExqypgbaFYK9BOap6CFYVXVxff3j99uOYWWpvQKg+pxsC0KY6xfLAgV/vhCCqsTgM0tF6zxezCt0vSs49gAJaQq4RtCilaUFjRirxJsYwIHCEvQCDZjO8tAnlzYT++ZxWQQOsAP5pRYhQyf1HKOTB/0l74Isw1/2CNXFAvV3htJeTfmFXDNlmFsxXUKOUFdWOyAlhKrhCqw83MaZNaQmjbrDlf7FiY76ecNzqnWcc5UJeiGR+/fTjKWMf0wHQoQEclOlvJSdSD79ksKm620h7BOAlvHlEIRzongDZy4l5HIqKiAU+Qa5+RC0ETVG/MVEfQSCWaUg267AT00eeHR2oKNE0/EXlYXgE1V2olt1Cvkr8S1DqKug3kQoZy2QC0QiaIg3MLyRSMughz03LMzLCQ8QvhWwKCETE3/Rd+F11yJ7zxME3M+wyI2HyPIsXkBq+eDdDTiOVpf1Q07y5IMkEB0LisCVkVykExn67UitdwHr6QncMOE07DXEwR0xR0GXQhs2pWRme9Omw6PzbScAfl+f1fMsZBJTluLS9SzXdKuaJ4HJq7Hx1mACEXvgiPZAGjIxXCkDl8erZNDLhC6tLfqy1B0L5ixAQhEiijDx01jFJnNjL6CUqnuNljriAPdvMa2xDsv195klCkicFZc2YhumOyF9YhDAcnHsr5AZbEVcFIOr5+NQudxESO2gQzT9MnH9U3+/qV9EIAoqzThlUqroRcNEXrWa0gv4CYTVDLp5DxF1iWnFW5XKBcbBpOAK3kF0kfmFRWBFJXoICzv/6WhVFnIo/jCSgFaBrAVE8kcimiqBdZRk8a5vmxVeSqjtcUbMqhoulRGK64M1auFLBMg6c5niSvDSuAleTE/ebkzuZmvHuNjQvnSFcTvc3wjd3kyN2Ost7sew1H4AVRaKuC5375sE9PtJIvrmQfEYzy49BCzWrtakXL79fOlzLH/iMLoN6eDUC4x/+h3q6uFgZgJBpiidydorC9qXrviUYpqHLUclT6DPQ0i1QhTHEmkFJbMuxagcfepRSUyOj3aZwaU5oEXr65AGdJFnaWxe7+E/WKoRZJEFKVSCCVRYSWUJxeMKHvIrKTMVi/FuiqmKDrVUitQ+ggat4G9Y+7i9HXaEt1+D/JAAyw/8VS7YiYLRe84M2bhssKV5ETt1S3orUP4PZT+jsCEqTbxCj4+df29YPt5KxNwQRGSrE+NEk8BtsEVot97thiKBXaKjV+xEwVQAyBscLgVwmegaCUpMvGF4Qb83VfRxo2wYe0VooEYigpFVHOD0QSt2JEMG/umxqsIO9QbyIiRQOMxtOHeRCGtLBc57ymmPN3YdDP7ZDMYkYkGmDcVpUZEWnbGO5aueWsoauVfB850n0AtJIf03qpDbO7EcGvyhMqMiPNqyQ/EOvc9t6b5tTFtGlbM3TjRg3Jk5gDdNJ73SZLMQH8wUu0SaG5Kp9LK1TDhpDCXvri0M9jQwBLyFKg9rWxcwyhQ4otaC4zhjErsXrob3shCHIEe/ikuLNvX5FKjG7Z3pL09MwephAuK4APBeuBXy1lSHFBbzpsJ3G1j84tCD+wD4DgkMw3J/H8C6qKrdhc0Ax+KJhkKGj5gWjSfXzmAcym/K3euQ2ZT32pWADgypVdHdhJSooL4D+CjUwZAe4jElDvBBU+AEAgWP6koRAM1b4rsOEJ5IOJQjgaAoIfkJLRkfOjKgNsYjyFA6303F6K1TUfQtgisjYCvwGA8P8uHpoyqooM4NtSoyQpAMbQFuMdtCixsRzn90zq5wPZKqz9pC0NsjFVCp0J3Wao88Nyp5JGjo3C+gqh3kbAR//jzjgCv/fGSldY7WYIpFphdJT4GCQiijxzAwHciAAC+RLV38X4impQYGQ3AxsFzuTfD+AT2b6fXz4QLPBMh0tT5tqoIAEykoLCMwCiM4o2iFz3XbqnBxyykAfTHSEhmI2O6ug5cQQADGzQRI4S9V4H7GGH16kWScCrejLnHi4h8+79yS1n5bQ0fQGsIL/r5iXF99iIDyukPC9ciUp6KooEMl9GTaGc/A0JFIoKgXGXm4ve21DkkRGg9NTNnn1IkhJyvbl92QlX//DNdr6jq4vV6ZL0L38luUqlSOyiN+SctaJEInoAUd4HfNkvcMEAACAASURBVGgtC9+M765+1SawfIIgJpPxWugTLde1JE3GY1PdrgGDzlToOphYbMF+4AR0Q3dFGFfbamCkHg8KyrYxM77mOpRKsejpmJH9EIR01Gt0hW9FqmFsgGcgTGuaTqs5vHizKLRAo1EYAYSPAYlVIcgp/+RYc1T6ZUH/qMPMQrdAIAM7fyoOTHUdFHkLK10PyHd7CORly0uBIPzlLrNC9mDt6uXZk9uPU2enLNfRL3IUIAxqIuC/P79/U7vT2eFcL4dC4TCrCApSJAIt8sLqjvaO9vbunhtedGfKOJYpEdIGvSiBAiBLqbrob4uu8qgCCBorotwBSSSrTakfP0IdghSNYYL9FXe2Y6UEStx1LlFOtJo3X5Y9gDeKhW1k/JxPr4Hr+N9sNovRSIQV2aDVDB/ZK0fhv1zzu3v0a99OLlAkWQJSsJeOEGuxxM5m4ZiiT17TABQCYacjVUOykR/somKMsSbMuw/JYiJQZMFcu3MndP546cKa/LIxKmOghHzawzGChpKPCstyfSodaivN+KRTqCOrgsFGXIA4ddFWfAAfwqM5hk/+f7R9aCdHLKOtqyJ4qpvlbI/VRO4GoohSoPXA6FZ7XuksGxul8FdyTTsnKFosWNmHw7ARxPr/ysYsfD8zdNlnFnP0SwvwGX5J7JbiA/gSZYqzgg5AMA5nUzkWoSwtnYVpXkVm1HJhrZHA0ZFVHMuWsyp3jMyJUlBNh4JFlur0tlc/1kXms0qIocyTyIVeLv7IEpaNcVFcR046VctdQeZyCZUjrNbgoQ8bnsw21FqNx7RgwNUn8BoogBCSML9OUGv6xowSNpkpuxQODKFwRt84pfhSywDgLMgHIhc2ye35VPWiwL3bpJX6HVkngTzMOCIaIZODhWPKEQtnA/BH8JNSqrkZVQiMAASDfx91ZQUQrs4O+uTo4g9eg4z0YmCYq6m089wmHERvtZJfwm0pQWYZ3XGnwdKykivCZkGnvQxklJuNEcwFoAnsPazAoFaZjEYlQ1IYWG04VHrr0qXUnwWxOd11UGwAz6bMaQa/DywBuiwQqf6YjtKq1TCFymCcFIz/2mUWUxqF6AS3Vn9zqOEmZqITWRuuv4JHpGxh3cwhAwAvmUzlXlqyKn6sU1iWvfFfFDMVnQbwfdqu0Zo8jsuXX/fedacB/SSYkkfhad+OQ4u94ZcKJSnVXCJJTkgeWo0BzHoGEtDZd9FwkHHrlKwylkNKDU7cdQzAPhJYCklV7IzzO44bgQnaAOCFtF0UVYovVIi797XjaC9Jo30CgH1nEpaTK1h9UTfwQZTiYruhx5N7BX4OJ6kkpQVMAcBHjAA8azNdLRiIF6sqn2Jc6zoo8gWqA3SFwokBAr/oNTscDnMZ+nYB5XRjwVyf6sQhi4CRlGoswN/xEHV8c6cBTLkBvBBWoNLtG8GMUAC28P19ATSRR5MtUroBOLMdBKghGMCMyADochgij1k2PxvjJeiGQUgqAyVO3+9dmkNOmi9TNhPiMBkS2NMNbqLfFYj4BbG2xOrCvGSQUqki/8UjI0O7JNVTpbpbz48IgEAQ7eJ71xh0k5Ri4aY+tU0IlTeC1AiObI7pWgyQFBC4v+9dMOmnXCtQgLQ+YBiDvjboZuZFQwA/oR5/3w+ZVtvl6K9GCMAzunn1Q4j64Q0aezvcRWddkgEgRMovBerDyrYPppub2GOAeUG2/AFU+Z3sFXnZAMAK8iuk8OjyWLo5WewaRT8ZkRHk2GPAizr92hTxnSXXoytbuujejHwpsONeox1hMQNASSGog0tyeR9acP9noKAIQ7CnEObrZxgBCERkqg2ZpXqpbEETcHp0REaQV5Ej9/Nipk3T7ZPoyu3b6Z6zdJhAnHwHrZXVDLKkMvoVRUyqUOKMVuCO7ACWoR+8vWu1F7q3wBTxtTP6+p0VZC5s4WhQr0AnCBm2uOO6EQEQJl9+zWuKrH2UGoJRAQDsuU4HYClQ46qxZCJpIlRKWVdbwuaOB3udRf2vQD+Yfwh0uTpZdsl1HYYAPkHrAqmm+nRzjUrxhS/XnDUiAELY8a7Kke4tu8+YviD4m/FsIRuPIYHEBooF/JpjkT6NQAuk19y5/gGMhJ10zbTXFlFvsstVZ7wCz4MVKASDvab16NyZtWeNzPRTK/mJwrDsoyKl6EEi51YHoAkoLS3gcWApTdLrlIlBxQ2CFzvPnZGW6w/AMnSVph/nJqe+0+6tTSKABmfgKwiglBaGTsXgyhMUe53UIwSg3tUPpACU0wCCVnfSrOxV5BEo/ZLKUgiwwjJIgI2if7IM3AqDHwhtU9NxbBvI4LZ01Nc5Da0wNGOkNCT1DZqqZy3S3eO+VSvQr0jaBvGjpQG0ketfomUKvZGJyGWKVQWkrRKICDn2HKW/l34BFFFH869sEsgy2l6XzAJgXYAG+iopquZkhAEUegeYjByjHTWJFIBWcgLkudhC8Gveth91lzRBPbYivZBbtw4MQFSf97jozFMZlRizprV1iUeMAfSk5gWm7Z3GUWgT6a4RXYExRQrYiLAjmAP/VdMcYHGWccmQH2dWYdQlNDOmRUBpURA00aXV/GT90KBcZyAmVL1e+hMF8HIIzOt9RiO0FQBZG6ReY1HZJICif4RXYDBNj/Zn1KqVx/ypugJZnwtI1crhTmh4DoJu5LZVypJQWK1KVidcyy3WJ0ZyrUAGoI+eqxTm7e7HaG2jUUKVGRE8ZzE/lDk6itXZo0yMc8QA9ILyY5RGleCDCbFmaPDFU1u4hPxuD61mgpmcJG3cimOfAMAoCprhpGP2T9U8pDZLyAABPCbkiXuFBwgMOLeSQ2dtqG80SulXkHt7n9SCJj8eDLD+5x0j48aActs0ULHGUCqqOlfYrJJegbCxa9NWGBCctnvd3r171+3tbm3dukFS8vAxhRW8Z8fatWv375h1Zsat5NKRtmJZMxk37wVGNBwQIMjb2GhUlcNIxEz7inAG1S0MAG46a6QikW/4ZEJMCQ5IicTGoJAGEJJM3dfpKSo1lx6J15eLHbUJSWJqMxExyHoTnzkOriOPvDMztZ7rDITC+mYuKccdez4+85qfTjbXNq5vNBrizmJhwVBwfCMaEiB7xK8bqVh4HV8PAMYCbUIbcAxgF9YlBeW0UYX41ug3h8mqcqWWOJwJJj8MYQnYbBh0NUs9+ewDD+VgWMtaLt7Z0sTR2nbq8IEgdJy+3rdNGbMxZgNibwABxBUYMNN5I5SNmb2GlxMYVkDHuHcUFdvb/Y44UotSAO7IPJ7dlXCReyY7FKmKkCL76l/NzZ9D8J8q3SQPAF/dBdOutrfsdPK8rx4nTycdy/oOca9SZp0YzIhjGtBgWDz03yMCIGhgxHkUsYEWtU4nv/mXv5mx9O6ZZhhLgEMJEECZftPXvtnIglmOeFjUCAVwreZmnpq9KpflDER+Dde1ffv25m0yZHii0CPa6ph8kwGA/zUEUHNjgkEoKY5QSv/nQHBBJVwxHKc3HIW8npqbXhDqE5I611Smi8cbAHjy1w4AOeXW4haePCgAJ3PJ7WwZh0LNIQAw4dh1cp/XMZHZssN46IKSIgQAR6YmQiwgo0Q3RtrCchL5geWllZWlmPLziYoiCwSq5483uKH3djjEdHedgENLbzRmBuTawiBa9CHLzoood6bSbCCrbepbldtkNPkoCP0leNQgt2TKmOITE7CsuQQAxD4p4EP/llgtyoa5ZL4/qQiVQZXs730fLVTJuh0pV5YlYrxpclIeGely6Nj0ialWeXRBHd2PGgAIgoGiEYCBqMJvlPl9l41AXdhOLnmJtrLDBAZffKrdpJWcQ50uRYqApx/0BQYAbAUAA1oswGbj/M14D+UE0Epupd5OhSSnCkY4qBGARyzOKKynz0BlBYrwOf84Anu4ivxrNYcay8Dx1Z1hUKtr8srMREBh/WojAJfCKAhddkQAWtqPc6zAbNMcSoFkyIkpywBlPmiTe9mgt3jM6zQpGM95Uzi+HfSthuLv4VJogOSU+BwAvFMHYAfvQuK3mODbl/YN7kugzOjNCKwSdfQdY4r893MDCC030QhNT/uF/u/P+n5vOfmA8tkAhDgKk7KTi8/OAtLTm0jdZgPSuK9T5CCWFpFZjSfJr/2yb9t6CYgXePTT74ISKj1UZgUw2xauJP8SOCEjx4yaOSbjZnW9TmAwmDH6Av568yFFj4bBj93NyUxqTKDIT6vQ2HivgyQeGkegTExxG9HSnqd1mRw9rv5fOQDMtgKhgWuTfiFHsCbwVN/DrJJc1c2LqTcDuwUnrxTUe4UckORLi56KOZ2aJVauZmo1ikQCsPRndDgAPpmN5bvRgGBpJU8xAAWdAsSmLAsg5wpkHOOV+oFbQhm9YYKB43nqOpWOowjbBNiyD6THJIEjM30EHJm3qAs/C9s8XvoEmx5iIvO2cGFcf+EwND983BdAcN9uQCOCH17SbvuNHxhTWfsBcPS7rAGJsiw3iq7I/B6DQWx2Mg1FxwyGEGqiWSK399UiR3Ng286lLnWCDQ3I9Gx89LZTzunhmlW+UNJppL5TCZM8lHJ86nLRWRcNAkBwRM+nLr3sGhDc6pf3pUra4VnHw5kApoUDmW5gGZzC9iJnEuZ185iJYR9f4lkiCed7KWJQTEXYvN9gJiHoEDt5YOinWtwEFCTMYgT7AdB9B+qusNdgPBF/lKc/7+sQIR29fqsk6Sgdgn7WB/zRR68schhihyKvT06JQTJqI4hcX8zo3ErjhtO82KD/DK00z1qLJCHByGnw6e9wDwJAFowzrqZGlI7udNI7+g4igknt++rqw7rJeJnS5RRbtEHnxlZUJ2bBfIdTBbA51kbfuAm7g64I8II2wB1syBN9cWFyPU64mTLfKLOrjOn+GS6bAQBYgRLSSOeU1CqzCAAuGdNnL0IscjnS4XttYJWSo9C0fQZk2uG8TOTMAGb+4GqG+RigdoPYWG5VXGTlo/JGvgH0kSxD0bBRDvw2M+sw4qNXZOF453RjUD5uBy+rvgnr8+6ESUQG9qgcgr76TKUdBUTtLMZuv4WXFPEUhOPnNYBBaZVcBYorncsJsANO2UVFHc/oH9f3/UjgeyyicVecTvn8mmOer0Z2j4ixfGUOAI/K2nE3YSEy3FLzsETZVdZxmZHS1ovgrGfSYmhayJKCxYOE3ANFtMNgCdr5Vkiio8OybWctnTYGFc/PCGCVWK0cgp5kjWGbdnsZqDTfeBE2DV7RbkYv5txsPcO5AQTrgAU3yOttVBwSsFxeiAoNzPApf+49Ub6XN7PNRaeNLaIrOBamoorKoxeRTH43bFalx0bXRH+S2wj6P1EuTl86hVit1nJgK/AAwS3ZciEluQEsIZ9hV0ogsVVQysoynGXnGb0YqHa4aK85l0JaeBu9Vg+9omjNIqB/7HRgWz9zmcWkuOYQnEdxz7mQ9Ug9ZcwRVRgKn9a3049rVFMEDZ/m7Bn1fgGcR+tANmTjBsZyXSWEE7XczDuNZOP+pHQM65lQejVaWAlx+u7Yop2AY6cjOZSZPtbohSOqKoC0z7es1J4xyCH0LfDAZho7jdbWg9m1Kl8+Sx0OOjE7QjkBhGTzlg0gHBIMopg/FAmkRJLv+V3f51aF9S9R6N0ml97QGyNIlf59kZZgCZndzTHhURwwAkkXgXVK2Z4AKa1QOj4/z+DjgOjGJr6xln5mUyvLO0AVsTtrWbZfAG9aQoH0zyRcWQYN1QduM4wfL1f6G2mmeKrqFgZAiQvO4meL1LNpd7/J6N0sGZqAj3zu0biDT9wnQ8QZStXVlxvAgoSWWpiqttBtqrLY/0oeoOCHzF+QzYdlAOaYsW4lf4BZBKo3jzN3wkBYfdNmdPQ+Rrn07Atdp5kynh4HBbNxjcUAsII8IJiVaYfoL4MJuY2UQGjya5zsoBUPU+Nze1930A4ZELwbTgJIk7xLa6EaPia7tELOFQiW6wE/39kJJ5gECp4AoJxItuwwiCng8XYzsVoU/VXsR0RIySertC3R3D2pCLUR8AmmsBMQ5zowfuL869ElOWQ3Fw8z4mQkEoAmduPRkA0LcXrA6vjquXPIKS8uBEJLfY4Y4Pv9jAi3kTlbaFJE7ZONG6UwYmjc78WUCJJKRwTNkPDVz/oGvS/b8K/BSuSaKBTxgDJ85RzYSibQ1Y8nwlRRINkQNszmw88+086F4aSSm6IP3b4obu5ora/b/EzWdvvcoZyaqfJB/luZ0Yr1fH+Svm4g/Wgi10IJDyrIzYJKZuw9BRJXYV/hvOFIpD7Y7oDsrz+KRsQPyuk3wBBICHGn0CY5zCTApPB6H11oNBoSpRMR/Jgk+lyxqK+2Va4Nnpt9iOT3+x9S/zGuaDg6WkQ2dzEGG3HLe31/AJysReC6YrXLr9iOkD9jjAM0DgT9UnXH8mFOTdtAvc+xWkiXIszQo2uCN/0NJLJATQ1SCy0hFM4yUh5DDSZzp+K6Sq54Ut66HmT77su+a5QZ60flmmjzOxlpRZIYS3mgxloXVuWMFkOhqJJCyCCC+lPe/w1PD2tWxmZ3PwHypYxYis00sAAngwkG9w6Sw0joYA9YSnJ7jbT0TeTBsIMFe6jXBH54G9rw03MK7+RegahKYa5tbZNSepZ+kIgx0rCGcnQPTLNpbmkJKXa4F4CBSAxlF2rplROGE0E7+S00a4XV/Dgop/Kg9FkJCDxAt1GJke9Dbdi8Oteo0GoiLygRlTJ+BEOoOJdr6lm/ZyC88//AB2qDAekhbR2JnFFen1URUYQxpIxY7Q1gMBKDz4QffTjzWnb3y50cS2MhgMx1Og+QgrkOX/OdflUMti3RtbJ7tsFNwz1czCqakH0K4GaHhdhB38zxxNkKzAlgBbm/0SeFIhFt0G0M82hXGyzqKjIxzsnsmO5VHFEWLpRoaFtYinuSN6s0FTIMtfSjtlTHd+7EfQpsXuCKc4pMpe1xSASmBNm7YDiu23C1gN8MRCClF7FtJcwqBq3aL3Kc2v2vQDv5K4TToQzWlWyUVcWMwnNMJKN3bSmWWovQfQw6ktX7rhomFZ4qcvK5tKNzJ4ocKjNkPDDcpgK91LXMlKFhg30AbdinG4RxkPE/n66OBNPPHVJZ0prjchw5Jf0CyEZsJ3v1UwfihxnLrWzHDvtg0Kg5CPjxIMkaiopiLff1l6TCMhz43YOPsFWlQzG1hoUYPWIey6PtBTgXPdC8YaBEBXIJ+5R5KJrZC8IR8FwuVkpJ/26MHRw8TzSjDynAZbbrpJsdL6euqJBuvQ6oHwVOUOV5ov6wmKjn5385DGuwitz0IUwAEhNKPQ2Sb8nqblzsUAuOo5AOO0ngP2ihf9koIkKyMhcV0o8clH+94IXb+1HxzQ1gFRsLozgA6uEWCHPr5hh8ghLySMDRy3VWAUyPFsEcnZOf9WXB3cEqcuyTMBEG7D32BQpiayvOwoMQmM0qSmqLyo+JrNeMgluog0+jTQozlR2CUZC15yH6rOhHAjSXH8hyazfCQtaLywaCLnAFDWvZH/YSgYrpRyikh4wk+fkfkXJLYTMIR18J+1QR/gbxYXFrop6eB3Uk1qWmZ1sJXPxMI1Cs5MyQBzInacF99Hlz59EHACD8282M6aA70FqaDMsJsKiWx3vxtAIZfcRqLjMgydXrrhr0WGZj+3vyhwwm5j9j5g3yRt8gH6aEnNFjbpTS4WUZMGIMF1XNm1SV+MWPzVaMGfQyKvrTkd6XG0A7uf4bh6gfkg6ni0d+wNCMNUzNSAtmNKelBFHwNxe36WpiKlSVCbLN790A55+OEykkHZuwQd9N5sx01G6TIpqAg2Ru/51RfhRG4XSPUgyQuo5ZH8nhOd3+fkM5pUL4W+pNS6NCVjUp19LLjSZEm0B0wJzOxzDk/OBCCr1FH4CyZ3bcfXSBklvfN9XM+HNmvxlyEX6Flspk+SV1opbnTqSXQYjhpc8b2VUbDpGqb1QUO/xqIOBltYAhAohe1B5aFtBNZpATW+vF5YbB+BH30Xig7wiZ3n1gWKni6JVPkwp7IcyH+50Ovi5Te5nDmdIW2Nr3w+zmnYhLjHmGZY4dhrOATOSwNXX1rWF1LqNad3IuzW3sBnIG4mtPVR6vmqYXwwlIB93oNgT75DcYsbtXdj+T9KFsZKma3vCo2zrUg9BeSo4E5eZeCoZQ2EVJnRLy3l9oHBpYxdiqVaxI54j/xjA3gIzw2kbMmzAAscELTsuFE3KXYpl6W243hgH4IjZzqY07WC2UQcrfaTiTyEROE0YFtNZwnOMSSk+pZ930NCXsFXBV9/zWhpyfIVzl5eTMr83esKoaonoL0FnxA7grSLK9ywYMy83N7MG3+sCFLTd+8n+mrYmtG1USAbtXD8uE9QPg1/0DCLWlmcBVhChISkDzRxiSasjVmGpo4E1QjK/DPmGYruRXRqrFhEw3Jp3od5U5pl4GlIHBrkIbnADXP7YiUA/dvSlGCbwj1K/OYvgd8TobrqmUdEIJaJfccrKRVQAPDM8e0JdGALF4IYTDSbro5H4yR/2HcqqPBXx9OFmlyNatmNhna7AdxAtLDKkRe81haUOQncUYwUXTJSadgBp+FQy21tKH7r6ElAzOHFfBj10xhdZBI2lC9X+hDOKPulbsPhENCNLfPSp+0DAnhVu99E+GlRCoxLebcYQPVs7gGyVkEWDZpJwUAkALOeUN4KB2Qo1wQyQRZpsY4swpo42inHLI/VYnNkT18yH1Il5CWpgPc+v1Hsf8044mJaX5DnmzlJrImDOmeqivcX2renJhGgrPv10nQ+XAUkquljmVGYopZqywTzfck8Alna6EANEUpUKMO2CIm7sgAMKbngA+JvgCCdB6l9SZ2176K4vd6MMcAUMlt29XpkpnSn+lRzcLOKwOHN7OzqTXIU++xmI3ldgGbpEtoCZrc181vcNR5wRkUiIlqFjqpc++2sCe5ANOXuPYIUtNdDp2HWd4r0DkgwhAKUSozxmz/vfV9F/CHxiAMCdtLR+HNJEEHd+iqgkq0bWG3HUblhWdnSJTPRMCosJnFPX4qYJ0II4hyp1i3Mc7XzkTyKKmSvcAx4GDEz/6jNfbHXVxNfuszv6D96xD+2FC/G7u5mUdPbk57nMaZ+ctlpqFyjQATfMTbjHOb57dr586UAChpvUCypGy1aeIwcEna6VPHm2EYCVZ2g1wb9u2c1WK6pvSoVJ5M5pSD8xch6URd9GOhbeNGw9vBAux33H0EPHc88lTHdTskTSFVGX9JTaAssiN48A9sFjJ0h6uLOW8Y3bLCUN1rMYb7Byqy4KwO4Qzfrq7XzpZbhHaTNOww7t6NRu0LUmqCAE49cZsF+zn8+3cuXOblNYiTV9ielfjVoY6I7ysr9rs2HHBRKa4X15qs1ssBuvEbq8sLYebumTGresctDopUt3LYwEj0VhH77sEb6eU3LypWtafH0BQmGZMLSkhz2w2i6l5jIqRTDp7Lusfl4GuQEV4x9sFtU22gVVpnTC/5S6jVQ7VwfOhI3Kn1pYbi2lkXx1vS9X2YMPrsPzgAY1Y8c9XPnLYqQp2VmzvrXSzC/p8y9Wp7JbvnX7fxTJ1mD0iixVZJwiSDYCIGq4NrPjVeLgbC9u/ZTo1QwCwet8zhlsSHshCNkxB+bABUHqABVhLLxgAn3HgAIK/dTFt6lRH0Ct+sgTjlm80pI0Ao+FdVmFiOEUjq6huxrrmDkZZL1CQTSDxRwEL0VUN8h+b3r31pyeaxo7tcxyOHnvRuH998T+3A3DVqSZINvEWk88iDE/xcWuBhmVj+PXwZak2BfaunHy/8QFIRj/OeupURpTyIVlHTBUZEIAD2cLKOdHEDpwUBVCK+jlIDFYYmrWjXmKjKGJGfFXl11BfOqtQVubhgKS04qXF7//w51eccdyRl+J15HGzH/zFzz8+f9YbkBflONco5WiNRRjnDvJ2cBTu3OmspotPJH+1ExuQqrqrk0KGcCUOI83S8vtgN3DJQyGVGq/8iAuIUANQGhn4CsRYZ3egSWQpDYyYUFEiEEiY979q+KBKUXVGRKEF+FgAIzs3qaBbglkuePgcp0gI+Lv37d/9zfz583fv2Nctsf3OcV6ZcYa0XsoAS3wC80n2mpM/nuCGmzbBmMB2TmlxSM2Z9dEnjWeRgrTfZLMTU1hadwb+AKjszxkggLsGCCCcgudQ3s9WuV8ZmIrnFzbD242LUZ8pTSaIXIxmCjOr6TbjERpKMJtUtJbS1wqnExrNmbxk6vxk3cgB/Bxxnl68vAEgslSSo38s8/HOTs0+47NzOWZ+zzgqw4YcTKP6WQyotWcYTg0YIoAQLr6rOEt+v9ZSCG/lo++4jZ37hscEjt2soKswaUnWLAAKGfJ5LGRMuoArJYabmZ8HcSQb1xtTXg2KLexzuHj69klPE+v3ib0CU9M+p9zZjLGHqLRceum7hxovKJP7tLA3qZBm/FHt/YGXP7DmyHwAhA8wA0bc0NS8TabOKq6u7vnUMGdmIw2Pw5LVxjunTqRIzg2s71LUvEdcYhuDmb4QPgB2jkCVUnSZzUuugmgQbsjUMOMv2OIF+ElQn1PK1C7HrFeNy4AV5PAt1fUJJTRIJzrMqycOTGspLwDhDJ4LjbTq8EKcW+4PtWHz0g3GDFibveYJYDFAUU7QREsNWiAMIBRSvyh2Ee10FNFMqPrEYUVml30Qv1hWTf9y7RgLWF/o5Sr9dRPvbFW4HRK0iciJhOSji75rvCEhz/SuSgbQ8blQKnWAGg/5AcgobGWq5Dbq6gSibaK8GtgjRxsjSEbfS7kYHoERNq/PYGKf4SWmXApBzbBgYpEq/WY4J1po0+TDysDx+cfHr2J5xVJiJbOnURjTKzIDIuJw0K1bt9bSRUcZV4ZsmMRyhlHbKJQWcIYYdc93BzjINz8AUa+BVgupgyzA6kuyvALmrZQac81q7mWdj8DMCkj6DvAsBjhD7l4U0rqYOj1iGLM5AwAAGkNJREFUZVZqNAQDkIMu3uxYe8eRxARJWVh+C87ZDOmrQCriCXcmEq21jl3fyZKXLyX/hFHyopSOkJhR8tDH3APsCcolf2dkGOw156kcCeWcirYhHTbuk3+W7RE33MvG4uBU834B1EXLfZSzlUHVAVXFDpOe4ThMGxUuPmfcEei4AHwN35kG0XG6x4el9qC4eXuW9Qe79OZ2czgUCqVVsjAX00ovrxnoCLI8VyAcrCevM4vptAqkqBOSnIx72q8wfsgm0vA8NAooAyg0I+w3NMIC7YVaSm+FhS2CwtmjyrvKSR/og69Y8ggcvyY3iNKVkzm/7jbzyABkhr+Zqa+F5VrH/O9mWX9QMN7Cl62ExexnBl8NqGVu02UDBiRfALV5TSEkICvFjqgEJZs4v/YuY7Nlszc8Fq6ubWvzR6PBYM4VKKSFbDWtBQ1ytLZBRaUVWAdhEGR2UHnW3KPcNXarzYIV+kuuWEQ5Fxv2swrG0qIJCYsJICfMPDwLflby0V6e6Zz7t4dEppCHAHZ5BugCDg5AghPDXNFQy/bmqJCqv0A3GgdcjSzaH6P/3c7Vbm1riwaC0RRdRikZ+5VgL7dtZkO1mXhnkM0+DXsc1Hnxf5YfC1lTqOnZSky2hpuniRzExwGdxwkz4SEpv+zQLPjZyEULNR6Knyq60Vi268g9ztUIwH1H5QGgMrOuqwsSM4pRVPW+k/zkBdkQHAtV7/r1XV3IeQz4DQHMegUw3PAzdhyNMZKYxHW/+cFElOErLUHTUUJGL31OMsNi8ut+CHmAMkffPzULDQzs2yu99IkCYicweqt3nJhHuZ8BuCcfAJGIKnqSXerMDfTglRXkpbc0GD85yG1+OovWN23f3oISsJkV9/4uWLIMbT9jajIFuS0zxmDwCKU8Wzkc9qcs/dDJjEf6WFUcRC/fcc4YkynLOmiYm8mDAi8zDA3l2AVjInkC+J28tjDO7fQ2tm5rZrG61nmGUfETbmPjBeHpoedTDyCofbe/F3lL88GE/hH1QBIXUoXQsAPwQdrs2qeSDt4Z7fOjgotf+yLJkt4GuspJveWq8NDsxClVhOQJ4Jr8AITTF0gk8s6dzZKg4Kce/Hxq9mtf0EvdJzi5JjGUAyLjPE3q0GQrKxIT+MTpcKq5S63o15/+/BZQd4UcQ0zPHmG62dV02jPEmg2/hn8DfrGYvikS2+qcKHNnyQvAQ3aTzXkCWELunA9MZFHNTadrHEDnachSWCsxkYmLzL4ka9VJXaFoBO5C6DVGoy+AqYCacV7+SMpNkAW96LLHboC9W415KzSgNK2x7Rc8nP+FU7LyiEth+nK1KxjRybSwMapJ7KrLEwsAsOewPMUMUPPbASKQUiCDkO8Xq6Wsg9QhSfyDGyHMyhBa9QsDNiIC8wXZPMxdnxLbR1f8eKYP0KvHTA1zDSFNk/J8YBDkGxOPyMoiLiWHvQGMLVkf/rIfc6z5Xd5QHLIufwDBTfoF9C+xrIKQ5p1iU8afj89mwiwl5Iif/pl65YyQjRq6zn3dGI0txzyUt1976iH4VgfvkiKsxoBLkIkjqAxUap56HMnKWjKRV2+ntWGoc2YCKFSDzLs139buQ/YOAkBIDX5MfW1UP7suhCNZXBi3V2WnUc1ehu6GkJmyokKfgSl9zkD1WgVJCf9KyB/w1ZCZplBJgqzVKlFxRtUCHOS2tgB/o9KSfVDQElq7WkYAU5PSYB8A7p/lrZAGYtv7SXfeAKKywI2QJY/E/HraJNyAEzOX2R693VrZcNsWB+fRC0TpDoEBWGH2HS5XmVLvAyeqOaQNP1aisXg1fXvu07bspDn46OdDS7W4c9uq9Lvjr6Awl7+sCAC4g7Qfn7+gCwywg6bmGMpbRv0pradOVJR7/ejsjnwVGT1nOpxdLiEtzqMK3NJVQr9pVl1CVs0ZAHUprDQ1QO6gtTVZ6zAvvgpq75YcPsQPaQc2g21Tly0u8lgECoxPnZJ/E18J+e5aAhPErYNghT4DkSS0pSh1RcrEbsOdyWQtDCzITuq0gzl+8CnKc6K24tJjfLPbk95SXHrGNWukB00lWdraWFtNL752NCm35fLBrk36kklZSRwo9lsCsf0kv/vkQQgDlUBvGek+fjCSQlYybw1SJ9QUVIDR6qCZMOmTHsnxQCxVMLn75dvBHXGJQrparKVdcmeq05pwiv4a+2uJEdJEuRWGTfzj40NRoIjk6Ga/ajMfF5WMtaKFI0EEJ5Rxa+YNRmi4hHxnz+BWIDoDE3uAPKEWpBUAmaph9dpncj6RinJyzxfr4ChEYQ1/xgb153SzaXrEnqCMrNPYQGJXfX21ueeC2TZ7ee4o6gfPMm1slrNm/4lMirG6Z8agBk4AgJtJ8zGDAhBC3EfiCn1slbo8Qig24GpXGtRymKAS4l7w20UiVHlV0+n3+/39GQ/9yGnN+VUYsFRw+gS69/kT3XhC5PYebkTGqqgwHNW8K/KVow8MroMUlP96iP+YQapkl5Lfr+aUc0zU8lrwcVwd9IV+ZKNtECPcc9riajAnDth+LA0a6WWTMwfFUqE3zV+1Q1GpbJvZYb79h3NGQ8TY34SbO7QB9SnyIipDYQ9z6SAlfg7rJvRHg5UZZ4yj1BxtlUkrhOX65B/72xB2bIE585VuIFk5V4NOAGMY0d6jgIVUj50y4FbQjahQ0BZh61J54e8vgqPB1O/dnu40ixkcMXziLqeRIPxALcHxTgLDawfZrAFV7Ftptaxy9EQlpoJ2yVbH2hP7NUxu0PMbPemtZ5PU3+RzdoVCmQOt9HU5HUGOpggiCgkEvu/PF8y4BG6lytKv43DILrMs6VieeGqLnU6jMTMDBvAYSuhXg9ZyAa/+bMqieaUuqCq3hlz0w4FwTavg3Lnk5lt3eTEn0FQm6ParblBiGsCUqi3+dVmS56lj7cNXA6fQXj6gPNzfoONK0BskECNpBlHOYwet4qAA+PngxXBKyKGg9NOlVQZTx5iHfmEbgFWzlEDCc/RFZ8y9YTOUjnneJYtCRltdWo04PRIBDQCPRLjVi145bRz0zpsG0qwDfZu3QYFQDeA1a9SyHfomvzd4ZUiU2iL0wiGoCVWS7y6iHV3b1dsMS+rBZd40wCSZhWX2jp30qyV/BkEQs9lT5mCBmrr0/GqFkrkcYdHlai2DYBfQW7Ho/TPnuDHCtg047K9Gfi3mgGLquhalLsfa7wyh+Rv6igDAj4cix2Qlh/2ZNrXg3WEsoj1gF31uwLUZyC2bSI1lwct/mLqrm/W5IRurLikrIwNWd0LhtLZjhc/D1h3Modmx+G9fzCYNFjj47PYB3+p0RRQbK6Saqohf5OVPLKahqKx8DgDeNyQ9Kxj6ICCdAouJASGlwM0xxaoBH6aVdtxlRx/66MQLp095qSdp6A029fxlyuVvfXLMd49l/QcV7nye83JncKU/nfpRqHFe+tiQBnXYYYYwoQ8PTRDMXnMSk81KcZuU84Xb8lF+Z4ulVKFBW8ilz9x89QcnnL9syeRZ83ftmj9/5uIlZ7//wQdX3zxvjrqqrZW2PK3dJTNpXOvESVXwPVjHsQ9J5+ctAHD60ACEHohbUKzArxvKzD7cjQ32PB+uDYq8dvWO3OPHj7/kkuvHjbv++ksuGT/+CPUTw2UtseU/JPIxRTxQCOpaRqGhv2FoMkp2qA8RevkQJelAbgRGMCq+qap6rlAv/zTIF3YjKb/X/reXlwNt3z3YTzipZ0VclnU8NlRnNu+7a4ijiuzQCUzolKFq+lWhLIGopZC1TJ9I939vKM/XlnkN6ROCJlB7Qhb10SJ4CvRnQxd1vRwAvHjI83qsMNSGi9J0GxL7jYMi60jM1DRYJw9sbNygNPmlhZVc9GG33TLUV36WEn7Ll8RNhijaN+FKHPygRQ+qKebWHjUiMyH7StDN55gaQkjN/YQUJb7rh6ojBw7sXgCw55kh6wgB720tZZsYuICilnJy0bnfhiVoAkWi2vVhMSxI6d4zkYu/OGTNC1AM3cQTPrl06DJCJphBVhdRM6ta2F9G97w6MrOte7VN7Q7U43zQsMona4EKgI/+eugPFxLc7QCg0XS6QSB4OdNuTmU7Fba2sVQuKepsICDz1LPScRuDrxlYTtBNPfPOoT/bUvKIgAB+UAAAS8ikPX3Z4o49J4/0ErSRp/c7WgG+BKu9C81Sy/bOpLnjwQLIqmNClCdeOtddgGWCkw+4jH5CimrNc4s2gYBkE3yYS30wpDmMqm4StEu0taEC4wsFGDPGSF4+AnqK4wuwTCC1d67W9p2qmzc5dpw4soa4BJrtHWUoXhgFLhMIDUDAFGbjLuwFWNwTIB1KwnT3uELsMyBgUU7Q1W0xPYNzaUf4AuEqgQWaISwBh1paupLYKW4txOlw/SwqE4G2F2SIvA0F/Fz+FFsCid5yPLb70JE8BcEHXEfZrFvMX4VYDhWSqO8eW5glc9ZmKhDYdy8WZJuVkE9BQ1xK181aWMXri6JPhcywk1/giNeo1rCHRrhrddc1BbrhebRFIELhZqBDc5xPSOnEgNuAUi0gYWgnIxbEwXyVMhVAP+vHbA7X0vNqSGHO18dBpYlICfpaTUG8NUh6bHLohipKkRAOIPnFyExYV1UpqVmbj4yiRtGQmHR0P1gY3T0ruQX0ZYkU5tddOtRoWHtFZRSPUh0BSRMoAHUYjlAt2gp8GDSIGcUfaST+NgAQZ7paC3O+Hns73C6JCnxBvEpFhK/dzMZvq5Mpw+GuJLfprmHSje4/sUg+WsMpmupsuCqyXQWzdHxhIvRSmBsBVH8ixHhIjFkLFDadx8aRQYfwRiDRCsEocs//MFJ72MrGminN7VoWUKbLji6MX2CFKZzgtxGUqHiyQCO8IaDrlutZFw7T54FWSDFJZ10/Mp4MaONPpi6VuS8JmjToxMK4BWz6bRxWIPYzrz25QOeU3XIvDC9gvc6SklYQRaPR9kXKYx3GplsoDHWFiwQ+4PjCLBY7WbCWJigCKHoLNsIbBnPX8jL25DNjjK3RoLz+xMjsYSsMBzLHdMr4sDM8+fVy5a7nUk6KxgDAcD19xV2YxwKWaTGt7WrBsCmCcgc418j89Z2FsfJ5NxNMo45MhquLjUgrzKtDOz6Uc2MEGK9Jbs2kAu2yCnIbtGa2wDzEDRFBVXbiYSqkdSSikDM7+BRDiZVdoU7z6wLtNaRHw+gSOAOdbNzehQXzvH6wL5CAZl0YAxZSOPA0Tt8fOwJ5VTbkOlXlgk52kHV1tN9VIIMG+kigkggj40iyqxXG6d5QoFsE2wSDVSH5tjEYRTEbfwAL2LdfVHxnGtjsM2kGRyQC/sbU0YX5JHA+LKRN2zvFJKmHuQdJvvmRAi1tnFHuRTsssUZpRgentbOL78iA5mFP0iVk6BfyMKClvEDT62Z08F1dnWEnwYa91c5s4lyDqeHsp67tzX7dWDSOzfct+hH4DmgYZQBYRvcVKL8L6rG34sQ96EogtUmQ4BcdzkcLZN5LCDTT+2l6CCjavg8nFH0J4jwtn44STVFZ+6kCWTMQs1vrSHZCd0o9AdqSJAW89N4CvbYJ5OtBjaAtmqZqidz+Q4rtS5eQV782i4JeCAQ+1rUFWiUV4GL6mncCgPvAmDRujPrL6KbZhXlxE3lvD0q6BhT0GLvenGu63XAtwGO6uLT0LX6WsGNzgbYZyBrvh0SMJOLcw+P28+sh1ZOky8YUxBCDguoyGM6Y7o9B/bSCuUl5PEeY9qkXsRZo3LGkQF40DtkAnQsYzdP+ICHPK3JOHETZFYXKgdRlNNMHWunU4jvSVyKnNy1+K2WXAc1/Ac5LYosRKG28Bl/OhkqGnw1/uKkgzwe66MIQAURWpRoUAqPoxUWP5dxTQL4+LYQMpB0+XJhEDJQzP1RGaDvomfD16IcVCRWP4cTCQQ1YXUtX6lrQwYrwm54pblbVTb7cw3fq+IAw75puObIgKwQnIJqVjfXaaFyPl/WY2VnL7fioQEH/cyojPtWRxocfKa4nCLSVJL9aFFVVMWyLTdCFhcpz7+ZErJSaxSvw1DMB0dcVZZzhexsKYkfcH9NkRgQQ9kFauryYACJtxQOdwCCno+TVaCBO/+MuSBAHinQuoDIHHMCONinshzXI0I3EzCALbS3EEv8jG1mvtVVB/0gtPX98UV1pFimIOKleKRAGFMkZayHM++mgYAdJEoGTTmfeLeOws8ElSfrG4QVweCvIp92cxvFgW0isd8xcUEwA4Zxf4sCB0Zo6GrauiMcUwM0AB30RbQ2wuU3ahoUMCtbnhJ07O+iHBSiDwyy3bzgxPYMFaiPJ1j1nFZOtCqHWXkcyJe+JpIQwt3vO0OvBUKoHQlErTiAy70kNfq0gN0MnLfR+Ntajq2QZOu3rldQsHtbcLIdrnYcVE0AYuN3tUcSpUNADSEV+L32qAGl3E/k9DOCEvrZoHbRpV6RtFpDoQDJ4a6NPvnbo5rIcDiCPoorBQjkpDIfgJ8WMhkvIUrRjgjpjSgJWYB2IrpcP/Xh/sb2uFSq2YlOGUiMIKt9AaxNbt26I8z3zhnzUVpA/UU+XoM0uwPpIPaj7W4sZCX+G6gis7wcLrJK0tY6+M+QjsJLctaO6dmsisTpJt7yn31KlZGlHddeGreu7mqp3PDPUNVhJ/tXEpfpa0BUL1hUs2zNAAJ+ndVIqCgFV8611wZeH6suXoOpHe9vWra0yzAfLbPNEXcX6ra2rO4ETecNZQ3wnOxm3J7Be4STj+CmQbffCVOmiAngLnsLa4I6NIMm9seesIdrHCjLuctoRXr8+ASdS7xZNxsqoleXOnc0++uwzQ5vhDeWIb2ijagFR0yQa8dH5pxbRj7GTKdQDhCJBUZiDOv/6wN4fDAlAGLM2bhp1JloTslxrnnlk7yPdTe6cCVM4dgrbBFf1jn8NaReDrV9MnSrBCBGM+sP82uOKFw27yaXreNS1RE0q5FX6Yc1MHj3ExuizpkFDG7SbyM7AXoPSgJVM2gfjEQNstN1LTw8lqLOgRFoSyuoBdVYjjFzgIWFbNAAryXH7eFHVz8N5zRIQ888eO6Rbanj6WSW+kuLezWcaLbBScnrPKJieCQ+us3rtvKHM8LbDiapkM6NSEHhlUNTmk2cWL51QSs7o5iWqzJBAebQQHO1DKU6DAue8HbwrEsQcezVEvKXGbwtTHUVWxQ/zPfejRtOgHcF/spwqsgGC7C4CBePQDXRsQqZKL+Q+/zn49y+xk/t7qj0o5h+AGuPjRxg/CpjqeCEFSTZk4sh8+ISaSpNl8NQ5XmAzeygeClEE8J/Fy8dgcZqPMGVKpbwaDfH054N9f4uptOYEyMjhgvZD+e2+I7ItZRiwcSHly5jtEjl69hxS6h7sCoCkdEDQNMWieK7eXTx2gpX8HAAMgEgoVfmpIg9c7fLBjoCecz5FyUOcrcPhwDlbDkriv1dAoho5g2Ueuuj00TinbTAALu/QbSEkyCTp/yseQQaPEJ4NHtM0lGHc9yDPYCsZ/btFtE4Rc5U4+kJOoShA+489IE3Jhr4l+Y7njyRVpkEe4oJOExBMVxEZRiBT9Bj1QnNDenyEyLcvHwyAMKik8qQOPo73EAyA/XhrTG531lZOTt9jdrG2HtnpM697ZAKpqsrfjbhsTSaAwE44v4gAjv1/jFcE3KagtgJ7zsjfjXKD9Vg6k2tqYgnUgIsXPxvTbzhQTh7cxXnE7S1tMNDEWS2++Z7Nbs3TmjA/LJwhqugamh+WP4D1AQVAZRkK/ObL8gQQhhjbydO/XEGdyU6MSgNljp7fDETorZTcuYxW4xzIBIw0cfKbfn0I6P2V5AnglgwA4ekVG8A4A1AIRDE08Ev8mjwBxAHuhz621lzf0SI0NwOJ0kvnTyKlA7kFk3v8j+Nmp0tObITEQ4eLPnTS09AcZSqxDBzAI9fyot4NCxYZwPNT1EDGcvK35Acgas/V3PPTRdSDczy2A35xL3flkWSAUmcwbmP5xbQunoCZSSD/5eMce36JamwVpTbLQAHckQZQUNjJRQbQldLPU9yYAQNosZeUw7SSQ377tYODqYddLSAR0Oqs7n4nj8jCBhMWr2x1eJNh1vNR5jHTFR8+cAiSZwYkW5UCUJPqk6BgVXwAYyklFgglNw0IQFullQ0Dnvj6n2HMi0sEYb9wV4uvjt4wz2235eWITJg4izM7wxKTqhE5s9+x47zTFtTgDC0rzDHKuRbZGSjqxN1HZAWmmYHYYNOfFQZ1pJISMBuWsaYzbn2WUnMdG5zQvE2GueM9Hy/ILs+f7RSw1Dy2z8G7NHZnGQwio2+c/c8z1GZlK4pZ2XJY4dXp+eeSUPwV6NQmnSl1Lb77jKx+oFuboA1dGmf87PyXYB4E5yqLYD5R2Jb08NHXZpPSvH05WxUZe+IFb1OHR9TGmHt4eJjtF//kjhevu34Cg8Ouv6yp66/ksj0oKqjNWAgKsTg9ewypKinKVUXGvA/Z4Z3NglrXwjOwYzn5a/oTWvUfnN3v+Juum/fvWy7uhlvEZQO/xfDohhlii356EY5wGsSDhDNz9vQOGGGhPkaYXOxiMpJCz9fL5n5w9dJnsvTzVyKAcnoFwuAaZ1EjEXBjOmRZKwyiECbvzBaJWMhH827+4d+vnLkf9qy5mk8qnU3Yeu+q5hy73rmHVA6yngwisaRh0sM9eIhEVc54UFrtdToVH6Gj5y/PTrt86gX3vfXxhZ9/9dWPlOsYuB69tptLanJz2OkcS9Lz5xx+SJGuw099nzY1p7YwG1go/f694+HCT4ef8pOvPv/8wo/vu2Dq5VOefaib3U+zz+d1ibqJB5TK5/5pQQ0xDSELgnPbZv9nLZU0qhArEobDSafTB0qnZuPxrHLcKSiK/zRVGaPd63bvXgfXXvhP+T3zUv7V8Nq7V/1lN/uu3fibcvX+Me3v16zsamGjCrGqDgOe4Q/t7fDgk5KB6DyKttZ3JOWolFJZZpNKk1PPPJVY+kmn/H9iNk0TTdNY1gAAAABJRU5ErkJggg==';
+const BrandLogo = React.memo(function BrandLogo({ size = 24 }) {
+  return <img src={BRAND_LOGO_SRC} alt="" width={size} height={size} style={{ display: 'block', objectFit: 'contain' }} />;
+});
+
 const CAT = { strength: 'orange', cardio: 'red', mind: 'indigo', recover: 'purple', fuel: 'green', cold: 'teal', track: 'blue' };
 const QUEST_THEME = {
   q1:  { icon: 'dumbbell', cat: CAT.strength }, q2:  { icon: 'legs',      cat: CAT.strength },
@@ -1052,8 +1207,8 @@ function WelcomeScreen({ onContinue, c }) {
       <div className="fixed inset-0 z-[100] flex flex-col sq-anim-in" style={{ background: c.bg }}>
         <div className="flex-1 sq-scroll overflow-y-auto flex flex-col justify-center px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 32px)', paddingBottom: 24 }}>
           <div className="text-center mb-8">
-            <div className="sq-icon-fff" style={{ width: 76, height: 76, borderRadius: 30, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
-              <TrophyIcon size={34} />
+            <div style={{ width: 76, height: 76, borderRadius: 30, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
+              <BrandLogo size={40} />
             </div>
             <h1 className="sq-large-title" style={{ fontSize: 30, fontWeight: 800, color: c.label, marginBottom: 8 }}>Welcome to QuestDaily</h1>
             <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.4, maxWidth: 320, margin: '0 auto' }}>
@@ -1096,9 +1251,29 @@ function AuthModal({ onSignedUp, onLoggedIn, c }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [googleSubmitting, setGoogleSubmitting] = useState(false);
 
   const switchMode = (next) => {
     setMode(next); setError(null); setPassword(''); setConfirmPassword(''); setShowPassword(false);
+  };
+
+  const handleGoogleClick = async () => {
+    if (submitting || googleSubmitting) return;
+    setError(null);
+    setGoogleSubmitting(true);
+    haptic(10);
+    try {
+      await signInWithGoogle();
+      // nothing else to do — the resulting auth-state change is picked up
+      // by the app's normal hydration effect, same as any other sign-in
+    } catch (err) {
+      // a closed/cancelled popup isn't an error worth showing
+      if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
+        console.error('Google sign-in failed:', err);
+        setError(friendlyAuthError(err));
+      }
+      setGoogleSubmitting(false);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -1139,8 +1314,8 @@ function AuthModal({ onSignedUp, onLoggedIn, c }) {
   return (
       <div className="fixed inset-0 z-[100] flex items-center justify-center p-5 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
         <div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 360, padding: '28px 24px 22px', textAlign: 'center' }}>
-          <div className="sq-icon-fff" style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-            <TrophyIcon size={24} />
+          <div style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+            <BrandLogo size={28} />
           </div>
           <h2 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label }}>
             {mode === 'signup' ? 'Create your account' : 'Welcome back'}
@@ -1151,7 +1326,21 @@ function AuthModal({ onSignedUp, onLoggedIn, c }) {
                 : 'Log in to pick up where you left off.'}
           </p>
 
-          <form onSubmit={handleSubmit} style={{ marginTop: 18, textAlign: 'left' }}>
+          <button type="button" onClick={handleGoogleClick} disabled={submitting || googleSubmitting}
+                  style={{ width: '100%', marginTop: 18, padding: '12px', borderRadius: 14, fontSize: 14, fontWeight: 600, color: c.label, background: c.bgSecondary, border: `1px solid ${c.separator}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, opacity: googleSubmitting ? 0.7 : 1 }}>
+            {googleSubmitting
+                ? <span style={{ width: 16, height: 16, border: `2px solid ${c.fill}`, borderTopColor: c.label, borderRadius: '50%' }} className="animate-spin" />
+                : <GoogleIcon size={17} />}
+            {googleSubmitting ? 'Connecting…' : 'Continue with Google'}
+          </button>
+
+          <div className="flex items-center gap-3" style={{ margin: '16px 0' }}>
+            <div style={{ flex: 1, height: 1, background: c.separator }} />
+            <span style={{ fontSize: 11, fontWeight: 500, color: c.labelTertiary, textTransform: 'uppercase', letterSpacing: 0.4 }}>or</span>
+            <div style={{ flex: 1, height: 1, background: c.separator }} />
+          </div>
+
+          <form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
             <div style={{ position: 'relative' }}>
               <AtSign size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
               <input
@@ -1414,19 +1603,95 @@ function HistoryScreen({ history, dark, onToggleTheme, c }) {
   );
 }
 
-// settings tab — profile photo, appearance, account actions. A real
-// settings screen instead of scattering account controls (log out, theme)
-// across other screens.
+// settings tab — profile photo, appearance, account actions, notifications,
+// and data export. A real settings screen instead of scattering account
+// controls across other screens.
 function SettingsScreen({
-  username, photoURL, uid, dark, onToggleTheme,
-  onPhotoFile, photoUploading, photoError, onDismissPhotoError,
-  onLogout, onDeleteAccount, c,
-}) {
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
+                          username, photoURL, uid, authProviderLabel, dark, onToggleTheme,
+                          onPhotoFile, photoUploading, photoError, onDismissPhotoError,
+                          onUsernameChanged, onLogout, onDeleteAccount,
+                          hapticsOn, onToggleHaptics,
+                          dailyReminderOn, onToggleDailyReminder, notificationsSupported,
+                          onExportData, c,
+                        }) {
+  // null | 'username' | 'password' | 'delete' — only one inline editor
+  // open at a time, inside the Account card.
+  const [editing, setEditing] = useState(null);
+
+  const [usernameInput, setUsernameInput] = useState(username || '');
+  const [usernameReauthPassword, setUsernameReauthPassword] = useState('');
+  const [needsReauthForUsername, setNeedsReauthForUsername] = useState(false);
+  const [usernameSaving, setUsernameSaving] = useState(false);
+  const [usernameError, setUsernameError] = useState(null);
+
+  const [currentPasswordInput, setCurrentPasswordInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmNewPasswordInput, setConfirmNewPasswordInput] = useState('');
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState(null);
+  const [passwordSaved, setPasswordSaved] = useState(false);
+
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
 
   const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', textAlign: 'left' };
+  const smallInputStyle = { width: '100%', borderRadius: 12, border: `1px solid ${c.separator}`, background: c.bgSecondary, color: c.label, padding: '10px 12px', fontSize: 14, fontWeight: 500, outline: 'none' };
+
+  const openEditor = (which) => {
+    setEditing(which);
+    if (which === 'username') { setUsernameInput(username || ''); setUsernameError(null); setNeedsReauthForUsername(false); setUsernameReauthPassword(''); }
+    if (which === 'password') { setCurrentPasswordInput(''); setNewPasswordInput(''); setConfirmNewPasswordInput(''); setPasswordError(null); setPasswordSaved(false); }
+    if (which === 'delete') setDeleteError(null);
+  };
+  const closeEditor = () => setEditing(null);
+
+  const handleSaveUsername = async () => {
+    const validationError = validateUsername(usernameInput);
+    if (validationError) { setUsernameError(validationError); return; }
+    setUsernameSaving(true); setUsernameError(null);
+    try {
+      const finalUsername = await updateUsername({
+        newUsernameRaw: usernameInput,
+        oldUsername: username,
+        currentPassword: needsReauthForUsername ? usernameReauthPassword : undefined,
+      });
+      onUsernameChanged(finalUsername);
+      setEditing(null);
+    } catch (err) {
+      if (err?.code === 'auth/requires-recent-login') {
+        setNeedsReauthForUsername(true);
+        setUsernameError('For security, enter your password to confirm this change.');
+      } else {
+        console.error('Username update failed:', err);
+        setUsernameError(friendlyAuthError(err));
+      }
+    } finally {
+      setUsernameSaving(false);
+    }
+  };
+
+  const handleSavePassword = async () => {
+    if (!currentPasswordInput) { setPasswordError('Enter your current password.'); return; }
+    const validationError = validatePassword(newPasswordInput);
+    if (validationError) { setPasswordError(validationError); return; }
+    if (newPasswordInput !== confirmNewPasswordInput) { setPasswordError("New passwords don't match."); return; }
+    setPasswordSaving(true); setPasswordError(null);
+    try {
+      await changeAccountPassword(currentPasswordInput, newPasswordInput);
+      setPasswordSaved(true);
+      setCurrentPasswordInput(''); setNewPasswordInput(''); setConfirmNewPasswordInput('');
+    } catch (err) {
+      const code = err?.code;
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') {
+        setPasswordError('Current password is incorrect.');
+      } else {
+        console.error('Password update failed:', err);
+        setPasswordError(friendlyAuthError(err));
+      }
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
 
   const handleDeleteConfirm = async () => {
     setDeleting(true); setDeleteError(null);
@@ -1434,6 +1699,8 @@ function SettingsScreen({
     if (res && !res.ok) { setDeleting(false); setDeleteError(res.error); }
     // on success this component unmounts (auth state flips to signed-out), nothing more to do
   };
+
+  const usesPassword = authProviderLabel === 'password';
 
   return (
       <div className="relative z-10 flex flex-col flex-1 sq-anim-in">
@@ -1470,6 +1737,186 @@ function SettingsScreen({
             )}
           </div>
 
+          {/* Account */}
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Account</p>
+            <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+
+              {/* signed-in-with indicator */}
+              <div style={rowStyle}>
+                <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.teal, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <CircleUserRound size={15} strokeWidth={1.9} />
+                </div>
+                <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Signed in with</span>
+                <span style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>{authProviderLabel === 'google' ? 'Google' : 'Username & password'}</span>
+              </div>
+              <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+
+              {/* username */}
+              {editing !== 'username' ? (
+                  <button onClick={() => openEditor('username')} style={rowStyle}>
+                    <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <UserCog size={14} strokeWidth={1.9} />
+                    </div>
+                    <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Edit username</span>
+                    <ChevronIcon color={c.labelTertiary} />
+                  </button>
+              ) : (
+                  <div style={{ padding: '14px' }}>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: c.label, marginBottom: 8 }}>Edit username</p>
+                    <input value={usernameInput} maxLength={20} autoCapitalize="none" autoCorrect="off"
+                           onChange={e => { setUsernameInput(e.target.value); setUsernameError(null); }}
+                           style={smallInputStyle} />
+                    {needsReauthForUsername && (
+                        <input type="password" value={usernameReauthPassword} placeholder="Current password"
+                               onChange={e => { setUsernameReauthPassword(e.target.value); setUsernameError(null); }}
+                               style={{ ...smallInputStyle, marginTop: 8 }} />
+                    )}
+                    {usernameError && <p style={{ fontSize: 12, fontWeight: 500, color: c.red, marginTop: 8 }}>{usernameError}</p>}
+                    <div className="flex gap-2.5" style={{ marginTop: 12 }}>
+                      <button onClick={closeEditor} disabled={usernameSaving}
+                              style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.fill, color: c.label }}>
+                        Cancel
+                      </button>
+                      <button onClick={handleSaveUsername} disabled={usernameSaving || (needsReauthForUsername && !usernameReauthPassword)}
+                              style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.blue, color: '#fff', opacity: usernameSaving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                        {usernameSaving && <span style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
+                        {usernameSaving ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
+              )}
+              <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+
+              {/* password — password accounts only */}
+              {usesPassword && (
+                  <>
+                    {editing !== 'password' ? (
+                        <button onClick={() => openEditor('password')} style={rowStyle}>
+                          <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.purple, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                            <KeyRound size={14} strokeWidth={1.9} />
+                          </div>
+                          <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Change password</span>
+                          <ChevronIcon color={c.labelTertiary} />
+                        </button>
+                    ) : (
+                        <div style={{ padding: '14px' }}>
+                          <p style={{ fontSize: 13, fontWeight: 600, color: c.label, marginBottom: 8 }}>Change password</p>
+                          {passwordSaved ? (
+                              <div style={{ borderRadius: 12, padding: '10px 12px', background: dark ? 'rgba(48,209,88,0.14)' : 'rgba(52,199,89,0.1)' }}>
+                                <p style={{ fontSize: 12.5, fontWeight: 600, color: c.green }}>Password updated.</p>
+                              </div>
+                          ) : (
+                              <>
+                                <input type="password" value={currentPasswordInput} placeholder="Current password" autoComplete="current-password"
+                                       onChange={e => { setCurrentPasswordInput(e.target.value); setPasswordError(null); }}
+                                       style={smallInputStyle} />
+                                <input type="password" value={newPasswordInput} placeholder="New password" autoComplete="new-password"
+                                       onChange={e => { setNewPasswordInput(e.target.value); setPasswordError(null); }}
+                                       style={{ ...smallInputStyle, marginTop: 8 }} />
+                                <input type="password" value={confirmNewPasswordInput} placeholder="Confirm new password" autoComplete="new-password"
+                                       onChange={e => { setConfirmNewPasswordInput(e.target.value); setPasswordError(null); }}
+                                       style={{ ...smallInputStyle, marginTop: 8 }} />
+                              </>
+                          )}
+                          {passwordError && <p style={{ fontSize: 12, fontWeight: 500, color: c.red, marginTop: 8 }}>{passwordError}</p>}
+                          <div className="flex gap-2.5" style={{ marginTop: 12 }}>
+                            <button onClick={closeEditor} disabled={passwordSaving}
+                                    style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.fill, color: c.label }}>
+                              {passwordSaved ? 'Done' : 'Cancel'}
+                            </button>
+                            {!passwordSaved && (
+                                <button onClick={handleSavePassword} disabled={passwordSaving}
+                                        style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.blue, color: '#fff', opacity: passwordSaving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                                  {passwordSaving && <span style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
+                                  {passwordSaving ? 'Saving…' : 'Save'}
+                                </button>
+                            )}
+                          </div>
+                        </div>
+                    )}
+                    <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+                  </>
+              )}
+
+              {/* log out */}
+              <button onClick={onLogout} style={rowStyle}>
+                <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.gray, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <LogOut size={14} strokeWidth={1.9} />
+                </div>
+                <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Log out</span>
+                <ChevronIcon color={c.labelTertiary} />
+              </button>
+              <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+
+              {/* delete account */}
+              {editing !== 'delete' ? (
+                  <button onClick={() => openEditor('delete')} style={rowStyle}>
+                    <div style={{ width: 30, height: 30, borderRadius: 10, background: dark ? 'rgba(255,69,58,0.16)' : 'rgba(255,59,48,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: c.red }}>
+                      <Trash2 size={14} strokeWidth={1.9} />
+                    </div>
+                    <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.red }}>Delete account</span>
+                    <ChevronIcon color={c.labelTertiary} />
+                  </button>
+              ) : (
+                  <div style={{ padding: '14px' }}>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: c.label }}>Delete your account?</p>
+                    <p style={{ fontSize: 12, color: c.labelSecondary, marginTop: 4, lineHeight: 1.4 }}>
+                      This permanently removes your profile, history, and leaderboard entry. This can't be undone.
+                    </p>
+                    {deleteError && <p style={{ fontSize: 12, fontWeight: 500, color: c.red, marginTop: 8 }}>{deleteError}</p>}
+                    <div className="flex gap-2.5" style={{ marginTop: 12 }}>
+                      <button onClick={closeEditor} disabled={deleting}
+                              style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.fill, color: c.label }}>
+                        Cancel
+                      </button>
+                      <button onClick={handleDeleteConfirm} disabled={deleting}
+                              style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.red, color: '#fff', opacity: deleting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                        {deleting && <span style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
+                        {deleting ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
+                  </div>
+              )}
+            </div>
+          </div>
+
+          {/* Notifications */}
+          <div>
+            <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Notifications</p>
+            <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+              <div style={rowStyle}>
+                <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.orange, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Bell size={14} strokeWidth={1.9} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontSize: 15, fontWeight: 500, color: c.label }}>Daily reminder</p>
+                  {!notificationsSupported && <p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>Not supported in this browser</p>}
+                </div>
+                <button onClick={onToggleDailyReminder} disabled={!notificationsSupported} aria-label="Toggle daily reminder"
+                        style={{ width: 46, height: 27, borderRadius: 999, background: dailyReminderOn ? c.blue : c.fill, position: 'relative', flexShrink: 0, opacity: notificationsSupported ? 1 : 0.5, transition: 'background-color 0.25s ease' }}>
+                  <span style={{ position: 'absolute', top: 2, left: dailyReminderOn ? 21 : 2, width: 23, height: 23, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)', transition: 'left 0.22s cubic-bezier(0.34,1.56,0.64,1)' }} />
+                </button>
+              </div>
+              {dailyReminderOn && (
+                  <p style={{ fontSize: 11, color: c.labelTertiary, padding: '0 14px 12px 58px', lineHeight: 1.4 }}>
+                    Reminds you around 6 PM if you haven't checked in — only while QuestDaily is open in a tab.
+                  </p>
+              )}
+              <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+              <div style={rowStyle}>
+                <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.pink, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Sparkles size={14} strokeWidth={1.9} />
+                </div>
+                <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Haptic feedback</span>
+                <button onClick={onToggleHaptics} aria-label="Toggle haptic feedback"
+                        style={{ width: 46, height: 27, borderRadius: 999, background: hapticsOn ? c.blue : c.fill, position: 'relative', flexShrink: 0, transition: 'background-color 0.25s ease' }}>
+                  <span style={{ position: 'absolute', top: 2, left: hapticsOn ? 21 : 2, width: 23, height: 23, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)', transition: 'left 0.22s cubic-bezier(0.34,1.56,0.64,1)' }} />
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Appearance */}
           <div>
             <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Appearance</p>
@@ -1487,47 +1934,21 @@ function SettingsScreen({
             </div>
           </div>
 
-          {/* Account */}
+          {/* Privacy & data */}
           <div>
-            <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Account</p>
+            <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Privacy & data</p>
             <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
-              <button onClick={onLogout} style={rowStyle}>
-                <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.gray, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  <LogOut size={14} strokeWidth={1.9} />
+              <button onClick={onExportData} style={rowStyle}>
+                <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.green, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <Download size={14} strokeWidth={1.9} />
                 </div>
-                <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Log out</span>
+                <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Export my data</span>
                 <ChevronIcon color={c.labelTertiary} />
               </button>
-              <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
-              {!confirmingDelete ? (
-                  <button onClick={() => { setConfirmingDelete(true); setDeleteError(null); }} style={rowStyle}>
-                    <div style={{ width: 30, height: 30, borderRadius: 10, background: dark ? 'rgba(255,69,58,0.16)' : 'rgba(255,59,48,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: c.red }}>
-                      <Trash2 size={14} strokeWidth={1.9} />
-                    </div>
-                    <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.red }}>Delete account</span>
-                    <ChevronIcon color={c.labelTertiary} />
-                  </button>
-              ) : (
-                  <div style={{ padding: '14px' }}>
-                    <p style={{ fontSize: 13, fontWeight: 600, color: c.label }}>Delete your account?</p>
-                    <p style={{ fontSize: 12, color: c.labelSecondary, marginTop: 4, lineHeight: 1.4 }}>
-                      This permanently removes your profile, history, and leaderboard entry. This can't be undone.
-                    </p>
-                    {deleteError && <p style={{ fontSize: 12, fontWeight: 500, color: c.red, marginTop: 8 }}>{deleteError}</p>}
-                    <div className="flex gap-2.5" style={{ marginTop: 12 }}>
-                      <button onClick={() => { setConfirmingDelete(false); setDeleteError(null); }} disabled={deleting}
-                              style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.fill, color: c.label }}>
-                        Cancel
-                      </button>
-                      <button onClick={handleDeleteConfirm} disabled={deleting}
-                              style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.red, color: '#fff', opacity: deleting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                        {deleting && <span style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
-                        {deleting ? 'Deleting…' : 'Delete'}
-                      </button>
-                    </div>
-                  </div>
-              )}
             </div>
+            <p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 8, paddingLeft: 2, lineHeight: 1.4 }}>
+              Downloads your level, XP, streak, and full quest history as a JSON file.
+            </p>
           </div>
 
           {/* About */}
@@ -2562,6 +2983,9 @@ export default function QuestDailyApp() {
   const [photoUploading, setPhotoUploading] = useState(false);
   const [photoError, setPhotoError] = useState(null);
   const [hasSeenWelcome, setHasSeenWelcome] = useState(true); // defaults true until localStorage is checked, so it never flashes for returning users
+  const [hapticsOn, setHapticsOnState] = useState(true);
+  const [dailyReminderOn, setDailyReminderOn] = useState(false);
+  const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
 
   useEffect(() => {
     setIsMounted(true);
@@ -2578,6 +3002,11 @@ export default function QuestDailyApp() {
     setStreak(parseInt(localStorage.getItem('sq_streak')) || 0);
     setLastReset(parseInt(localStorage.getItem('sq_lastReset')) || 0);
     setHasSeenWelcome(localStorage.getItem('sq_has_seen_welcome') === 'true');
+    const savedHaptics = localStorage.getItem('sq_haptics_enabled');
+    const hapticsInitial = savedHaptics === null ? true : savedHaptics === 'true';
+    setHapticsOnState(hapticsInitial);
+    setHapticsPref(hapticsInitial);
+    setDailyReminderOn(localStorage.getItem('sq_daily_reminder') === 'true' && notificationsSupported && Notification.permission === 'granted');
     setProofImages(JSON.parse(localStorage.getItem('sq_proofs')) || {});
     setHistory(JSON.parse(localStorage.getItem('sq_history')) || []);
 
@@ -2742,6 +3171,83 @@ export default function QuestDailyApp() {
     }
   };
 
+  // Settings screen calls this after a successful rename — updateUsername()
+  // has already synced Firestore (and the Auth email, for password
+  // accounts), this just brings the in-app display up to date.
+  const handleUsernameChanged = (newUsername) => setUsername(newUsername);
+
+  const handleToggleHaptics = () => {
+    const next = !hapticsOn;
+    setHapticsOnState(next);
+    setHapticsPref(next);
+    if (next) haptic(10); // gives immediate feedback that it's back on
+  };
+
+  const handleToggleDailyReminder = async () => {
+    if (!notificationsSupported) return;
+    if (dailyReminderOn) {
+      setDailyReminderOn(false);
+      localStorage.setItem('sq_daily_reminder', 'false');
+      return;
+    }
+    try {
+      const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+      if (permission === 'granted') {
+        setDailyReminderOn(true);
+        localStorage.setItem('sq_daily_reminder', 'true');
+      }
+      // denied/dismissed: leave the toggle off, no error needed — the
+      // browser's own permission UI already told them what happened
+    } catch (err) {
+      console.error('Notification permission request failed:', err);
+    }
+  };
+
+  // While the daily reminder is on, checks once a minute whether it's past
+  // the reminder hour and today's reminder hasn't fired yet. This only
+  // works while the tab is open — there's no service worker registered
+  // here for true background push, which the Settings copy makes clear.
+  const REMINDER_HOUR = 18;
+  useEffect(() => {
+    if (!dailyReminderOn || !notificationsSupported || Notification.permission !== 'granted') return undefined;
+    const check = () => {
+      const now = new Date();
+      const todayKey = now.toDateString();
+      if (now.getHours() < REMINDER_HOUR) return;
+      if (localStorage.getItem('sq_daily_reminder_last') === todayKey) return;
+      try {
+        new Notification('QuestDaily', { body: "You've got quests waiting — jump back in!" });
+        localStorage.setItem('sq_daily_reminder_last', todayKey);
+      } catch (err) { console.error('Could not show reminder notification:', err); }
+    };
+    check();
+    const id = setInterval(check, 60_000);
+    return () => clearInterval(id);
+  }, [dailyReminderOn, notificationsSupported]);
+
+  const handleExportData = () => {
+    const payload = {
+      username, level, xp, totalXpEarned, streak,
+      history,
+      exportedAt: new Date().toISOString(),
+    };
+    try {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `questdaily-${(username || 'export').replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Data export failed:', err);
+    }
+  };
+
+  const authProviderLabel = getAuthProviderLabel(authUser);
+
 
   useEffect(() => {
     if (uid && username) {
@@ -2897,16 +3403,16 @@ export default function QuestDailyApp() {
         <div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg }}>
           <AmbientBackground c={c} />
 
-          {!authUser && !hasSeenWelcome && (
+          {!hasSeenWelcome && (
               <WelcomeScreen c={c} onContinue={() => { haptic(10); setHasSeenWelcome(true); localStorage.setItem('sq_has_seen_welcome', 'true'); }} />
           )}
-          {!authUser && hasSeenWelcome && <AuthModal onSignedUp={handleSignedUp} onLoggedIn={handleLoggedIn} c={c} />}
+          {hasSeenWelcome && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} c={c} />}
+          {hasSeenWelcome && !showInstallPrompt && !authUser && <AuthModal onSignedUp={handleSignedUp} onLoggedIn={handleLoggedIn} c={c} />}
           {authUser && !username && (
               <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{ background: c.bg }}>
                 <div style={{ width: 28, height: 28, border: `2.5px solid ${c.fill}`, borderTopColor: c.blue, borderRadius: '50%' }} className="animate-spin" />
               </div>
           )}
-          {username && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} c={c} />}
 
           {proofModal && (
               <CameraModal quest={proofModal} c={c}
@@ -2937,9 +3443,14 @@ export default function QuestDailyApp() {
               <HistoryScreen history={history} dark={dark} c={c} onToggleTheme={() => setDark(d => !d)} />
           ) : activeTab === 'settings' ? (
               <SettingsScreen
-                  username={username} photoURL={photoURL} uid={uid} dark={dark} onToggleTheme={() => setDark(d => !d)}
+                  username={username} photoURL={photoURL} uid={uid} authProviderLabel={authProviderLabel}
+                  dark={dark} onToggleTheme={() => setDark(d => !d)}
                   onPhotoFile={handlePhotoFile} photoUploading={photoUploading} photoError={photoError} onDismissPhotoError={() => setPhotoError(null)}
-                  onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} c={c}
+                  onUsernameChanged={handleUsernameChanged} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount}
+                  hapticsOn={hapticsOn} onToggleHaptics={handleToggleHaptics}
+                  dailyReminderOn={dailyReminderOn} onToggleDailyReminder={handleToggleDailyReminder} notificationsSupported={notificationsSupported}
+                  onExportData={handleExportData}
+                  c={c}
               />
           ) : (
               <div className="relative z-10 flex flex-col flex-1 sq-anim-in">
