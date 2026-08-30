@@ -8,7 +8,7 @@ import { initializeApp, getApps } from 'firebase/app';
 import {
   getAuth, onAuthStateChanged, signOut, deleteUser,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
-  GoogleAuthProvider, signInWithPopup,
+  GoogleAuthProvider, signInWithRedirect,
   updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
@@ -244,13 +244,18 @@ async function mintUsernameForGoogleUser(user) {
   }
 }
 
+// Popup-based Google sign-in breaks on hosts that send strict
+// Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy headers (needed
+// here for MediaPipe's multi-threaded WASM) — the popup can't message the
+// result back to this window, so the sign-in just hangs silently.
+// Redirect-based sign-in sidesteps that entirely: the browser navigates to
+// Google and back, and Firebase Auth picks up the result via
+// onAuthStateChanged on reload. The "first time this Google account has
+// ever signed in" username-minting step used to happen right here after
+// the popup resolved — it now lives in hydrateAccount() instead, since
+// nothing runs in *this* page load once the redirect kicks off.
 async function signInWithGoogle() {
-  const result = await signInWithPopup(auth, googleProvider);
-  const existing = await getDoc(doc(db, 'users', result.user.uid)).catch(() => null);
-  if (!existing?.exists()) {
-    await mintUsernameForGoogleUser(result.user);
-  }
-  return result.user;
+  await signInWithRedirect(auth, googleProvider);
 }
 
 // editing an existing account
@@ -1263,15 +1268,10 @@ function AuthModal({ onSignedUp, onLoggedIn, c }) {
     setGoogleSubmitting(true);
     haptic(10);
     try {
-      await signInWithGoogle();
-      // nothing else to do — the resulting auth-state change is picked up
-      // by the app's normal hydration effect, same as any other sign-in
+      await signInWithGoogle(); // navigates away — nothing after this runs on success
     } catch (err) {
-      // a closed/cancelled popup isn't an error worth showing
-      if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
-        console.error('Google sign-in failed:', err);
-        setError(friendlyAuthError(err));
-      }
+      console.error('Google sign-in failed:', err);
+      setError(friendlyAuthError(err));
       setGoogleSubmitting(false);
     }
   };
@@ -3036,11 +3036,25 @@ export default function QuestDailyApp() {
   // generic label — because the app blocks on `username` being set while
   // showing a full-screen loading state. If every source were empty and
   // this left username null, that loading screen would never go away.
-  const hydrateAccount = useCallback(async (uidToLoad, fallbackEmail) => {
-    const [profile, remoteHistory, profileDoc] = await Promise.all([
+  const hydrateAccount = useCallback(async (uidToLoad, fallbackEmail, currentUser) => {
+    let profileDoc = await getDoc(doc(db, 'users', uidToLoad)).catch(() => null);
+
+    // First time this Google account has ever signed in. With popup-based
+    // sign-in this used to happen right after signInWithPopup resolved;
+    // redirect-based sign-in reloads the page instead, so it's caught here —
+    // the first time we see this uid with no profile doc yet.
+    if (!profileDoc?.exists?.() && currentUser && getAuthProviderLabel(currentUser) === 'google') {
+      try {
+        await mintUsernameForGoogleUser(currentUser);
+        profileDoc = await getDoc(doc(db, 'users', uidToLoad)).catch(() => null);
+      } catch (err) {
+        console.error('Failed to set up new Google account:', err);
+      }
+    }
+
+    const [profile, remoteHistory] = await Promise.all([
       fetchRemoteProfile(uidToLoad),
       fetchRemoteHistory(uidToLoad),
-      getDoc(doc(db, 'users', uidToLoad)).catch(() => null),
     ]);
     setLevel(typeof profile?.level === 'number' ? profile.level : 1);
     setXp(typeof profile?.xp === 'number' ? profile.xp : 0);
@@ -3063,7 +3077,7 @@ export default function QuestDailyApp() {
     if (!authUser) { hydratedUidRef.current = null; return; }
     if (hydratedUidRef.current === authUser.uid) return;
     hydratedUidRef.current = authUser.uid;
-    hydrateAccount(authUser.uid, authUser.email);
+    hydrateAccount(authUser.uid, authUser.email, authUser);
   }, [authUser, authLoading, isMounted, hydrateAccount]);
 
   // Defensive safety net: hydrateAccount above should always resolve
@@ -3107,7 +3121,7 @@ export default function QuestDailyApp() {
     if (auth.currentUser) {
       hydratedUidRef.current = auth.currentUser.uid;
       setProofImages({}); // proof photos are device-local and never synced
-      await hydrateAccount(auth.currentUser.uid, auth.currentUser.email);
+      await hydrateAccount(auth.currentUser.uid, auth.currentUser.email, auth.currentUser);
     }
     setActiveTab('quests'); setHasSeenWelcome(true); localStorage.setItem('sq_has_seen_welcome', 'true');
   };
