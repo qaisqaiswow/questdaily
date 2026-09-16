@@ -8,7 +8,7 @@ import { initializeApp, getApps } from 'firebase/app';
 import {
 getAuth, onAuthStateChanged, signOut, deleteUser, getRedirectResult,
 createUserWithEmailAndPassword, signInWithEmailAndPassword,
-GoogleAuthProvider, signInWithRedirect,
+GoogleAuthProvider, signInWithRedirect, setPersistence, browserLocalPersistence,
 updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
@@ -260,6 +260,12 @@ await setDoc(doc(db, 'leaderboard', user.uid), { photoURL: user.photoURL }, { me
 // nothing runs in *this* page load once the redirect kicks off.
 async function signInWithGoogle() {
 googleProvider.setCustomParameters({ prompt: 'select_account' });
+// Explicitly persist the Firebase session so the Google redirect comes back
+// to the same signed-in account instead of looking like a fresh session.
+await setPersistence(auth, browserLocalPersistence);
+// The welcome screen is already completed before the auth modal is shown.
+// Keep that state across the full-page Google redirect as an extra safety net.
+try { localStorage.setItem('sq_google_redirect_pending', 'true'); } catch {}
 await signInWithRedirect(auth, googleProvider);
 }
 
@@ -422,22 +428,44 @@ const [authError, setAuthError] = useState(null);
 
 useEffect(() => {
 let mounted = true;
+let redirectHandled = false;
 
-getRedirectResult(auth).catch(err => {
+// Wait for Firebase to finish resolving any Google redirect before allowing
+// the main app to decide which screen to show. This prevents the post-Google
+// reload from briefly being treated as a signed-out/fresh app.
+const finishRedirect = async () => {
+try {
+const result = await getRedirectResult(auth);
+redirectHandled = true;
 if (!mounted) return;
+if (result?.user) {
+setUser(result.user);
+setAuthError(null);
+}
+try { localStorage.removeItem('sq_google_redirect_pending'); } catch {}
+} catch (err) {
+redirectHandled = true;
+if (!mounted) return;
+try { localStorage.removeItem('sq_google_redirect_pending'); } catch {}
 if (err?.code && err.code !== 'auth/no-auth-event') {
 console.error('Google redirect result failed:', err);
 setAuthError(friendlyAuthError(err));
 }
-});
+} finally {
+if (mounted && redirectHandled) setLoading(false);
+}
+};
 
 const unsub = onAuthStateChanged(auth, u => {
 if (!mounted) return;
 setUser(u);
-setLoading(false);
+// The redirect handler controls the initial loading gate. After that, normal
+// auth changes can update immediately.
+if (redirectHandled) setLoading(false);
 if (u) setAuthError(null);
 });
 
+finishRedirect();
 return () => { mounted = false; unsub(); };
 }, []);
 
@@ -612,64 +640,347 @@ return null;
 }
 
 const REP_METRICS = {
-q1: (lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
-q2: (lms) => { const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
-q4: (lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
-q12:(lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_HIP, LM.L_KNEE], [LM.R_SHOULDER, LM.R_HIP, LM.R_KNEE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
-q17:(lms) => { const hips = [lms[LM.L_HIP], lms[LM.R_HIP]].filter(p => visiblePt(p)); if (!hips.length) return null; return hips.reduce((s, p) => s + p.y, 0) / hips.length; },
-q23:(lms) => { const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+q1: (lms) => {
+  const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]);
+  return p ? angleBetween(p[0], p[1], p[2]) : null;
+},
+q2: (lms) => {
+  const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]);
+  return p ? angleBetween(p[0], p[1], p[2]) : null;
+},
+q4: (lms) => {
+  const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]);
+  return p ? angleBetween(p[0], p[1], p[2]) : null;
+},
+q12: (lms) => {
+  const p = pickSide(lms, [LM.L_SHOULDER, LM.L_HIP, LM.L_KNEE], [LM.R_SHOULDER, LM.R_HIP, LM.R_KNEE]);
+  return p ? angleBetween(p[0], p[1], p[2]) : null;
+},
+q17: (lms) => {
+  const ankles = [lms[LM.L_ANKLE], lms[LM.R_ANKLE]].filter(p => visiblePt(p));
+  if (!ankles.length) return null;
+  return ankles.reduce((sum, p) => sum + p.y, 0) / ankles.length;
+},
+q23: (lms) => {
+  const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]);
+  return p ? angleBetween(p[0], p[1], p[2]) : null;
+},
 };
 
 const REP_CONFIG = {
 q1: { mode: 'angle', downThreshold: 100, upThreshold: 155, cueDown: 'Lower into the pushup', cueUp: 'Push back up to full extension' },
 q2: { mode: 'angle', downThreshold: 110, upThreshold: 160, cueDown: 'Squat down', cueUp: 'Stand back up' },
-q4: { mode: 'angle', downThreshold: 80, upThreshold: 150, cueDown: 'Pull up to the bar', cueUp: 'Lower to a full hang' },
-q12: { mode: 'angle', downThreshold: 110, upThreshold: 150, cueDown: 'Crunch up', cueUp: 'Lower back down' },
-q17: { mode: 'height', downThreshold: 0.02, upThreshold: 0.005, cueDown: 'Jump!', cueUp: 'Land' },
+q4: { mode: 'angle', downThreshold: 80, upThreshold: 150, cueDown: 'Pull your chin toward the bar', cueUp: 'Lower to a full hang' },
+q12: { mode: 'angle', downThreshold: 110, upThreshold: 150, cueDown: 'Sit up and bring your torso forward', cueUp: 'Lie completely back down' },
+q17: { mode: 'height', downThreshold: 0.025, upThreshold: 0.008, cueDown: 'Jump', cueUp: 'Land and jump again' },
 q23: { mode: 'angle', downThreshold: 110, upThreshold: 160, cueDown: 'Lower into the lunge', cueUp: 'Return to standing' },
 };
 
 const MIN_REP_MS = 500;
+const FORM_STABLE_FRAMES = 5;
 
 function createPoseRepState(initialReps = 0) {
-return { phase: 'up', reps: initialReps, baselineY: null, lastRepAt: 0, smoothed: null };
+return {
+  phase: 'up',
+  reps: initialReps,
+  baselineY: null,
+  lastRepAt: 0,
+  smoothed: null,
+  validFrames: 0,
+  invalidFrames: 0,
+  movementStarted: false,
+};
+}
+
+function distance2D(a, b) {
+if (!a || !b) return null;
+return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function getAveragePoint(lms, leftIndex, rightIndex) {
+const left = lms[leftIndex];
+const right = lms[rightIndex];
+if (visiblePt(left, 0.40) && visiblePt(right, 0.40)) {
+  return {
+    x: (left.x + right.x) / 2,
+    y: (left.y + right.y) / 2,
+    visibility: Math.min(left.visibility ?? 1, right.visibility ?? 1),
+  };
+}
+return visiblePt(left, 0.40) ? left : visiblePt(right, 0.40) ? right : null;
+}
+
+function getBestExerciseSide(lms) {
+const left = [lms[LM.L_SHOULDER], lms[LM.L_HIP], lms[LM.L_KNEE], lms[LM.L_ANKLE]];
+const right = [lms[LM.R_SHOULDER], lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]];
+const score = points => points.reduce((n, p) => n + (visiblePt(p, 0.40) ? 1 : 0), 0);
+return score(right) >= score(left) ? 'right' : 'left';
+}
+
+function getExerciseSidePoints(lms, side) {
+if (side === 'left') {
+  return {
+    shoulder: lms[LM.L_SHOULDER],
+    elbow: lms[LM.L_ELBOW],
+    wrist: lms[LM.L_WRIST],
+    hip: lms[LM.L_HIP],
+    knee: lms[LM.L_KNEE],
+    ankle: lms[LM.L_ANKLE],
+  };
+}
+return {
+  shoulder: lms[LM.R_SHOULDER],
+  elbow: lms[LM.R_ELBOW],
+  wrist: lms[LM.R_WRIST],
+  hip: lms[LM.R_HIP],
+  knee: lms[LM.R_KNEE],
+  ankle: lms[LM.R_ANKLE],
+};
+}
+
+function straightBodyAngle(shoulder, hip, ankle) {
+if (!shoulder || !hip || !ankle) return null;
+return angleBetween(shoulder, hip, ankle);
+}
+
+// This is deliberately separate from the rep angle. The rep angle answers
+// "did a joint move?" while this answers "does the whole body look like the
+// exercise?". A rep can only progress after both checks pass.
+function validateExerciseForm(questId, lms) {
+if (!lms) return { valid: false, cue: 'Move fully into frame' };
+
+const side = getBestExerciseSide(lms);
+const p = getExerciseSidePoints(lms, side);
+const shoulders = getAveragePoint(lms, LM.L_SHOULDER, LM.R_SHOULDER);
+const hips = getAveragePoint(lms, LM.L_HIP, LM.R_HIP);
+const knees = getAveragePoint(lms, LM.L_KNEE, LM.R_KNEE);
+const ankles = getAveragePoint(lms, LM.L_ANKLE, LM.R_ANKLE);
+
+// PUSHUPS: require a long, plank-like body instead of only an elbow bend.
+if (questId === 'q1') {
+  if (![p.shoulder, p.hip, p.knee, p.ankle, p.elbow, p.wrist].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Keep your full body and arms visible' };
+  }
+
+  const bodyAngle = straightBodyAngle(p.shoulder, p.hip, p.ankle);
+  const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
+  const shoulderHip = distance2D(p.shoulder, p.hip);
+  const hipAnkle = distance2D(p.hip, p.ankle);
+
+  if (bodyAngle === null || bodyAngle < 145) {
+    return { valid: false, cue: 'Keep your body straight like a plank' };
+  }
+  if (kneeAngle !== null && kneeAngle < 145) {
+    return { valid: false, cue: 'Keep your legs extended' };
+  }
+  if ((shoulderHip ?? 0) < 0.10 || (hipAnkle ?? 0) < 0.20) {
+    return { valid: false, cue: 'Use a full pushup position' };
+  }
+  return { valid: true, cue: 'Good pushup form' };
+}
+
+// SQUATS: require both feet/legs and a real hip/knee bend. This rejects
+// seated arm movements because the torso/leg geometry must also match.
+if (questId === 'q2') {
+  if (![p.hip, p.knee, p.ankle, p.shoulder].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Keep your legs and upper body visible' };
+  }
+
+  const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
+  const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
+
+  if (kneeAngle === null || torsoAngle === null) {
+    return { valid: false, cue: 'Show your whole squat' };
+  }
+  if (torsoAngle < 105) {
+    return { valid: false, cue: 'Keep your chest up' };
+  }
+  return { valid: true, cue: 'Good squat form' };
+}
+
+// PULLUPS: require a vertical hanging body and hands above the shoulders.
+// Sitting arm curls cannot satisfy this geometry.
+if (questId === 'q4') {
+  if (![p.shoulder, p.elbow, p.wrist, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Show your full body hanging from the bar' };
+  }
+
+  const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
+  const legAngle = angleBetween(p.hip, p.knee, p.ankle);
+  const wristShoulderDistance = Math.abs(p.wrist.y - p.shoulder.y);
+
+  if (torsoAngle === null || torsoAngle < 145) {
+    return { valid: false, cue: 'Hang vertically from the bar' };
+  }
+  if (legAngle !== null && legAngle < 125) {
+    return { valid: false, cue: 'Keep your legs mostly extended' };
+  }
+  if (p.wrist.y > p.shoulder.y + 0.12 || wristShoulderDistance < 0.05) {
+    return { valid: false, cue: 'Keep your hands above the bar area' };
+  }
+  return { valid: true, cue: 'Good pullup form' };
+}
+
+// SITUPS: require the hips and knees to stay anchored while the torso changes
+// angle. Arm-only movement while sitting/standing won't match this geometry.
+if (questId === 'q12') {
+  if (![p.shoulder, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Lie down with your full body visible' };
+  }
+
+  const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
+  const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
+
+  if (torsoAngle === null) return { valid: false, cue: 'Keep your torso visible' };
+  if (kneeAngle !== null && kneeAngle < 75) {
+    return { valid: false, cue: 'Keep your knees reasonably stable' };
+  }
+  if (torsoAngle < 45) {
+    return { valid: false, cue: 'Use a controlled situp, not a standing movement' };
+  }
+  return { valid: true, cue: 'Good situp position' };
+}
+
+// JUMP ROPE: track the ankles rather than just hip movement, and require the
+// person to remain upright with both feet close together.
+if (questId === 'q17') {
+  if (![shoulders, hips, knees, ankles].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Keep your whole body and both feet visible' };
+  }
+
+  const torsoAngle = angleBetween(shoulders, hips, knees);
+  const kneeLeft = angleBetween(lms[LM.L_HIP], lms[LM.L_KNEE], lms[LM.L_ANKLE]);
+  const kneeRight = angleBetween(lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]);
+  const ankleGap = Math.abs(lms[LM.L_ANKLE].x - lms[LM.R_ANKLE].x);
+
+  if (torsoAngle !== null && torsoAngle < 145) {
+    return { valid: false, cue: 'Stay upright while jumping' };
+  }
+  if ((kneeLeft !== null && kneeLeft < 105) || (kneeRight !== null && kneeRight < 105)) {
+    return { valid: false, cue: 'Use small rope jumps, not deep squats' };
+  }
+  if (ankleGap > 0.35) {
+    return { valid: false, cue: 'Keep your feet closer together' };
+  }
+  return { valid: true, cue: 'Good jump-rope form' };
+}
+
+// LUNGES: require a real split stance. A seated knee bend or arm movement
+// cannot satisfy both legs' geometry.
+if (questId === 'q23') {
+  const leftHip = lms[LM.L_HIP], rightHip = lms[LM.R_HIP];
+  const leftKnee = lms[LM.L_KNEE], rightKnee = lms[LM.R_KNEE];
+  const leftAnkle = lms[LM.L_ANKLE], rightAnkle = lms[LM.R_ANKLE];
+
+  if (![leftHip, rightHip, leftKnee, rightKnee, leftAnkle, rightAnkle].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Keep both legs completely visible' };
+  }
+
+  const leftKneeAngle = angleBetween(leftHip, leftKnee, leftAnkle);
+  const rightKneeAngle = angleBetween(rightHip, rightKnee, rightAnkle);
+  const stanceWidth = Math.abs(leftAnkle.x - rightAnkle.x);
+  const hipWidth = Math.abs(leftHip.x - rightHip.x);
+
+  if (stanceWidth < Math.max(0.12, hipWidth * 1.15)) {
+    return { valid: false, cue: 'Step one foot forward into a real lunge stance' };
+  }
+  if (leftKneeAngle === null || rightKneeAngle === null) {
+    return { valid: false, cue: 'Keep both knees visible' };
+  }
+  if (leftKneeAngle < 55 || rightKneeAngle < 55) {
+    return { valid: false, cue: 'Do not collapse your knees inward' };
+  }
+  return { valid: true, cue: 'Good lunge form' };
+}
+
+return { valid: true, cue: '' };
 }
 
 function updatePoseRepState(state, questId, landmarks, now) {
 const config = REP_CONFIG[questId];
 const metricFn = REP_METRICS[questId];
 if (!config || !metricFn || !landmarks) {
-return { reps: state.reps, phase: state.phase, cue: 'Move into frame', counted: false };
+return { reps: state.reps, phase: state.phase, cue: 'Move into frame', counted: false, formValid: false };
 }
+
+const form = validateExerciseForm(questId, landmarks);
+
+if (!form.valid) {
+  state.invalidFrames = Math.min(30, state.invalidFrames + 1);
+  state.validFrames = Math.max(0, state.validFrames - 2);
+  state.movementStarted = false;
+  return {
+    reps: state.reps,
+    phase: state.phase,
+    cue: form.cue,
+    counted: false,
+    formValid: false,
+  };
+}
+
+state.invalidFrames = Math.max(0, state.invalidFrames - 1);
+state.validFrames = Math.min(FORM_STABLE_FRAMES + 4, state.validFrames + 1);
+
+// Never let a one-frame pose glitch start or finish a rep.
+if (state.validFrames < FORM_STABLE_FRAMES) {
+  return {
+    reps: state.reps,
+    phase: state.phase,
+    cue: 'Hold the correct exercise position',
+    counted: false,
+    formValid: true,
+  };
+}
+
 const raw = metricFn(landmarks);
 if (raw === null) {
-return { reps: state.reps, phase: state.phase, cue: 'Move fully into frame', counted: false };
+return { reps: state.reps, phase: state.phase, cue: 'Move fully into frame', counted: false, formValid: false };
 }
+
 state.smoothed = state.smoothed === null ? raw : state.smoothed * 0.6 + raw * 0.4;
 const value = state.smoothed;
 let counted = false;
 
 if (config.mode === 'height') {
-if (state.baselineY === null) state.baselineY = value;
-else state.baselineY = state.baselineY * 0.98 + value * 0.02;
-const jumpHeight = state.baselineY - value;
-if (state.phase === 'up' && jumpHeight >= config.downThreshold) {
-state.phase = 'down';
-} else if (state.phase === 'down' && jumpHeight <= config.upThreshold) {
-if (now - state.lastRepAt >= MIN_REP_MS) { state.reps += 1; state.lastRepAt = now; counted = true; }
-state.phase = 'up';
-}
+  // Establish the jump baseline only while the athlete is in a valid standing
+  // rope-jump posture. This prevents camera movement from becoming a "rep".
+  if (state.baselineY === null) {
+    state.baselineY = value;
+  } else {
+    state.baselineY = state.baselineY * 0.985 + value * 0.015;
+  }
+
+  const jumpHeight = state.baselineY - value;
+
+  if (state.phase === 'up' && jumpHeight >= config.downThreshold) {
+    state.phase = 'down';
+    state.movementStarted = true;
+  } else if (state.phase === 'down' && jumpHeight <= config.upThreshold) {
+    if (state.movementStarted && now - state.lastRepAt >= MIN_REP_MS) {
+      state.reps += 1;
+      state.lastRepAt = now;
+      counted = true;
+    }
+    state.phase = 'up';
+    state.movementStarted = false;
+  }
 } else {
-if (state.phase === 'up' && value <= config.downThreshold) {
-state.phase = 'down';
-} else if (state.phase === 'down' && value >= config.upThreshold) {
-if (now - state.lastRepAt >= MIN_REP_MS) { state.reps += 1; state.lastRepAt = now; counted = true; }
-state.phase = 'up';
-}
+  if (state.phase === 'up' && value <= config.downThreshold) {
+    state.phase = 'down';
+    state.movementStarted = true;
+  } else if (state.phase === 'down' && value >= config.upThreshold) {
+    if (state.movementStarted && now - state.lastRepAt >= MIN_REP_MS) {
+      state.reps += 1;
+      state.lastRepAt = now;
+      counted = true;
+    }
+    state.phase = 'up';
+    state.movementStarted = false;
+  }
 }
 
 const cue = state.phase === 'up' ? config.cueDown : config.cueUp;
-return { reps: state.reps, phase: state.phase, cue, counted };
+return { reps: state.reps, phase: state.phase, cue, counted, formValid: true };
 }
 
 // quest labels
@@ -1254,10 +1565,8 @@ return () => clearInterval(id);
 return <span className={className} style={style}>{text}</span>;
 }
 
-// Welcome screen is shown on every fresh app load so existing and new users
-// both see the latest QuestDaily changes. The user can dismiss it for the
-// current session; it intentionally does not persist that dismissal.
-// The update card below is the in-app changelog for the current release.
+// Welcome screen is shown once per user/device, then stays dismissed.
+// The update card below is also available later from Settings → Updates.
 function WelcomeScreen({ onContinue, c }) {
 const [showUpdates, setShowUpdates] = useState(false);
 const steps = [
@@ -1270,6 +1579,7 @@ const updates = [
 { Icon: Sparkles, title: 'Expo glass UI', body: 'A cleaner, deeper glass treatment with blur, highlights, reflections, and smoother depth across the app.' },
 { Icon: CircleDot, title: 'Thinking orbs', body: 'New animated thinking orbs make AI processing and verification states feel alive without blocking the experience.' },
 { Icon: ShieldCheck, title: 'AI camera upgrade', body: 'The body skeleton now stays visible on every camera challenge, with smoother tracking and clearer verification feedback.' },
+{ Icon: Activity, title: 'Smarter exercise form detection', body: 'AI now checks your actual exercise posture, movement, and range of motion before counting a rep, making fake or incorrect movements much harder to count.' },
 { Icon: Camera, title: 'Camera controls', body: 'The camera flow and cancel behavior were cleaned up so leaving a challenge is more reliable.' },
 { Icon: Timer, title: '24-hour quests', body: 'The daily countdown and automatic 24-hour refresh are back, with the next reset always visible.' },
 { Icon: ListChecks, title: 'Cleaner navigation', body: 'The leaderboard is now its own page and zero-XP players stay out of the rankings.' },
@@ -1717,6 +2027,17 @@ onExportData, c,
 // null | 'username' | 'password' | 'delete' — only one inline editor
 // open at a time, inside the Account card.
 const [editing, setEditing] = useState(null);
+const [showUpdates, setShowUpdates] = useState(false);
+const updates = [
+  { Icon: Sparkles, title: 'Expo glass UI', body: 'A cleaner, deeper glass treatment with blur, highlights, reflections, and smoother depth across the app.' },
+  { Icon: CircleDot, title: 'Thinking orbs', body: 'New animated thinking orbs make AI processing and verification states feel alive without blocking the experience.' },
+  { Icon: ShieldCheck, title: 'AI camera upgrade', body: 'The body skeleton now stays visible on every camera challenge, with smoother tracking and clearer verification feedback.' },
+{ Icon: Activity, title: 'Smarter exercise form detection', body: 'AI now checks your actual exercise posture, movement, and range of motion before counting a rep, making fake or incorrect movements much harder to count.' },
+  { Icon: Camera, title: 'Camera controls', body: 'The camera flow and cancel behavior were cleaned up so leaving a challenge is more reliable.' },
+  { Icon: Timer, title: '24-hour quests', body: 'The daily countdown and automatic 24-hour refresh are back, with the next reset always visible.' },
+  { Icon: ListChecks, title: 'Cleaner navigation', body: 'The leaderboard is now its own page and zero-XP players stay out of the rankings.' },
+  { Icon: UserCog, title: 'Account + settings', body: 'Your account and settings options stay together in one place, with the previous controls preserved.' },
+];
 
 const [usernameInput, setUsernameInput] = useState(username || '');
 const [usernameReauthPassword, setUsernameReauthPassword] = useState('');
@@ -2051,6 +2372,37 @@ Downloads your level, XP, streak, and full quest history as a JSON file.
 </p>
 </div>
 
+{/* Updates */}
+<div>
+<p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Updates</p>
+<div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+<button onClick={() => { haptic(6); setShowUpdates(v => !v); }} aria-expanded={showUpdates} style={rowStyle}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<Sparkles size={14} strokeWidth={1.9} />
+</div>
+<span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>What's new</span>
+<span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: c.blue, borderRadius: 999, padding: '3px 7px', letterSpacing: 0.35 }}>UPDATE</span>
+<ChevronRight size={17} color={c.labelTertiary} style={{ transform: showUpdates ? 'rotate(90deg)' : 'none', transition: 'transform 220ms ease', flexShrink: 0 }} />
+</button>
+<div style={{ overflow: 'hidden', maxHeight: showUpdates ? 900 : 0, opacity: showUpdates ? 1 : 0, transition: 'max-height 420ms cubic-bezier(.22,1,.36,1), opacity 220ms ease' }}>
+<div style={{ borderTop: `1px solid ${c.separator}`, padding: '6px 0' }}>
+{updates.map(({ Icon, title, body }, i) => (
+<div key={title} className="sq-anim-in" style={{ display: 'flex', gap: 12, padding: '11px 14px', animationDelay: `${i * 0.035}s` }}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<Icon size={14} strokeWidth={1.9} />
+</div>
+<div style={{ minWidth: 0 }}>
+<p style={{ fontSize: 13, fontWeight: 700, color: c.label, lineHeight: 1.3 }}>{title}</p>
+<p style={{ fontSize: 11.5, color: c.labelSecondary, marginTop: 3, lineHeight: 1.45 }}>{body}</p>
+</div>
+</div>
+))}
+</div>
+</div>
+</div>
+<p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 8, paddingLeft: 2, lineHeight: 1.4 }}>See the latest QuestDaily features and improvements anytime from here.</p>
+</div>
+
 {/* About */}
 <div>
 <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>About</p>
@@ -2059,7 +2411,8 @@ Downloads your level, XP, streak, and full quest history as a JSON file.
 Level, XP, streak, quest history, and your profile photo sync to your account.
 Quest check-in photos and today's quest list stay on this device only.
 </p>
-<p className="sq-mono" style={{ fontSize: 10, color: c.labelTertiary, marginTop: 10 }}>QuestDaily · v1.0</p>
+<p style={{ fontSize: 12, color: c.labelSecondary, marginTop: 10 }}>Created by <span style={{ fontWeight: 800, color: c.label }}>qaiskurdieh</span></p>
+<p className="sq-mono" style={{ fontSize: 10, color: c.labelTertiary, marginTop: 6 }}>QuestDaily · v1.0</p>
 </div>
 </div>
 </div>
@@ -2805,8 +3158,10 @@ ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.
 };
 }, [hasSkeletonTracking, quest.reps, quest.id, phase, confirmed]);
 
-// rep quests are verified by joint-angle thresholds, which a static photo
-// can't fake (angles never move) — but a *video* of someone else
+// Rep quests are verified by body-form validation + joint-angle movement.
+// The form validator must pass for several consecutive frames before movement
+// can start or finish a rep, which blocks common angle-only spoofing such as
+// sitting down and repeatedly moving the arms.
 // exercising, played on another screen and pointed at the camera, would
 // still cross those thresholds. This runs alongside pose tracking purely
 // to catch that: it doesn't judge the activity, only whether the feed
@@ -3150,7 +3505,7 @@ const [activeTab, setActiveTab] = useState('quests');
 const [photoURL, setPhotoURL] = useState(null);
 const [photoUploading, setPhotoUploading] = useState(false);
 const [photoError, setPhotoError] = useState(null);
-const [hasSeenWelcome, setHasSeenWelcome] = useState(false); // intentionally starts visible on every fresh app load
+const [hasSeenWelcome, setHasSeenWelcome] = useState(true);
 const [hapticsOn, setHapticsOnState] = useState(true);
 const [dailyReminderOn, setDailyReminderOn] = useState(false);
 const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
@@ -3159,6 +3514,7 @@ useEffect(() => {
 setIsMounted(true);
 const savedDark = localStorage.getItem('sq_dark');
 setDark(savedDark !== null ? savedDark === 'true' : window.matchMedia('(prefers-color-scheme: dark)').matches);
+setHasSeenWelcome(localStorage.getItem('sq_has_seen_welcome') === 'true');
 
 if (!localStorage.getItem('sq_has_seen_install_v2')) {
 setShowInstallPrompt(true);
@@ -3169,7 +3525,6 @@ setXp(parseInt(localStorage.getItem('sq_xp')) || 0);
 setTotalXpEarned(parseInt(localStorage.getItem('sq_totalXpEarned')) || 0);
 setStreak(parseInt(localStorage.getItem('sq_streak')) || 0);
 setLastReset(parseInt(localStorage.getItem('sq_lastReset')) || 0);
-setHasSeenWelcome(false); // show the welcome/update screen to everyone on each fresh load
 const savedHaptics = localStorage.getItem('sq_haptics_enabled');
 const hapticsInitial = savedHaptics === null ? true : savedHaptics === 'true';
 setHapticsOnState(hapticsInitial);
@@ -3593,7 +3948,7 @@ return (
 <AmbientBackground c={c} />
 
 {!hasSeenWelcome && (
-<WelcomeScreen c={c} onContinue={() => { haptic(10); setHasSeenWelcome(true); }} />
+<WelcomeScreen c={c} onContinue={() => { haptic(10); localStorage.setItem('sq_has_seen_welcome', 'true'); setHasSeenWelcome(true); }} />
 )}
 {hasSeenWelcome && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} c={c} />}
 {hasSeenWelcome && !showInstallPrompt && !authUser && <AuthModal onSignedUp={handleSignedUp} onLoggedIn={handleLoggedIn} c={c} initialError={authError} />}
