@@ -7,7 +7,7 @@ import * as exifr from 'exifr';
 import { initializeApp, getApps } from 'firebase/app';
 import {
 getAuth, onAuthStateChanged, signOut, deleteUser,
-createUserWithEmailAndPassword, signInWithEmailAndPassword,
+createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile,
 updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
@@ -153,7 +153,7 @@ if (code === 'auth/network-request-failed') return "Can't reach the server. Chec
 if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
 if (code === 'auth/invalid-email') return 'That username can\'t be used. Try a different one.';
 if (code === 'permission-denied' || code === 'firestore/permission-denied') {
-return "Your database's security rules are blocking this — the 'usernames', 'users', and 'leaderboard' collections in Firestore need read/write rules set up. This is a Firebase Console configuration step, not something wrong with what you typed.";
+return 'The database is unavailable right now. Your account sign-in itself does not require the database; please try again.';
 }
 return err?.message ? `Something went wrong: ${err.message}` : 'Something went wrong. Please try again.';
 }
@@ -167,49 +167,45 @@ return err?.message ? `Something went wrong: ${err.message}` : 'Something went w
 async function signUpAccount(usernameRaw, password) {
 const username = usernameRaw.trim();
 const usernameLower = username.toLowerCase();
-const usernameDoc = doc(db, USERNAMES_COLLECTION, usernameLower);
 
-let existing;
+// IMPORTANT: account creation must not depend on Firestore permissions.
+// Firebase Auth itself is the source of truth for username + password here.
+// The deterministic email is only an internal Auth identifier; users never
+// need a real mailbox for it.
+const cred = await createUserWithEmailAndPassword(
+  auth,
+  usernameToEmail(usernameLower),
+  password
+);
+
 try {
-existing = await getDoc(usernameDoc);
+  await updateProfile(cred.user, { displayName: username });
 } catch (err) {
-console.error('Username availability check failed:', err);
-throw err; // surfaced via friendlyAuthError, including the permission-denied case
-}
-if (existing.exists()) {
-const err = new Error('That username is already taken.');
-err.code = 'auth/email-already-in-use';
-throw err;
+  // The account already exists in Auth, so a profile metadata failure should
+  // never turn a successful signup into a fake "database rules" error.
+  console.warn('Could not save Auth display name:', err);
 }
 
-const cred = await createUserWithEmailAndPassword(auth, usernameToEmail(usernameLower), password);
-try {
-await Promise.all([
-setDoc(usernameDoc, { uid: cred.user.uid, username }),
-setDoc(doc(db, USERS_COLLECTION, cred.user.uid), { username, createdAt: Date.now() }),
-]);
-} catch (err) {
-console.error('Failed to finish account setup:', err);
-throw err;
-}
-return { uid: cred.user.uid, username };
+// Firestore is optional for the account itself. Leaderboard/profile sync can
+// happen later when rules permit it, but signup succeeds without it.
+return { uid: cred.user.uid, username: cred.user.displayName || username };
 }
 
-// Logs into an existing account. Looks up the reservation doc first purely
-// to recover the original display-cased username (login itself only needs
-// the deterministic email, so a typo'd case still signs in fine).
+// Login only touches Firebase Authentication. No Firestore reads are needed,
+// so a user's ability to sign in is independent of database security rules.
 async function logInAccount(usernameRaw, password) {
 const username = usernameRaw.trim();
 const usernameLower = username.toLowerCase();
-const cred = await signInWithEmailAndPassword(auth, usernameToEmail(usernameLower), password);
+const cred = await signInWithEmailAndPassword(
+  auth,
+  usernameToEmail(usernameLower),
+  password
+);
 
-let displayUsername = username;
-try {
-const snap = await getDoc(doc(db, USERNAMES_COLLECTION, usernameLower));
-if (snap.exists() && snap.data()?.username) displayUsername = snap.data().username;
-} catch { /* non-fatal — fall back to what they typed */ }
-
-return { uid: cred.user.uid, username: displayUsername };
+return {
+  uid: cred.user.uid,
+  username: cred.user.displayName || username,
+};
 }
 
 async function logOutAccount() {
