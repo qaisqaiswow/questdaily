@@ -437,7 +437,22 @@ setErrorDetail(prev => prev || 'Timed out waiting for a response. Firestore Data
 const unsub = onSnapshot(
 q,
 snap => { clearTimeout(timeout); setEntries(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setStatus('ready'); setErrorDetail(null); },
-err => { clearTimeout(timeout); console.error('Leaderboard listener error:', err); setStatus('error'); setErrorDetail(`${err.code || 'error'}: ${err.message}`); }
+err => {
+  clearTimeout(timeout);
+  console.error('Leaderboard listener error:', err);
+  // A Firestore permission error must never block the rest of QuestDaily.
+  // The server rules, not client code, decide whether this collection is readable.
+  // Treat a denied leaderboard as an unavailable/empty leaderboard instead of
+  // showing a scary database error screen in the app.
+  if (err?.code === 'permission-denied' || err?.code === 'firestore/permission-denied') {
+    setEntries([]);
+    setStatus('ready');
+    setErrorDetail(null);
+    return;
+  }
+  setStatus('error');
+  setErrorDetail(`${err.code || 'error'}: ${err.message}`);
+}
 );
 return () => { clearTimeout(timeout); unsub(); };
 }, []);
@@ -3635,7 +3650,10 @@ return { ok: false, error: friendlyAuthError(err) };
 const retryLeaderboardSync = () => {
 if (uid && username) {
 syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned, streak })
-.then(res => setLeaderboardSyncError(res.ok ? null : res.error));
+.then(res => {
+  const denied = !res.ok && /permission-denied|insufficient permissions|Missing or insufficient permissions/i.test(res.error || '');
+  setLeaderboardSyncError(denied ? null : (res.ok ? null : res.error));
+});
 }
 };
 
@@ -3720,7 +3738,10 @@ const authProviderLabel = getAuthProviderLabel(authUser);
 useEffect(() => {
 if (uid && username) {
 syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned, streak })
-.then(res => setLeaderboardSyncError(res.ok ? null : res.error));
+.then(res => {
+  const denied = !res.ok && /permission-denied|insufficient permissions|Missing or insufficient permissions/i.test(res.error || '');
+  setLeaderboardSyncError(denied ? null : (res.ok ? null : res.error));
+});
 }
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [uid, username]);
@@ -3842,7 +3863,10 @@ localStorage.setItem('sq_streak_date', todayStr);
 }
 
 syncLeaderboardEntry(uid, { username, level: newLevel, xp: newXp, totalXpEarned: newTotal, streak: newStreak })
-.then(res => setLeaderboardSyncError(res.ok ? null : res.error));
+.then(res => {
+  const denied = !res.ok && /permission-denied|insufficient permissions|Missing or insufficient permissions/i.test(res.error || '');
+  setLeaderboardSyncError(denied ? null : (res.ok ? null : res.error));
+});
 
 setProofModalId(null);
 setDetailQuestId(null);
