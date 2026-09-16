@@ -1147,11 +1147,13 @@ box-shadow/backdrop-filter are deliberately excluded here: animating
 those on many overlapping glass surfaces at once is what causes janky,
 "unpolished" frame drops, so those stay instant while color/background
 still crossfade smoothly. */
-.sq-root, .sq-root :where(div, span, p, h1, h2, h3, button, a, input) {
+.sq-root, .sq-root button, .sq-root a, .sq-root input, .sq-root textarea, .sq-root h1, .sq-root h2, .sq-root h3 {
 transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease;
 }
 svg { transition: stroke 0.2s ease, fill 0.2s ease; }
-.sq-scroll { -webkit-overflow-scrolling: touch; }
+.sq-scroll { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.sq-root button, .sq-root a { contain: layout style; }
+.sq-cam-shell video, .sq-cam-shell canvas { transform: translateZ(0); backface-visibility: hidden; }
 .sq-icon-fff svg { color: #fff; }
 @keyframes sq-fade-up { from { opacity: 0; transform: translate3d(0,7px,0); } to { opacity: 1; transform: translate3d(0,0,0); } }
 @keyframes sq-check-in { 0% { opacity: 0; transform: scale(0.5); } 70% { opacity: 1; transform: scale(1.06); } 100% { opacity: 1; transform: scale(1); } }
@@ -1981,6 +1983,8 @@ const [passwordSaved, setPasswordSaved] = useState(false);
 
 const [deleting, setDeleting] = useState(false);
 const [deleteError, setDeleteError] = useState(null);
+const [specialInput, setSpecialInput] = useState('');
+const [specialMessage, setSpecialMessage] = useState(false);
 
 const rowStyle = { width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 14px', textAlign: 'left' };
 const smallInputStyle = { width: '100%', borderRadius: 12, border: `1px solid ${c.separator}`, background: c.bgSecondary, color: c.label, padding: '10px 12px', fontSize: 14, fontWeight: 500, outline: 'none' };
@@ -2228,6 +2232,46 @@ style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 
 )}
 </div>
 </div>
+
+{isSaqoom && (
+  <div>
+    <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Special</p>
+    <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+      <div style={rowStyle}>
+        <div style={{ width: 30, height: 30, borderRadius: 10, background: 'rgba(255,45,85,0.16)', color: c.pink, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <span aria-hidden="true" style={{ fontSize: 15 }}>💗</span>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ fontSize: 15, fontWeight: 600, color: c.label }}>Emoji:letter</p>
+          <p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>Saqoom-only</p>
+        </div>
+      </div>
+      <div style={{ borderTop: `1px solid ${c.separator}`, padding: 14 }}>
+        <input
+          value={specialInput}
+          onChange={e => { setSpecialInput(e.target.value); setSpecialMessage(false); }}
+          onKeyDown={e => { if (e.key === 'Enter' && specialInput.trim()) setSpecialMessage(true); }}
+          placeholder="Enter emoji:letter"
+          aria-label="Emoji:letter"
+          style={{ ...smallInputStyle }}
+        />
+        <button
+          type="button"
+          onClick={() => { if (specialInput.trim()) setSpecialMessage(true); }}
+          disabled={!specialInput.trim()}
+          style={{ width: '100%', marginTop: 9, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 700, background: c.pink, color: '#fff', opacity: specialInput.trim() ? 1 : 0.45 }}
+        >
+          Enter
+        </button>
+        {specialMessage && (
+          <div style={{ marginTop: 10, borderRadius: 12, padding: '11px 12px', background: 'rgba(255,45,85,0.10)', color: c.pink, textAlign: 'center' }}>
+            <p style={{ fontSize: 14, fontWeight: 800 }}>I love you samsoom</p>
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+)}
 
 {/* Notifications */}
 <div>
@@ -2582,6 +2626,10 @@ const passStreakRef = useRef(0);
 const poseStateRef = useRef(createPoseRepState(quest.reps ? (quest.progress || 0) : 0));
 const poseRafRef = useRef(null);
 const poseLastVideoTimeRef = useRef(-1);
+const poseLastDetectAtRef = useRef(0);
+const skeletonCtxRef = useRef(null);
+const poseUiPhaseRef = useRef('up');
+const poseUiCueRef = useRef('Get in frame');
 const smoothedLandmarksRef = useRef(null);
 const poseStableFramesRef = useRef(0);
 const smoothedActRef = useRef(null);
@@ -2679,7 +2727,7 @@ const session = ++cameraSessionRef.current;
 stopCamera();
 setCamError(null); setNotice(null); setUploadedProof(null); setPhase('starting');
 const attempts = [
-{ video: { facingMode: { ideal: mode }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+{ video: { facingMode: { ideal: mode }, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 30, max: 30 } }, audio: false },
 { video: { facingMode: { ideal: mode } }, audio: false },
 { video: true, audio: false },
 ];
@@ -2898,6 +2946,11 @@ useEffect(() => {
 if (!hasSkeletonTracking || phase !== 'live' || confirmed) return undefined;
 let cancelled = false;
 
+// Pose inference is intentionally throttled. MediaPipe inference is the expensive
+// part; the skeleton is still painted every animation frame from the latest
+// smoothed landmarks, so motion remains visually fluid without running the model
+// at the camera's full frame rate.
+const DETECT_INTERVAL_MS = 1000 / 15;
 const SMOOTH = 0.32;
 const MIN_VIS = 0.28;
 const MAJOR_JOINTS = new Set([11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]);
@@ -2908,7 +2961,6 @@ const smoothLandmarks = (landmarks) => {
     smoothedLandmarksRef.current = landmarks.map(p => ({ ...p }));
     return smoothedLandmarksRef.current;
   }
-
   const prev = smoothedLandmarksRef.current;
   const next = landmarks.map((p, i) => {
     const q = prev[i] || p;
@@ -2918,170 +2970,171 @@ const smoothLandmarks = (landmarks) => {
       x: q.x + (p.x - q.x) * alpha,
       y: q.y + (p.y - q.y) * alpha,
       z: q.z !== undefined && p.z !== undefined ? q.z + (p.z - q.z) * alpha : p.z,
-      visibility: Math.max(0, Math.min(1, (q.visibility ?? 1) + ((p.visibility ?? 1) - (q.visibility ?? 1)) * alpha))
+      visibility: Math.max(0, Math.min(1, (q.visibility ?? 1) + ((p.visibility ?? 1) - (q.visibility ?? 1)) * alpha)),
     };
   });
-
   smoothedLandmarksRef.current = next;
   return next;
 };
 
-(async () => {
-try {
-setPoseError(null);
-const landmarker = await getPoseLandmarker();
-if (cancelled) return;
-setPoseReady(true);
-
-const loop = () => {
-if (cancelled) return;
-const video = videoRef.current;
-const canvas = skeletonCanvasRef.current;
-
-if (video && canvas && video.readyState >= 2 && video.currentTime !== poseLastVideoTimeRef.current) {
-poseLastVideoTimeRef.current = video.currentTime;
-const now = performance.now();
-
-try {
-const result = landmarker.detectForVideo(video, now);
-const rawLandmarks = result?.landmarks?.[0] ?? null;
-const landmarks = smoothLandmarks(rawLandmarks);
-
-if (rawLandmarks) {
-  poseStableFramesRef.current = Math.min(30, poseStableFramesRef.current + 1);
-} else {
-  poseStableFramesRef.current = Math.max(0, poseStableFramesRef.current - 1);
-}
-
-if (landmarks && quest.reps) {
-const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, now);
-setRepPhase(update.phase);
-setRepCue(update.cue);
-
-if (update.counted) {
-setRepsDone(update.reps);
-
-if (update.reps >= quest.reps) {
-if (repSpoofSuspectedRef.current) {
-poseStateRef.current.reps = quest.reps - 1;
-setRepsDone(quest.reps - 1);
-haptic(10);
-} else {
-confirmedRef.current = true;
-setConfirmed(true);
-haptic([15, 30, 15]);
-}
-} else {
-haptic(10);
-}
-}
-} else if (!landmarks && quest.reps) {
-setRepCue('Step back so your full body is visible');
-}
-
-if (canvas && video) {
-const ctx = canvas.getContext('2d');
-if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
-canvas.width = canvas.clientWidth || 300;
-canvas.height = canvas.clientHeight || 300;
-}
-ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-// The skeleton is now visual-only on non-rep challenges, and visual + rep-counting on rep challenges.
-// This means every challenge gets live body framing without incorrectly requiring pose-based reps for
-// food, map, upload, sleep, meditation, etc.
-if (landmarks) {
-const Wc = canvas.width;
-const Hc = canvas.height;
-const Wv = video.videoWidth || 640;
-const Hv = video.videoHeight || 480;
-const scale = Math.max(Wc / Wv, Hc / Hv);
-const Wr = Wv * scale;
-const Hr = Hv * scale;
-const Ox = (Wc - Wr) / 2;
-const Oy = (Hc - Hr) / 2;
-
-const mapPt = pt => ({
-  x: Ox + pt.x * Wr,
-  y: Oy + pt.y * Hr,
-  vis: pt.visibility ?? 1
-});
-
-const mapped = landmarks.map(mapPt);
-const poseReadyNow = poseStableFramesRef.current >= 3;
-const repActive = Boolean(quest.reps);
-const currentPhase = poseStateRef.current.phase;
-const lineColor = repActive
-  ? (currentPhase === 'down' ? '#30D158' : '#0A84FF')
-  : (poseReadyNow ? '#0A84FF' : 'rgba(255,255,255,.72)');
-
-ctx.save();
-ctx.globalAlpha = poseReadyNow ? 0.95 : 0.65;
-ctx.lineWidth = 3.2;
-ctx.lineCap = 'round';
-ctx.lineJoin = 'round';
-ctx.strokeStyle = lineColor;
-ctx.shadowColor = lineColor;
-ctx.shadowBlur = 7;
-
-POSE_CONNECTIONS.forEach(([i, j]) => {
-const p1 = mapped[i];
-const p2 = mapped[j];
-if (p1 && p2 && p1.vis > MIN_VIS && p2.vis > MIN_VIS) {
-ctx.beginPath();
-ctx.moveTo(p1.x, p1.y);
-ctx.lineTo(p2.x, p2.y);
-ctx.stroke();
-}
-});
-ctx.restore();
-
-ctx.save();
-ctx.globalAlpha = poseReadyNow ? 1 : 0.72;
-mapped.forEach((pt, idx) => {
-if (pt.vis <= MIN_VIS) return;
-const isMajorJoint = MAJOR_JOINTS.has(idx);
-ctx.beginPath();
-ctx.arc(pt.x, pt.y, isMajorJoint ? 6.5 : 4, 0, 2 * Math.PI);
-ctx.fillStyle = 'rgba(0,0,0,.72)';
-ctx.fill();
-ctx.lineWidth = isMajorJoint ? 2.1 : 1.5;
-ctx.strokeStyle = lineColor;
-ctx.stroke();
-ctx.beginPath();
-ctx.arc(pt.x, pt.y, isMajorJoint ? 2.7 : 1.65, 0, 2 * Math.PI);
-ctx.fillStyle = '#fff';
-ctx.fill();
-});
-ctx.restore();
-}
-}
-} catch (err) {
-console.debug('Pose frame skipped:', err);
-}
-}
-
-if (!cancelled) {
-poseRafRef.current = requestAnimationFrame(loop);
-}
+const getCanvasContext = (canvas) => {
+  if (skeletonCtxRef.current?.canvas === canvas) return skeletonCtxRef.current;
+  const ctx = canvas.getContext('2d', { alpha: true });
+  if (ctx) skeletonCtxRef.current = ctx;
+  return ctx;
 };
 
-poseRafRef.current = requestAnimationFrame(loop);
-} catch (err) {
-if (!cancelled) setPoseError('Could not load the pose tracking model. Check your connection and try again.');
-}
+(async () => {
+  try {
+    setPoseError(null);
+    const landmarker = await getPoseLandmarker();
+    if (cancelled) return;
+    setPoseReady(true);
+
+    const loop = () => {
+      if (cancelled) return;
+      const video = videoRef.current;
+      const canvas = skeletonCanvasRef.current;
+      if (!video || !canvas || video.readyState < 2) {
+        poseRafRef.current = requestAnimationFrame(loop);
+        return;
+      }
+
+      const now = performance.now();
+      if (video.currentTime !== poseLastVideoTimeRef.current && now - poseLastDetectAtRef.current >= DETECT_INTERVAL_MS) {
+        poseLastVideoTimeRef.current = video.currentTime;
+        poseLastDetectAtRef.current = now;
+        try {
+          const result = landmarker.detectForVideo(video, now);
+          const rawLandmarks = result?.landmarks?.[0] ?? null;
+          const landmarks = smoothLandmarks(rawLandmarks);
+          poseStableFramesRef.current = rawLandmarks
+            ? Math.min(30, poseStableFramesRef.current + 1)
+            : Math.max(0, poseStableFramesRef.current - 1);
+
+          if (landmarks && quest.reps) {
+            const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, now);
+            if (update.phase !== poseUiPhaseRef.current) {
+              poseUiPhaseRef.current = update.phase;
+              setRepPhase(update.phase);
+            }
+            if (update.cue !== poseUiCueRef.current) {
+              poseUiCueRef.current = update.cue;
+              setRepCue(update.cue);
+            }
+
+            if (update.counted) {
+              setRepsDone(update.reps);
+              if (update.reps >= quest.reps) {
+                if (repSpoofSuspectedRef.current) {
+                  poseStateRef.current.reps = quest.reps - 1;
+                  setRepsDone(quest.reps - 1);
+                  haptic(10);
+                } else {
+                  confirmedRef.current = true;
+                  setConfirmed(true);
+                  haptic([15, 30, 15]);
+                }
+              } else {
+                haptic(10);
+              }
+            }
+          } else if (!landmarks && quest.reps && poseUiCueRef.current !== 'Step back so your full body is visible') {
+            poseUiCueRef.current = 'Step back so your full body is visible';
+            setRepCue(poseUiCueRef.current);
+          }
+        } catch (err) {
+          console.debug('Pose inference skipped:', err);
+        }
+      }
+
+      // Paint the latest smoothed pose at display rate. Avoid shadowBlur and
+      // repeated getContext() calls: both are disproportionately expensive on mobile GPUs.
+      const landmarks = smoothedLandmarksRef.current;
+      const ctx = getCanvasContext(canvas);
+      if (ctx && video.videoWidth && video.videoHeight) {
+        const clientW = canvas.clientWidth || 300;
+        const clientH = canvas.clientHeight || 300;
+        if (canvas.width !== clientW || canvas.height !== clientH) {
+          canvas.width = clientW;
+          canvas.height = clientH;
+          skeletonCtxRef.current = canvas.getContext('2d', { alpha: true });
+        }
+        const drawCtx = skeletonCtxRef.current || ctx;
+        drawCtx.clearRect(0, 0, canvas.width, canvas.height);
+        if (landmarks) {
+          const Wc = canvas.width, Hc = canvas.height;
+          const Wv = video.videoWidth, Hv = video.videoHeight;
+          const scale = Math.max(Wc / Wv, Hc / Hv);
+          const Wr = Wv * scale, Hr = Hv * scale;
+          const Ox = (Wc - Wr) / 2, Oy = (Hc - Hr) / 2;
+          const mapped = landmarks.map(pt => ({ x: Ox + pt.x * Wr, y: Oy + pt.y * Hr, vis: pt.visibility ?? 1 }));
+          const poseReadyNow = poseStableFramesRef.current >= 3;
+          const repActive = Boolean(quest.reps);
+          const currentPhase = poseStateRef.current.phase;
+          const lineColor = repActive
+            ? (currentPhase === 'down' ? '#30D158' : '#0A84FF')
+            : (poseReadyNow ? '#0A84FF' : 'rgba(255,255,255,.72)');
+
+          drawCtx.save();
+          drawCtx.globalAlpha = poseReadyNow ? 0.95 : 0.65;
+          drawCtx.lineWidth = 3.2;
+          drawCtx.lineCap = 'round';
+          drawCtx.lineJoin = 'round';
+          drawCtx.strokeStyle = lineColor;
+          POSE_CONNECTIONS.forEach(([i, j]) => {
+            const p1 = mapped[i], p2 = mapped[j];
+            if (p1 && p2 && p1.vis > MIN_VIS && p2.vis > MIN_VIS) {
+              drawCtx.beginPath();
+              drawCtx.moveTo(p1.x, p1.y);
+              drawCtx.lineTo(p2.x, p2.y);
+              drawCtx.stroke();
+            }
+          });
+          drawCtx.restore();
+
+          drawCtx.save();
+          drawCtx.globalAlpha = poseReadyNow ? 1 : 0.72;
+          mapped.forEach((pt, idx) => {
+            if (pt.vis <= MIN_VIS) return;
+            const isMajorJoint = MAJOR_JOINTS.has(idx);
+            drawCtx.beginPath();
+            drawCtx.arc(pt.x, pt.y, isMajorJoint ? 6.5 : 4, 0, Math.PI * 2);
+            drawCtx.fillStyle = 'rgba(0,0,0,.72)';
+            drawCtx.fill();
+            drawCtx.lineWidth = isMajorJoint ? 2.1 : 1.5;
+            drawCtx.strokeStyle = lineColor;
+            drawCtx.stroke();
+            drawCtx.beginPath();
+            drawCtx.arc(pt.x, pt.y, isMajorJoint ? 2.7 : 1.65, 0, Math.PI * 2);
+            drawCtx.fillStyle = '#fff';
+            drawCtx.fill();
+          });
+          drawCtx.restore();
+        }
+      }
+
+      poseRafRef.current = requestAnimationFrame(loop);
+    };
+
+    poseRafRef.current = requestAnimationFrame(loop);
+  } catch (err) {
+    if (!cancelled) setPoseError('Could not load the pose tracking model. Check your connection and try again.');
+  }
 })();
 
 return () => {
-cancelled = true;
-if (poseRafRef.current) cancelAnimationFrame(poseRafRef.current);
-poseRafRef.current = null;
-smoothedLandmarksRef.current = null;
-poseStableFramesRef.current = 0;
-if (skeletonCanvasRef.current) {
-const ctx = skeletonCanvasRef.current.getContext('2d');
-ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
-}
+  cancelled = true;
+  if (poseRafRef.current) cancelAnimationFrame(poseRafRef.current);
+  poseRafRef.current = null;
+  poseLastDetectAtRef.current = 0;
+  skeletonCtxRef.current = null;
+  smoothedLandmarksRef.current = null;
+  poseStableFramesRef.current = 0;
+  if (skeletonCanvasRef.current) {
+    const ctx = skeletonCanvasRef.current.getContext('2d');
+    ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
+  }
 };
 }, [hasSkeletonTracking, quest.reps, quest.id, phase, confirmed]);
 
@@ -3880,7 +3933,22 @@ setQuests(prev => prev.map(q => q.id === proofModalId ? { ...q, progress } : q))
 setProofModalId(null);
 };
 
-const c = dark ? C.dark : C.light;
+const baseC = dark ? C.dark : C.light;
+// Saqoom gets a private pink-heart accent theme; every other account keeps the normal theme.
+const isSaqoom = username?.trim().toLowerCase() === 'saqoom';
+const c = isSaqoom ? {
+  ...baseC,
+  blue: baseC.pink,
+  indigo: baseC.pink,
+  purple: dark ? '#FF5C8A' : '#FF2D55',
+  teal: dark ? '#FF6B9A' : '#FF6485',
+  orange: dark ? '#FF9FAD' : '#FF5F7E',
+  fill: dark ? 'rgba(255,55,95,0.18)' : 'rgba(255,45,85,0.10)',
+  glass: dark ? 'rgba(34,18,24,0.55)' : 'rgba(255,247,249,0.62)',
+  glassStrong: dark ? 'rgba(34,18,24,0.72)' : 'rgba(255,247,249,0.80)',
+  glassBorder: dark ? 'rgba(255,130,160,0.16)' : 'rgba(255,120,145,0.28)',
+  glassHighlight: dark ? 'rgba(255,190,205,0.14)' : 'rgba(255,255,255,0.92)',
+} : baseC;
 
 // Never render a completely blank page while React/Firebase initializes.
 // The previous version returned null here, which made every startup problem
@@ -3954,7 +4022,8 @@ onUsernameChanged={handleUsernameChanged} onLogout={handleLogout} onDeleteAccoun
 hapticsOn={hapticsOn} onToggleHaptics={handleToggleHaptics}
 dailyReminderOn={dailyReminderOn} onToggleDailyReminder={handleToggleDailyReminder} notificationsSupported={notificationsSupported}
 onExportData={handleExportData}
-c={c}
+ isSaqoom={isSaqoom}
+ c={c}
 />
 ) : (
 <div className="relative z-10 flex flex-col flex-1 sq-anim-in">
