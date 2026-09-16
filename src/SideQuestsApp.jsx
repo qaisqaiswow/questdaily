@@ -1154,6 +1154,10 @@ svg { transition: stroke 0.2s ease, fill 0.2s ease; }
 .sq-scroll { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .sq-root button, .sq-root a { contain: layout style; }
 .sq-cam-shell video, .sq-cam-shell canvas { transform: translateZ(0); backface-visibility: hidden; }
+.sq-heart-rain { position: fixed; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
+.sq-heart-rain span { position: absolute; top: -40px; color: rgba(255, 105, 145, 0.34); font-family: Arial, sans-serif; animation: sq-heart-fall linear infinite; will-change: transform, opacity; }
+@keyframes sq-heart-fall { 0% { transform: translate3d(0, -50px, 0) rotate(0deg); opacity: 0; } 12% { opacity: 0.7; } 88% { opacity: 0.55; } 100% { transform: translate3d(22px, 110vh, 0) rotate(18deg); opacity: 0; } }
+
 .sq-icon-fff svg { color: #fff; }
 @keyframes sq-fade-up { from { opacity: 0; transform: translate3d(0,7px,0); } to { opacity: 1; transform: translate3d(0,0,0); } }
 @keyframes sq-check-in { 0% { opacity: 0; transform: scale(0.5); } 70% { opacity: 1; transform: scale(1.06); } 100% { opacity: 1; transform: scale(1); } }
@@ -1951,7 +1955,7 @@ onPhotoFile, photoUploading, photoError, onDismissPhotoError,
 onUsernameChanged, onLogout, onDeleteAccount,
 hapticsOn, onToggleHaptics,
 dailyReminderOn, onToggleDailyReminder, notificationsSupported,
-onExportData, c,
+onExportData, isSaqoom = false, c,
 }) {
 // null | 'username' | 'password' | 'delete' — only one inline editor
 // open at a time, inside the Account card.
@@ -3971,6 +3975,14 @@ const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
 return (
 <div className="sq-root" style={{ background: c.bg, minHeight: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: 'background-color 0.3s ease' }}>
+{isSaqoom && (
+  <div aria-hidden="true" className="sq-heart-rain">
+    {Array.from({ length: 18 }, (_, i) => (
+      <span key={i} style={{ left: `${(i * 37) % 100}%`, animationDelay: `${(i * 0.43) % 6}s`, animationDuration: `${6 + (i % 4)}s`, fontSize: `${12 + (i % 4) * 4}px` }}>♡</span>
+    ))}
+  </div>
+)}
+
 <SystemType />
 <div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg }}>
 <AmbientBackground c={c} />
