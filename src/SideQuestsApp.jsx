@@ -35,11 +35,21 @@ appId: "1:628879821292:web:997e8155a24b806eb2d8c9",
 measurementId: "G-C6S86XMFRZ",
 };
 
-const firebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-const auth = getAuth(firebaseApp);
-const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: 'select_account' });
-const db = getFirestore(firebaseApp);
+let firebaseApp = null;
+let auth = null;
+let googleProvider = null;
+let db = null;
+let firebaseInitError = null;
+try {
+  firebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+  auth = getAuth(firebaseApp);
+  googleProvider = new GoogleAuthProvider();
+  googleProvider.setCustomParameters({ prompt: 'select_account' });
+  db = getFirestore(firebaseApp);
+} catch (err) {
+  firebaseInitError = err;
+  console.error('QuestDaily Firebase initialization failed:', err);
+}
 const LEADERBOARD_COLLECTION = 'leaderboard';
 const LEADERBOARD_SIZE = 100;
 
@@ -424,43 +434,45 @@ throw failure.reason;
 function useAuthUser() {
 const [user, setUser] = useState(null);
 const [loading, setLoading] = useState(true);
-const [authError, setAuthError] = useState(null);
+const [authError, setAuthError] = useState(firebaseInitError);
 
 useEffect(() => {
-let mounted = true;
-let resolved = false;
+  let mounted = true;
+  if (!auth) {
+    setLoading(false);
+    return () => { mounted = false; };
+  }
 
-// Keep auth initialization simple and reliable. The previous redirect-result
-// flow could leave the app stuck behind authLoading on hosts that do not have
-// a pending Google redirect. Username/password accounts do not need it.
-const finish = (u) => {
-if (!mounted) return;
-resolved = true;
-setUser(u || null);
-setLoading(false);
-if (u) setAuthError(null);
-};
+  let resolved = false;
+  let unsub = () => {};
+  try {
+    unsub = onAuthStateChanged(auth, (u) => {
+      if (!mounted) return;
+      resolved = true;
+      setUser(u || null);
+      setLoading(false);
+      if (u) setAuthError(null);
+    }, (err) => {
+      if (!mounted) return;
+      resolved = true;
+      console.error('Firebase auth state error:', err);
+      setAuthError(friendlyAuthError(err));
+      setLoading(false);
+    });
+  } catch (err) {
+    console.error('Firebase auth listener failed:', err);
+    setAuthError(friendlyAuthError(err));
+    setLoading(false);
+  }
 
-const unsub = onAuthStateChanged(auth, finish, (err) => {
-if (!mounted) return;
-console.error('Firebase auth state error:', err);
-setAuthError(friendlyAuthError(err));
-setLoading(false);
-});
+  const timeout = setTimeout(() => {
+    if (!resolved && mounted) {
+      console.warn('Firebase auth initialization timed out; continuing as signed out.');
+      setLoading(false);
+    }
+  }, 5000);
 
-// Never leave the entire app white forever if Firebase initialization hangs.
-const timeout = setTimeout(() => {
-if (!resolved && mounted) {
-console.warn('Firebase auth initialization timed out; continuing as signed out.');
-setLoading(false);
-}
-}, 5000);
-
-return () => {
-mounted = false;
-clearTimeout(timeout);
-unsub();
-};
+  return () => { mounted = false; clearTimeout(timeout); unsub(); };
 }, []);
 
 return { user, loading, authError };
@@ -3477,8 +3489,32 @@ Upload a photo
 );
 }
 
+class QuestDailyErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error('QuestDaily render crash:', error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ minHeight: '100vh', width: '100vw', background: '#000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, boxSizing: 'border-box', fontFamily: '-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif' }}>
+          <div style={{ width: '100%', maxWidth: 520 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>QuestDaily hit an error</div>
+            <div style={{ fontSize: 14, lineHeight: 1.5, opacity: .75, marginBottom: 16 }}>The app crashed while starting instead of hiding the error behind a white screen.</div>
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 11, lineHeight: 1.45, padding: 14, borderRadius: 14, background: '#1c1c1e', color: '#ff9f0a' }}>{String(this.state.error?.stack || this.state.error?.message || this.state.error)}</pre>
+            <button onClick={() => window.location.reload()} style={{ marginTop: 14, width: '100%', padding: 13, border: 0, borderRadius: 999, background: '#0a84ff', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Reload QuestDaily</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // main app
-export default function QuestDailyApp() {
+function QuestDailyAppInner() {
 const [isMounted, setIsMounted] = useState(false);
 const { user: authUser, loading: authLoading, authError } = useAuthUser();
 const uid = authUser?.uid ?? null;
@@ -4127,4 +4163,12 @@ Checked on your device — nothing you record ever leaves your phone.
 </div>
 </div>
 );
+}
+
+export default function QuestDailyApp() {
+  return (
+    <QuestDailyErrorBoundary>
+      <QuestDailyAppInner />
+    </QuestDailyErrorBoundary>
+  );
 }
