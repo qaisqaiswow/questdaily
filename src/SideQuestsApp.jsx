@@ -1254,34 +1254,75 @@ return () => clearInterval(id);
 return <span className={className} style={style}>{text}</span>;
 }
 
-// first-run welcome screen — shown once, before any account exists on this
-// device, then never again (a localStorage flag remembers it's been seen).
-// Explains the core loop and specifically calls out where to add a profile
-// photo later, since that lives inside Settings rather than being part of
-// account creation itself.
+// Welcome screen is shown on every fresh app load so existing and new users
+// both see the latest QuestDaily changes. The user can dismiss it for the
+// current session; it intentionally does not persist that dismissal.
+// The update card below is the in-app changelog for the current release.
 function WelcomeScreen({ onContinue, c }) {
+const [showUpdates, setShowUpdates] = useState(false);
 const steps = [
 { Icon: ListChecks, title: 'Get a fresh set of quests every day', body: 'A new mix of strength, cardio, mindfulness, and recovery quests unlocks every 24 hours.' },
 { Icon: ShieldCheck, title: 'Verify with your camera', body: 'On-device AI and pose tracking confirm you actually did it — nothing you record ever leaves your phone.' },
 { Icon: Sparkles, title: 'Level up and climb the leaderboard', body: 'Earn XP for every quest, build a daily streak, and see how you rank against everyone else.' },
 { Icon: Camera, title: 'Add a profile photo anytime', body: "Once you're signed in, open Account → tap your avatar → choose a photo. It syncs to your account automatically." },
 ];
+const updates = [
+{ Icon: Sparkles, title: 'Expo glass UI', body: 'A cleaner, deeper glass treatment with blur, highlights, reflections, and smoother depth across the app.' },
+{ Icon: CircleDot, title: 'Thinking orbs', body: 'New animated thinking orbs make AI processing and verification states feel alive without blocking the experience.' },
+{ Icon: ShieldCheck, title: 'AI camera upgrade', body: 'The body skeleton now stays visible on every camera challenge, with smoother tracking and clearer verification feedback.' },
+{ Icon: Camera, title: 'Camera controls', body: 'The camera flow and cancel behavior were cleaned up so leaving a challenge is more reliable.' },
+{ Icon: Timer, title: '24-hour quests', body: 'The daily countdown and automatic 24-hour refresh are back, with the next reset always visible.' },
+{ Icon: ListChecks, title: 'Cleaner navigation', body: 'The leaderboard is now its own page and zero-XP players stay out of the rankings.' },
+{ Icon: UserCog, title: 'Account + settings', body: 'Your account and settings options stay together in one place, with the previous controls preserved.' },
+];
 return (
 <div className="fixed inset-0 z-[100] flex flex-col sq-anim-in" style={{ background: c.bg }}>
-<div className="flex-1 sq-scroll overflow-y-auto flex flex-col justify-center px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 32px)', paddingBottom: 24 }}>
-<div className="text-center mb-8">
-<div style={{ width: 76, height: 76, borderRadius: 30, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
+<div className="flex-1 sq-scroll overflow-y-auto px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 32px)', paddingBottom: 24 }}>
+<div className="text-center mb-7" style={{ paddingTop: 10 }}>
+<div style={{ width: 76, height: 76, borderRadius: 30, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px', boxShadow: `0 18px 45px ${c.blue}33` }}>
 <BrandLogo size={40} />
 </div>
 <h1 className="sq-large-title" style={{ fontSize: 30, fontWeight: 800, color: c.label, marginBottom: 8 }}>Welcome to QuestDaily</h1>
-<p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.4, maxWidth: 320, margin: '0 auto' }}>
-A few things to know before you dive in.
+<p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.4, maxWidth: 340, margin: '0 auto' }}>
+Your daily quests are ready. Here’s what QuestDaily does and what’s new today.
 </p>
+</div>
+
+<button onClick={() => { haptic(6); setShowUpdates(v => !v); }} aria-expanded={showUpdates}
+style={{ ...glassStyle(c), width: '100%', borderRadius: 20, padding: '14px 15px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', marginBottom: 12, border: `1px solid ${c.blue}55`, boxShadow: `0 12px 30px ${c.blue}12` }}
+className="sq-anim-in">
+<div style={{ width: 42, height: 42, borderRadius: 14, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<Sparkles size={19} strokeWidth={2} />
+</div>
+<div style={{ flex: 1, minWidth: 0 }}>
+<div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+<span style={{ fontSize: 14, fontWeight: 800, color: c.label }}>New update!!!</span>
+<span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: c.blue, borderRadius: 999, padding: '3px 7px', letterSpacing: 0.35 }}>TODAY</span>
+</div>
+<p style={{ fontSize: 12, color: c.labelSecondary, marginTop: 3 }}>See what we added and improved today.</p>
+</div>
+<ChevronRight size={17} color={c.labelTertiary} style={{ transform: showUpdates ? 'rotate(90deg)' : 'none', transition: 'transform 220ms ease' }} />
+</button>
+
+<div style={{ overflow: 'hidden', maxHeight: showUpdates ? 900 : 0, opacity: showUpdates ? 1 : 0, transform: showUpdates ? 'translateY(0)' : 'translateY(-6px)', transition: 'max-height 420ms cubic-bezier(.22,1,.36,1), opacity 220ms ease, transform 260ms ease' }}>
+<div className="flex flex-col gap-2.5" style={{ marginBottom: 14 }}>
+{updates.map(({ Icon, title, body }, i) => (
+<div key={title} className="sq-anim-in" style={{ ...glassStyle(c), borderRadius: 18, padding: 13, display: 'flex', gap: 12, animationDelay: `${i * 0.035}s` }}>
+<div className="sq-icon-fff" style={{ width: 36, height: 36, borderRadius: 12, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<Icon size={17} strokeWidth={2} />
+</div>
+<div style={{ minWidth: 0 }}>
+<p style={{ fontSize: 13, fontWeight: 700, color: c.label, lineHeight: 1.3 }}>{title}</p>
+<p style={{ fontSize: 11.8, color: c.labelSecondary, marginTop: 3, lineHeight: 1.45 }}>{body}</p>
+</div>
+</div>
+))}
+</div>
 </div>
 
 <div className="flex flex-col gap-3">
 {steps.map(({ Icon, title, body }, i) => (
-<div key={title} className="sq-anim-in" style={{ ...glassStyle(c), borderRadius: 20, padding: 16, display: 'flex', gap: 14, animationDelay: `${i * 0.06}s` }}>
+<div key={title} className="sq-anim-in" style={{ ...glassStyle(c), borderRadius: 20, padding: 16, display: 'flex', gap: 14, animationDelay: `${(showUpdates ? 0.18 : 0) + i * 0.06}s` }}>
 <div className="sq-icon-fff" style={{ width: 40, height: 40, borderRadius: 14, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
 <Icon size={19} strokeWidth={1.9} />
 </div>
@@ -1295,14 +1336,14 @@ A few things to know before you dive in.
 </div>
 
 <div className="px-6" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 24px)' }}>
-<button onClick={onContinue} style={{ width: '100%', padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, color: '#fff', background: c.blue }}>
+<button onClick={onContinue} style={{ width: '100%', padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, color: '#fff', background: c.blue, boxShadow: `0 12px 28px ${c.blue}2f`, transition: 'transform 160ms ease, box-shadow 220ms ease' }}
+className="active:scale-[0.985]">
 Get started
 </button>
 </div>
 </div>
 );
 }
-
 
 // rest of the app until resolved, same as the old name-picker did, but now
 // backs onto real Firebase Auth accounts instead of a purely local name.
@@ -3109,7 +3150,7 @@ const [activeTab, setActiveTab] = useState('quests');
 const [photoURL, setPhotoURL] = useState(null);
 const [photoUploading, setPhotoUploading] = useState(false);
 const [photoError, setPhotoError] = useState(null);
-const [hasSeenWelcome, setHasSeenWelcome] = useState(true); // defaults true until localStorage is checked, so it never flashes for returning users
+const [hasSeenWelcome, setHasSeenWelcome] = useState(false); // intentionally starts visible on every fresh app load
 const [hapticsOn, setHapticsOnState] = useState(true);
 const [dailyReminderOn, setDailyReminderOn] = useState(false);
 const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
@@ -3128,7 +3169,7 @@ setXp(parseInt(localStorage.getItem('sq_xp')) || 0);
 setTotalXpEarned(parseInt(localStorage.getItem('sq_totalXpEarned')) || 0);
 setStreak(parseInt(localStorage.getItem('sq_streak')) || 0);
 setLastReset(parseInt(localStorage.getItem('sq_lastReset')) || 0);
-setHasSeenWelcome(localStorage.getItem('sq_has_seen_welcome') === 'true');
+setHasSeenWelcome(false); // show the welcome/update screen to everyone on each fresh load
 const savedHaptics = localStorage.getItem('sq_haptics_enabled');
 const hapticsInitial = savedHaptics === null ? true : savedHaptics === 'true';
 setHapticsOnState(hapticsInitial);
@@ -3247,7 +3288,7 @@ const handleSignedUp = (finalUsername) => {
 hydratedUidRef.current = auth.currentUser?.uid ?? hydratedUidRef.current;
 setUsername(finalUsername);
 setLevel(1); setXp(0); setTotalXpEarned(0); setStreak(0); setHistory([]); setProofImages({}); setPhotoURL(null);
-setActiveTab('quests'); setHasSeenWelcome(true); localStorage.setItem('sq_has_seen_welcome', 'true');
+setActiveTab('quests'); setHasSeenWelcome(true);
 };
 
 const handleLoggedIn = async (finalUsername) => {
@@ -3257,7 +3298,7 @@ hydratedUidRef.current = auth.currentUser.uid;
 setProofImages({}); // proof photos are device-local and never synced
 await hydrateAccount(auth.currentUser.uid, auth.currentUser.email, auth.currentUser);
 }
-setActiveTab('quests'); setHasSeenWelcome(true); localStorage.setItem('sq_has_seen_welcome', 'true');
+setActiveTab('quests'); setHasSeenWelcome(true);
 };
 
 const resetLocalAccountState = () => {
@@ -3552,7 +3593,7 @@ return (
 <AmbientBackground c={c} />
 
 {!hasSeenWelcome && (
-<WelcomeScreen c={c} onContinue={() => { haptic(10); setHasSeenWelcome(true); localStorage.setItem('sq_has_seen_welcome', 'true'); }} />
+<WelcomeScreen c={c} onContinue={() => { haptic(10); setHasSeenWelcome(true); }} />
 )}
 {hasSeenWelcome && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} c={c} />}
 {hasSeenWelcome && !showInstallPrompt && !authUser && <AuthModal onSignedUp={handleSignedUp} onLoggedIn={handleLoggedIn} c={c} initialError={authError} />}
