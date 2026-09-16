@@ -6,15 +6,14 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as exifr from 'exifr';
 import { initializeApp, getApps } from 'firebase/app';
 import {
-getAuth, onAuthStateChanged, signOut, deleteUser, getRedirectResult,
+getAuth, onAuthStateChanged, signOut, deleteUser,
 createUserWithEmailAndPassword, signInWithEmailAndPassword,
-
 updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 import {
 Sun, Moon, CheckSquare, History as HistoryIcon, Settings as SettingsIcon,
-Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Timer, ChevronsUp,
+Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Activity, Timer, ChevronsUp,
 Droplet, Leaf, Utensils, CookingPot, Flower2, Move, Zap, Flame,
 Pencil, Snowflake, Wind, Waves, Target, GlassWater, CupSoda,
 LogOut, Eye, EyeOff, Lock, AtSign, Camera, Trash2, ShieldCheck, Sparkles, ListChecks,
@@ -102,196 +101,111 @@ return [];
 
 // account system
 // -----------------------------------------------------------------------
-// Firebase Auth doesn't have native "username + password" accounts — it
-// wants an email. So a username is mapped to a deterministic, fake-but-
-// validly-formatted email (`somebody` -> `somebody@questdaily-users.app`)
-// and Firebase Auth is used normally underneath. This means:
-// - usernames are case-insensitive (the email is always lowercased)
-// - there's no real inbox behind that address, so Firebase's built-in
-// "forgot password" email reset can't work here — if that's needed
-// later it requires collecting a real email address at signup instead
-// A `usernames/{usernameLower}` doc is the source of truth for "is this
-// username taken" and for looking up the display-cased username on login;
-// the account's own profile lives in `users/{uid}`.
-const USERNAME_EMAIL_DOMAIN = 'questdaily-users.app';
-const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
-function usernameToEmail(usernameLower) { return `${usernameLower}@${USERNAME_EMAIL_DOMAIN}`; }
-function validateUsername(raw) {
-const trimmed = raw.trim();
-if (!USERNAME_RE.test(trimmed)) return 'Username must be 3-20 characters: letters, numbers, and underscores only.';
-return null;
+// QuestDaily uses real email + password authentication. The app still keeps
+// a small display username internally for avatars/leaderboards, but users
+// never need to enter a username to create or access their account.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function displayNameFromEmail(email) {
+  const local = (email || '').split('@')[0] || 'Player';
+  const cleaned = local.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 20);
+  return cleaned.length >= 1 ? cleaned : 'Player';
 }
 
 function validateEmail(raw) {
-const email = raw.trim();
-if (!email) return 'Enter your email address.';
-if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Enter a valid email address.';
-return null;
+  const email = raw.trim().toLowerCase();
+  if (!email) return 'Enter your email address.';
+  if (!EMAIL_RE.test(email)) return 'Enter a valid email address.';
+  return null;
 }
 
-function validatePassword(raw) {
-if (raw.length < 6) return 'Password must be at least 6 characters.';
-if (raw.length > 128) return 'Password is too long.';
-return null;
+
+function validatePassword(password) {
+  if (!password) return 'Enter your password.';
+  if (password.length < 6) return 'Password must be at least 6 characters.';
+  return null;
+}
+
+function validateUsername(raw) {
+  const value = (raw || '').trim();
+  if (!value) return 'Enter a display name.';
+  if (!/^[a-zA-Z0-9_]{3,20}$/.test(value)) return 'Display name must be 3–20 letters, numbers, or underscores.';
+  return null;
 }
 
 function friendlyAuthError(err) {
-const code = err?.code || '';
-if (code === 'auth/email-already-in-use') return 'That email is already registered.';
-if (code === 'auth/weak-password') return 'Password must be at least 6 characters.';
-if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') return 'Incorrect email or password.';
-if (code === 'auth/user-not-found') return 'No account found with that email.';
-if (code === 'auth/too-many-requests') return 'Too many attempts — try again in a bit.';
-if (code === 'auth/network-request-failed') return "Can't reach the server. Check your connection.";
-if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
-if (code === 'auth/invalid-email') return 'That username can\'t be used. Try a different one.';
-if (code === 'auth/popup-blocked') return 'Your browser blocked the sign-in popup. Please allow popups for this site and try again.';
-if (code === 'permission-denied' || code === 'firestore/permission-denied') {
-return "Your database's security rules are blocking this — the 'usernames', 'users', and 'leaderboard' collections in Firestore need read/write rules set up. This is a Firebase Console configuration step, not something wrong with what you typed.";
-}
-return err?.message ? `Something went wrong: ${err.message}` : 'Something went wrong. Please try again.';
+  const code = err?.code || '';
+  if (code === 'auth/email-already-in-use') return 'That email is already registered. Try logging in instead.';
+  if (code === 'auth/invalid-email') return 'Enter a valid email address.';
+  if (code === 'auth/weak-password') return 'Password must be at least 6 characters.';
+  if (code === 'auth/user-not-found') return 'No account was found with that email.';
+  if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') return 'Incorrect email or password.';
+  if (code === 'auth/too-many-requests') return 'Too many attempts. Please wait a moment and try again.';
+  if (code === 'auth/network-request-failed') return 'Network error. Check your connection and try again.';
+  if (code === 'permission-denied' || code === 'firestore/permission-denied') return "Your database's security rules are blocking this request.";
+  return err?.message ? `Something went wrong: ${err.message}` : 'Something went wrong. Please try again.';
 }
 
-// Creates a brand-new account. Reserves the username first (so two people
-// racing on the same name get a clean "taken" error instead of a confusing
-// Firebase Auth error), then creates the Auth user, then writes the
-// username reservation + profile doc. If the profile writes fail after the
-// Auth user was already created, the reservation is rolled back so the
-// username isn't permanently stuck on a half-created account.
 async function signUpAccount(emailRaw, password) {
-const email = emailRaw.trim().toLowerCase();
-const displayName = email.split('@')[0].slice(0, 20) || 'Player';
-const cred = await createUserWithEmailAndPassword(auth, email, password);
-await setDoc(doc(db, 'users', cred.user.uid), {
-email,
-username: displayName,
-createdAt: Date.now(),
-});
-return { uid: cred.user.uid, email, username: displayName };
+  const email = emailRaw.trim().toLowerCase();
+  const cred = await createUserWithEmailAndPassword(auth, email, password);
+  const username = displayNameFromEmail(email);
+  try {
+    await setDoc(doc(db, 'users', cred.user.uid), {
+      username,
+      email,
+      createdAt: Date.now(),
+    }, { merge: true });
+  } catch (err) {
+    console.error('Failed to save new account profile:', err);
+  }
+  return { uid: cred.user.uid, username, email };
 }
 
 async function logInAccount(emailRaw, password) {
-const email = emailRaw.trim().toLowerCase();
-const cred = await signInWithEmailAndPassword(auth, email, password);
-const snap = await getDoc(doc(db, 'users', cred.user.uid));
-const data = snap.exists() ? snap.data() : {};
-return { uid: cred.user.uid, email, username: data.username || email.split('@')[0].slice(0, 20) || 'Player' };
+  const email = emailRaw.trim().toLowerCase();
+  const cred = await signInWithEmailAndPassword(auth, email, password);
+  let displayUsername = displayNameFromEmail(email);
+  try {
+    const snap = await getDoc(doc(db, 'users', cred.user.uid));
+    if (snap.exists() && snap.data()?.username) displayUsername = snap.data().username;
+  } catch { /* non-fatal */ }
+  return { uid: cred.user.uid, username: displayUsername, email };
 }
 
 async function logOutAccount() {
-await signOut(auth);
+  await signOut(auth);
 }
 
-// Signs in with a Google popup. Google accounts don't come with a username
-// the person chose, so on a person's very first Google sign-in one is
-// minted automatically from their Google display name (falling back to
-// their email), retried with a random numeric suffix if it's taken — same
-// `usernames` reservation + `users/{uid}` profile doc that the username/
-// password flow creates, so everything downstream (hydration, leaderboard,
-// settings) treats a Google account exactly like any other. Their Google
-// avatar is carried over as the initial profile photo too. Returning users
-// don't need any of this — their `users/{uid}` doc already exists, and the
-// app's normal auth-state hydration effect picks it up the same way a page
-// reload does.
-async function mintUsernameForGoogleUser(user) {
-const rawBase = user.displayName || (user.email ? user.email.split('@')[0] : 'Player');
-let base = rawBase.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 16);
-if (base.length < 3) base = (base + 'Player').slice(0, 16);
-
-let display = base;
-let usernameLower = base.toLowerCase();
-for (let attempt = 0; attempt < 8; attempt++) {
-const snap = await getDoc(doc(db, 'usernames', usernameLower));
-if (!snap.exists()) break;
-const suffix = String(Math.floor(1000 + Math.random() * 9000));
-display = `${base}${suffix}`.slice(0, 20);
-usernameLower = display.toLowerCase();
+function getAuthProviderLabel(user) {
+  if (!user) return null;
+  return (user.providerData || []).some(p => p.providerId === 'password') ? 'password' : 'other';
 }
 
-await Promise.all([
-setDoc(doc(db, 'usernames', usernameLower), { uid: user.uid, username: display }),
-setDoc(doc(db, 'users', user.uid), { username: display, createdAt: Date.now(), photoURL: user.photoURL || null }),
-]);
-if (user.photoURL) {
-await setDoc(doc(db, 'leaderboard', user.uid), { photoURL: user.photoURL }, { merge: true }).catch(() => {});
-}
-}
-
-// Popup-based Google sign-in breaks on hosts that send strict
-// Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy headers (needed
-// here for MediaPipe's multi-threaded WASM) — the popup can't message the
-// result back to this window, so the sign-in just hangs silently.
-// Redirect-based sign-in sidesteps that entirely: the browser navigates to
-// Google and back, and Firebase Auth picks up the result via
-// onAuthStateChanged on reload. The "first time this Google account has
-// ever signed in" username-minting step used to happen right here after
-// the popup resolved — it now lives in hydrateAccount() instead, since
-// nothing runs in *this* page load once the redirect kicks off.
 // editing an existing account
 // -----------------------------------------------------------------------
-function getAuthProviderLabel(user) {
-if (!user) return null;
-const ids = (user.providerData || []).map(p => p.providerId);
-if (ids.includes('google.com')) return 'google';
-if (ids.includes('password')) return 'password';
-return 'other';
-}
-
 // Renames the account's username. For password accounts this is more than
 // a display change: login derives the (fake) Auth email straight from the
 // username, so the underlying Firebase Auth email has to move in lockstep
 // or the person would be locked out under their new name. That rename can
 // require a recent login — if so, this reauthenticates with the password
-// the caller supplied and retries once. Google accounts skip all of that;
-// their real Google email never changes, so renaming is purely a Firestore
-// metadata update.
-async function updateUsername({ newUsernameRaw, oldUsername, currentPassword }) {
+async function updateUsername({ newUsernameRaw, oldUsername }) {
 const currentUser = auth.currentUser;
 if (!currentUser) throw Object.assign(new Error('You need to be signed in to do that.'), { code: 'auth/no-current-user' });
-
 const newUsername = newUsernameRaw.trim();
-const newLower = newUsername.toLowerCase();
-const oldLower = (oldUsername || '').toLowerCase();
-const usesPassword = getAuthProviderLabel(currentUser) === 'password';
-
-if (newLower === oldLower) {
-// same underlying name, only casing changed (or literally unchanged) —
-// no Auth email involved, just update the display casing everywhere
+const validationError = validateUsername(newUsername);
+if (validationError) throw new Error(validationError);
+if (newUsername.toLowerCase() === (oldUsername || '').toLowerCase()) {
+  await Promise.all([
+    setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
+    setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
+  ]);
+  return newUsername;
+}
 await Promise.all([
-setDoc(doc(db, 'usernames', oldLower), { uid: currentUser.uid, username: newUsername }, { merge: true }),
-setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
-setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
+  setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
+  setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
 ]);
-return newUsername;
-}
-
-const takenSnap = await getDoc(doc(db, 'usernames', newLower));
-if (takenSnap.exists()) {
-throw Object.assign(new Error('That email is already registered.'), { code: 'auth/email-already-in-use' });
-}
-
-if (usesPassword) {
-const newEmail = usernameToEmail(newLower);
-try {
-await updateEmail(currentUser, newEmail);
-} catch (err) {
-if (err?.code === 'auth/requires-recent-login') {
-if (!currentPassword) throw err; // caller prompts for the password and retries with it
-await reauthenticateWithCredential(currentUser, EmailAuthProvider.credential(usernameToEmail(oldLower), currentPassword));
-await updateEmail(currentUser, newEmail);
-} else {
-throw err;
-}
-}
-}
-
-await Promise.all([
-setDoc(doc(db, 'usernames', newLower), { uid: currentUser.uid, username: newUsername }),
-setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
-setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
-]);
-await deleteDoc(doc(db, 'usernames', oldLower)).catch(() => {});
-
 return newUsername;
 }
 
@@ -364,7 +278,7 @@ await Promise.all(historyDocs.map(d => deleteDoc(d.ref).catch(() => {})));
 const results = await Promise.allSettled([
 deleteDoc(doc(db, 'users', uid)),
 deleteDoc(doc(db, 'leaderboard', uid)),
-usernameLower ? deleteDoc(doc(db, 'usernames', usernameLower)) : Promise.resolve(),
+Promise.resolve(),
 ]);
 const failure = results.find(r => r.status === 'rejected');
 if (failure) {
@@ -387,10 +301,10 @@ const [authError, setAuthError] = useState(null);
 useEffect(() => {
 let mounted = true;
 const unsub = onAuthStateChanged(auth, u => {
-if (!mounted) return;
-setUser(u);
-setLoading(false);
-if (u) setAuthError(null);
+  if (!mounted) return;
+  setUser(u);
+  setLoading(false);
+  if (u) setAuthError(null);
 });
 return () => { mounted = false; unsub(); };
 }, []);
@@ -1258,6 +1172,17 @@ return (
 </svg>
 );
 });
+const CircleUserRound = React.memo(function CircleUserRound({ size = 18 }) {
+return (
+<svg width={size} height={size} viewBox="0 0 48 48">
+<path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12s5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24s8.955,20,20,20s20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
+<path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
+<path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
+<path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
+</svg>
+);
+});
+
 // quest icons — mapped straight onto Lucide (SF-Symbols-style) components.
 // Each is a drop-in React component, so existing call sites (which pass
 // size/color/style props) work unchanged.
@@ -1570,8 +1495,7 @@ Get started
 );
 }
 
-// rest of the app until resolved, same as the old name-picker did, but now
-// backs onto real Firebase Auth accounts instead of a purely local name.
+// Email/password account modal.
 function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
 const [mode, setMode] = useState('signup'); // 'signup' | 'login'
 const [email, setEmail] = useState('');
@@ -1640,10 +1564,9 @@ return (
 <div style={{ position: 'relative' }}>
 <AtSign size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
 <input
-type="email" value={email} autoFocus autoCapitalize="none" autoCorrect="off"
-maxLength={254}
+type="email" value={email} autoFocus autoCapitalize="none" autoCorrect="off" autoComplete="email"
 onChange={e => { setEmail(e.target.value); setError(null); }}
-placeholder="Email"
+placeholder="Email address"
 style={{ ...inputStyle, paddingRight: 14 }}
 />
 </div>
@@ -2007,7 +1930,7 @@ if (res && !res.ok) { setDeleting(false); setDeleteError(res.error); }
 // on success this component unmounts (auth state flips to signed-out), nothing more to do
 };
 
-const usesPassword = authProviderLabel === 'password';
+const usesPassword = true;
 
 return (
 <div className="relative z-10 flex flex-col flex-1 sq-anim-in">
@@ -2055,7 +1978,7 @@ onChange={e => { const f = e.target.files?.[0]; if (f) onPhotoFile(f); e.target.
 <CircleUserRound size={15} strokeWidth={1.9} />
 </div>
 <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Signed in with</span>
-<span style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>{authProviderLabel === 'google' ? 'Google' : 'Username & password'}</span>
+<span style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>Email & password</span>
 </div>
 <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
 
