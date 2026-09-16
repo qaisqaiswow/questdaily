@@ -2699,12 +2699,6 @@ const [uploadedProof, setUploadedProof] = useState(null);
 
 const [secondsLeft, setSecondsLeft] = useState(quest.duration ? (quest.progress ?? quest.duration) : 0);
 const [timerRunning, setTimerRunning] = useState(false);
-const timerLastTickRef = useRef(null);
-const timerAutoPausedRef = useRef(false);
-const lastPoseSeenRef = useRef(0);
-const lastPoseCenterRef = useRef(null);
-const poseMotionRef = useRef(0);
-const poseActiveRef = useRef(false);
 
 const labels = QUEST_LABELS[quest.id];
 const questType = labels?.type || 'action';
@@ -2724,56 +2718,27 @@ if (questType === 'map') { instructionText = "Upload a metric summary screenshot
 else if (questType === 'food') { instructionText = "Take a clear picture of the food on your plate."; uiSubtext = "Must be a real photo of a prepared meal or plate."; }
 else if (questType === 'reps') { instructionText = `Position the camera for full-body tracking: ${quest.reps} reps.`; uiSubtext = "Keep your entire working frame visible to log movements."; }
 
-// Duration timers use a single timestamp-driven loop. It avoids interval drift and
-// does not recreate the animation loop every time the displayed seconds change.
 useEffect(() => {
-if (!quest.duration || !timerRunning) return undefined;
-let raf = 0;
-let last = performance.now();
-let accumulated = 0;
+let intervalId = null;
+if (timerRunning && secondsLeft > 0) {
+intervalId = setInterval(() => {
+setSecondsLeft(prev => {
+if (prev <= 1) {
+setTimerRunning(false);
+if (!quest.reps && questType === 'action') {
+setConfirmed(true);
+confirmedRef.current = true;
+}
+return 0;
+}
+return prev - 1;
+});
+}, 1000);
+}
+return () => clearInterval(intervalId);
+}, [timerRunning, secondsLeft, questType, quest.reps]);
 
-const tick = (now) => {
-  const delta = Math.max(0, Math.min(0.5, (now - last) / 1000));
-  last = now;
-  accumulated += delta;
-
-  // Update the React display at 4 FPS; the actual elapsed time remains precise.
-  if (accumulated >= 0.25) {
-    const elapsed = accumulated;
-    accumulated = 0;
-    setSecondsLeft(prev => {
-      const next = Math.max(0, prev - elapsed);
-      if (next <= 0.001) {
-        setTimerRunning(false);
-        timerLastTickRef.current = null;
-        if (!quest.reps && questType === 'action') {
-          setConfirmed(true);
-          confirmedRef.current = true;
-        }
-        return 0;
-      }
-      return next;
-    });
-  }
-
-  raf = requestAnimationFrame(tick);
-};
-
-raf = requestAnimationFrame(tick);
-return () => cancelAnimationFrame(raf);
-}, [timerRunning, quest.duration, quest.reps, questType]);
-
-// Duration quests begin automatically once the camera is live.
-useEffect(() => {
-if (!quest.duration || quest.reps || phase !== 'live' || confirmed || secondsLeft <= 0) return undefined;
-if (!timerRunning && !timerAutoPausedRef.current) setTimerRunning(true);
-return undefined;
-}, [quest.duration, quest.reps, phase, confirmed, secondsLeft, timerRunning]);
-
-const formatTimerString = (secs) => {
-const safe = Math.max(0, Math.ceil(secs));
-return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`;
-};
+const formatTimerString = (secs) => `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 
 const stopCamera = useCallback(() => {
 const stream = streamRef.current;
@@ -3041,43 +3006,19 @@ const landmarker = await getPoseLandmarker();
 if (cancelled) return;
 setPoseReady(true);
 
-const POSE_INTERVAL_MS = 33; // Cap expensive pose inference at ~30 FPS while keeping the canvas responsive.
-let lastPoseDetectAt = 0;
-let lastDrawAt = 0;
-let lastDisplayedPhase = '';
-let lastDisplayedCue = '';
-
-const loop = (rafNow = performance.now()) => {
+const loop = () => {
 if (cancelled) return;
 const video = videoRef.current;
 const canvas = skeletonCanvasRef.current;
 
-if (video && canvas && video.readyState >= 2 && video.currentTime !== poseLastVideoTimeRef.current && rafNow - lastPoseDetectAt >= POSE_INTERVAL_MS) {
+if (video && canvas && video.readyState >= 2 && video.currentTime !== poseLastVideoTimeRef.current) {
 poseLastVideoTimeRef.current = video.currentTime;
-lastPoseDetectAt = rafNow;
-const now = rafNow;
+const now = performance.now();
 
 try {
 const result = landmarker.detectForVideo(video, now);
 const rawLandmarks = result?.landmarks?.[0] ?? null;
 const landmarks = smoothLandmarks(rawLandmarks);
-
-// Keep a tiny, cheap pose-activity signal for automatic duration-timer pausing.
-// It does not affect rep counting; it only prevents the clock from running when
-// the user has actually left the frame.
-if (landmarks) {
-  const visible = landmarks.filter(p => (p.visibility ?? 1) > MIN_VIS);
-  if (visible.length >= 5) {
-    const cx = visible.reduce((a, p) => a + p.x, 0) / visible.length;
-    const cy = visible.reduce((a, p) => a + p.y, 0) / visible.length;
-    const prev = lastPoseCenterRef.current;
-    const movement = prev ? Math.hypot(cx - prev.x, cy - prev.y) : 0;
-    poseMotionRef.current = poseMotionRef.current * 0.75 + movement * 0.25;
-    lastPoseCenterRef.current = { x: cx, y: cy };
-    lastPoseSeenRef.current = now;
-    poseActiveRef.current = true;
-  }
-}
 
 if (rawLandmarks) {
   poseStableFramesRef.current = Math.min(30, poseStableFramesRef.current + 1);
@@ -3085,28 +3026,10 @@ if (rawLandmarks) {
   poseStableFramesRef.current = Math.max(0, poseStableFramesRef.current - 1);
 }
 
-if (quest.duration && !quest.reps && secondsLeft > 0 && !confirmedRef.current) {
-  const poseMissingFor = performance.now() - lastPoseSeenRef.current;
-  const shouldPause = lastPoseSeenRef.current > 0 && poseMissingFor > 900;
-  if (shouldPause && timerRunning) {
-    timerAutoPausedRef.current = true;
-    setTimerRunning(false);
-  } else if (!shouldPause && timerAutoPausedRef.current && poseStableFramesRef.current >= 3) {
-    timerAutoPausedRef.current = false;
-    setTimerRunning(true);
-  }
-}
-
 if (landmarks && quest.reps) {
 const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, now);
-if (update.phase !== lastDisplayedPhase) {
-  lastDisplayedPhase = update.phase;
-  setRepPhase(update.phase);
-}
-if (update.cue !== lastDisplayedCue) {
-  lastDisplayedCue = update.cue;
-  setRepCue(update.cue);
-}
+setRepPhase(update.phase);
+setRepCue(update.cue);
 
 if (update.counted) {
 setRepsDone(update.reps);
@@ -3129,9 +3052,8 @@ haptic(10);
 setRepCue('Step back so your full body is visible');
 }
 
-if (canvas && video && (now - lastDrawAt >= 16)) {
-lastDrawAt = now;
-const ctx = canvas.getContext('2d', { alpha: true });
+if (canvas && video) {
+const ctx = canvas.getContext('2d');
 if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
 canvas.width = canvas.clientWidth || 300;
 canvas.height = canvas.clientHeight || 300;
@@ -3347,10 +3269,6 @@ isScanningRef.current = false;
 verifyingRef.current = false;
 confirmedRef.current = false;
 setTimerRunning(false);
-timerAutoPausedRef.current = false;
-lastPoseSeenRef.current = 0;
-lastPoseCenterRef.current = null;
-poseMotionRef.current = 0;
 setScanning(false);
 setUploading(false);
 setVerifying(false);
@@ -3523,7 +3441,7 @@ Tracking
 <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary }}>Duration</span>
 <p className="sq-mono" style={{ fontSize: 20, fontWeight: 700, color: c.label, marginTop: 2 }}>{formatTimerString(secondsLeft)}</p>
 </div>
-<button onClick={() => { timerAutoPausedRef.current = false; setTimerRunning(v => !v); }} disabled={secondsLeft === 0}
+<button onClick={() => setTimerRunning(!timerRunning)} disabled={secondsLeft === 0}
 style={{ padding: '10px 20px', borderRadius: 12, fontSize: 13, fontWeight: 600, color: '#fff', background: secondsLeft === 0 ? c.gray : timerRunning ? c.red : c.green, opacity: secondsLeft === 0 ? 0.5 : 1 }}>
 {secondsLeft === 0 ? 'Done' : timerRunning ? 'Pause' : 'Start'}
 </button>
