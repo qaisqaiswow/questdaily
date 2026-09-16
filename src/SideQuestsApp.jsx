@@ -1154,10 +1154,6 @@ svg { transition: stroke 0.2s ease, fill 0.2s ease; }
 .sq-scroll { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .sq-root button, .sq-root a { contain: layout style; }
 .sq-cam-shell video, .sq-cam-shell canvas { transform: translateZ(0); backface-visibility: hidden; }
-.sq-heart-rain { position: fixed; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
-.sq-heart-rain span { position: absolute; top: -40px; color: rgba(255, 72, 125, 0.55); font-family: Arial, sans-serif; animation: sq-heart-fall linear infinite; will-change: transform, opacity; text-shadow: 0 1px 5px rgba(255, 72, 125, 0.18); }
-@keyframes sq-heart-fall { 0% { transform: translate3d(0, -50px, 0) rotate(0deg); opacity: 0; } 10% { opacity: 0.85; } 50% { transform: translate3d(24px, 50vh, 0) rotate(10deg); opacity: 0.72; } 90% { opacity: 0.65; } 100% { transform: translate3d(-18px, 110vh, 0) rotate(-12deg); opacity: 0; } }
-
 .sq-icon-fff svg { color: #fff; }
 @keyframes sq-fade-up { from { opacity: 0; transform: translate3d(0,7px,0); } to { opacity: 1; transform: translate3d(0,0,0); } }
 @keyframes sq-check-in { 0% { opacity: 0; transform: scale(0.5); } 70% { opacity: 1; transform: scale(1.06); } 100% { opacity: 1; transform: scale(1); } }
@@ -1619,124 +1615,6 @@ Get started
 
 // rest of the app until resolved, same as the old name-picker did, but now
 // backs onto real Firebase Auth accounts instead of a purely local name.
-const TabBar = React.memo(function TabBar({ activeTab, onChange, c }) {
-const items = [
-{ key: 'quests', label: 'Quests', Icon: CheckSquare },
-{ key: 'history', label: 'History', Icon: HistoryIcon },
-{ key: 'leaderboard', label: 'Ranks', Icon: TrophyIcon },
-{ key: 'settings', label: 'Account', Icon: UserCog },
-];
-return (
-<div style={{ position: 'fixed', left: '50%', bottom: 'max(env(safe-area-inset-bottom), 16px)', transform: 'translateX(-50%)', zIndex: 50 }}>
-<div
-className="backdrop-blur-2xl"
-style={{ ...glassStyle(c, true), borderRadius: 999, padding: '6px 6px', display: 'flex', width: 360, maxWidth: 'calc(100vw - 24px)' }}
->
-{items.map(({ key, label, Icon }) => {
-const active = activeTab === key;
-const color = active ? c.blue : c.gray;
-return (
-<button type="button" key={key} onClick={() => onChange(key)} className="sq-control"
-style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, padding: '8px 0 7px', borderRadius: 999, color, background: active ? c.fill : 'transparent' }}>
-<span className={`sq-tab-icon ${active ? 'sq-tab-icon-active' : ''}`}><Icon size={21} strokeWidth={active ? 2.1 : 1.75} color={color} /></span>
-<span style={{ fontSize: 10, fontWeight: 600, letterSpacing: -0.1, color }}>{label}</span>
-</button>
-);
-})}
-</div>
-</div>
-);
-});
-
-
-function DeviceInstallPrompt({ onDismiss, c }) {
-  const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [installing, setInstalling] = useState(false);
-  const [installed, setInstalled] = useState(false);
-
-  useEffect(() => {
-    const handleBeforeInstall = (event) => {
-      event.preventDefault();
-      setDeferredPrompt(event);
-    };
-    const handleInstalled = () => {
-      setInstalled(true);
-      setDeferredPrompt(null);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
-    window.addEventListener('appinstalled', handleInstalled);
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
-      window.removeEventListener('appinstalled', handleInstalled);
-    };
-  }, []);
-
-  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent || '');
-  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
-
-  useEffect(() => {
-    if (isStandalone) setInstalled(true);
-  }, [isStandalone]);
-
-  const handleInstall = async () => {
-    if (!deferredPrompt) return;
-    setInstalling(true);
-    try {
-      await deferredPrompt.prompt();
-      await deferredPrompt.userChoice;
-    } catch (err) {
-      console.warn('Install prompt failed:', err);
-    } finally {
-      setDeferredPrompt(null);
-      setInstalling(false);
-      onDismiss();
-    }
-  };
-
-  if (installed) {
-    return (
-      <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(8px)' }}>
-        <div style={{ ...glassStyle(c), width: '100%', maxWidth: 380, borderRadius: 24, padding: 22, textAlign: 'center' }}>
-          <div style={{ fontSize: 34, marginBottom: 8 }}>✓</div>
-          <p style={{ fontSize: 18, fontWeight: 800, color: c.label }}>QuestDaily is installed</p>
-          <button type="button" onClick={onDismiss} style={{ marginTop: 16, width: '100%', border: 0, borderRadius: 14, padding: 13, background: c.blue, color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Continue</button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(8px)' }}>
-      <div style={{ ...glassStyle(c), width: '100%', maxWidth: 380, borderRadius: 24, padding: 22 }}>
-        <div style={{ width: 52, height: 52, borderRadius: 16, background: c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, marginBottom: 14 }}>＋</div>
-        <p style={{ fontSize: 19, fontWeight: 800, color: c.label }}>Install QuestDaily</p>
-        <p style={{ marginTop: 6, fontSize: 13, lineHeight: 1.5, color: c.labelSecondary }}>
-          Add QuestDaily to your home screen for a faster, app-like experience.
-        </p>
-
-        {deferredPrompt ? (
-          <button type="button" onClick={handleInstall} disabled={installing} style={{ marginTop: 18, width: '100%', border: 0, borderRadius: 14, padding: 13, background: c.blue, color: '#fff', fontWeight: 700, cursor: installing ? 'default' : 'pointer', opacity: installing ? 0.7 : 1 }}>
-            {installing ? 'Installing…' : 'Install app'}
-          </button>
-        ) : isIOS ? (
-          <div style={{ marginTop: 16, borderRadius: 14, padding: 12, background: c.fill, color: c.labelSecondary, fontSize: 12, lineHeight: 1.5 }}>
-            On iPhone or iPad, tap <strong style={{ color: c.label }}>Share</strong>, then choose <strong style={{ color: c.label }}>Add to Home Screen</strong>.
-          </div>
-        ) : (
-          <p style={{ marginTop: 16, fontSize: 12, lineHeight: 1.5, color: c.labelTertiary }}>
-            If your browser supports installation, the install option will appear when it is available.
-          </p>
-        )}
-
-        <button type="button" onClick={onDismiss} style={{ marginTop: 12, width: '100%', border: `1px solid ${c.glassBorder}`, borderRadius: 14, padding: 12, background: 'transparent', color: c.labelSecondary, fontWeight: 600, cursor: 'pointer' }}>
-          Not now
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
 const [mode, setMode] = useState('signup'); // 'signup' | 'login'
 const [username, setUsername] = useState('');
@@ -2357,15 +2235,7 @@ style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 
 {isSaqoom && (
   <div>
     <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Special</p>
-    <button
-      type="button"
-      aria-label="Love letter"
-      onClick={() => setSpecialMessage(prev => !prev)}
-      style={{
-        ...glassStyle(c), width: '100%', borderRadius: 20, border: `1px solid ${c.glassBorder}`,
-        padding: 14, display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', cursor: 'pointer'
-      }}
-    >
+    <button type="button" aria-label="Love letter" onClick={() => setSpecialMessage(prev => !prev)} style={{ ...glassStyle(c), width: '100%', borderRadius: 20, border: `1px solid ${c.glassBorder}`, padding: 14, display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', cursor: 'pointer' }}>
       <div style={{ width: 42, height: 42, borderRadius: 14, background: 'rgba(255,45,85,0.14)', color: c.pink, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         <span aria-hidden="true" style={{ fontSize: 25, lineHeight: 1 }}>💌</span>
       </div>
@@ -2381,6 +2251,243 @@ style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 
       </div>
     )}
   </div>
+)}
+
+{/* Notifications */}
+<div>
+<p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Notifications</p>
+<div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+<div style={rowStyle}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.orange, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<Bell size={14} strokeWidth={1.9} />
+</div>
+<div style={{ flex: 1, minWidth: 0 }}>
+<p style={{ fontSize: 15, fontWeight: 500, color: c.label }}>Daily reminder</p>
+{!notificationsSupported && <p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>Not supported in this browser</p>}
+</div>
+<button onClick={onToggleDailyReminder} disabled={!notificationsSupported} aria-label="Toggle daily reminder"
+style={{ width: 46, height: 27, borderRadius: 999, background: dailyReminderOn ? c.blue : c.fill, position: 'relative', flexShrink: 0, opacity: notificationsSupported ? 1 : 0.5, transition: 'background-color 0.25s ease' }}>
+<span style={{ position: 'absolute', top: 2, left: dailyReminderOn ? 21 : 2, width: 23, height: 23, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)', transition: 'left 0.22s cubic-bezier(0.34,1.56,0.64,1)' }} />
+</button>
+</div>
+{dailyReminderOn && (
+<p style={{ fontSize: 11, color: c.labelTertiary, padding: '0 14px 12px 58px', lineHeight: 1.4 }}>
+Reminds you around 6 PM if you haven't checked in — only while QuestDaily is open in a tab.
+</p>
+)}
+<div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+<div style={rowStyle}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.pink, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<Sparkles size={14} strokeWidth={1.9} />
+</div>
+<span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Haptic feedback</span>
+<button onClick={onToggleHaptics} aria-label="Toggle haptic feedback"
+style={{ width: 46, height: 27, borderRadius: 999, background: hapticsOn ? c.blue : c.fill, position: 'relative', flexShrink: 0, transition: 'background-color 0.25s ease' }}>
+<span style={{ position: 'absolute', top: 2, left: hapticsOn ? 21 : 2, width: 23, height: 23, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)', transition: 'left 0.22s cubic-bezier(0.34,1.56,0.64,1)' }} />
+</button>
+</div>
+</div>
+</div>
+
+{/* Appearance */}
+<div>
+<p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Appearance</p>
+<div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+<div style={rowStyle}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.indigo, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+{dark ? <Moon size={15} strokeWidth={1.9} /> : <Sun size={15} strokeWidth={1.9} />}
+</div>
+<span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Dark mode</span>
+<button onClick={onToggleTheme} aria-label="Toggle dark mode"
+style={{ width: 46, height: 27, borderRadius: 999, background: dark ? c.blue : c.fill, position: 'relative', flexShrink: 0, transition: 'background-color 0.25s ease' }}>
+<span style={{ position: 'absolute', top: 2, left: dark ? 21 : 2, width: 23, height: 23, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)', transition: 'left 0.22s cubic-bezier(0.34,1.56,0.64,1)' }} />
+</button>
+</div>
+</div>
+</div>
+
+{/* Privacy & data */}
+<div>
+<p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Privacy & data</p>
+<div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+<button onClick={onExportData} style={rowStyle}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.green, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<Download size={14} strokeWidth={1.9} />
+</div>
+<span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Export my data</span>
+<ChevronIcon color={c.labelTertiary} />
+</button>
+</div>
+<p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 8, paddingLeft: 2, lineHeight: 1.4 }}>
+Downloads your level, XP, streak, and full quest history as a JSON file.
+</p>
+</div>
+
+{/* Updates */}
+<div>
+<p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Updates</p>
+<div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+<button onClick={() => { haptic(6); setShowUpdates(v => !v); }} aria-expanded={showUpdates} style={rowStyle}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<Sparkles size={14} strokeWidth={1.9} />
+</div>
+<span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>What's new</span>
+<span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: c.blue, borderRadius: 999, padding: '3px 7px', letterSpacing: 0.35 }}>UPDATE</span>
+<ChevronRight size={17} color={c.labelTertiary} style={{ transform: showUpdates ? 'rotate(90deg)' : 'none', transition: 'transform 220ms ease', flexShrink: 0 }} />
+</button>
+<div style={{ overflow: 'hidden', maxHeight: showUpdates ? 900 : 0, opacity: showUpdates ? 1 : 0, transition: 'max-height 420ms cubic-bezier(.22,1,.36,1), opacity 220ms ease' }}>
+<div style={{ borderTop: `1px solid ${c.separator}`, padding: '6px 0' }}>
+{updates.map(({ Icon, title, body }, i) => (
+<div key={title} className="sq-anim-in" style={{ display: 'flex', gap: 12, padding: '11px 14px', animationDelay: `${i * 0.035}s` }}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<Icon size={14} strokeWidth={1.9} />
+</div>
+<div style={{ minWidth: 0 }}>
+<p style={{ fontSize: 13, fontWeight: 700, color: c.label, lineHeight: 1.3 }}>{title}</p>
+<p style={{ fontSize: 11.5, color: c.labelSecondary, marginTop: 3, lineHeight: 1.45 }}>{body}</p>
+</div>
+</div>
+))}
+</div>
+</div>
+</div>
+<p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 8, paddingLeft: 2, lineHeight: 1.4 }}>See the latest QuestDaily features and improvements anytime from here.</p>
+</div>
+
+{/* About */}
+<div>
+<p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>About</p>
+<div style={{ ...glassStyle(c), borderRadius: 20, padding: '14px 16px' }}>
+<p style={{ fontSize: 12.5, color: c.labelSecondary, lineHeight: 1.5 }}>
+Level, XP, streak, quest history, and your profile photo sync to your account.
+Quest check-in photos and today's quest list stay on this device only.
+</p>
+<p style={{ fontSize: 12, color: c.labelSecondary, marginTop: 10 }}>Created by <span style={{ fontWeight: 800, color: c.label }}>qaiskurdieh</span></p>
+<p className="sq-mono" style={{ fontSize: 10, color: c.labelTertiary, marginTop: 6 }}>QuestDaily · v1.0</p>
+</div>
+</div>
+</div>
+</div>
+);
+}
+
+
+// pill highlight, iOS system blue for the active tab and iOS system gray
+// for inactive tabs.
+const TabBar = React.memo(function TabBar({ activeTab, onChange, c }) {
+const items = [
+{ key: 'quests', label: 'Quests', Icon: CheckSquare },
+{ key: 'history', label: 'History', Icon: HistoryIcon },
+{ key: 'leaderboard', label: 'Ranks', Icon: TrophyIcon },
+{ key: 'settings', label: 'Account', Icon: UserCog },
+];
+return (
+<div style={{ position: 'fixed', left: '50%', bottom: 'max(env(safe-area-inset-bottom), 16px)', transform: 'translateX(-50%)', zIndex: 50 }}>
+<div
+className="backdrop-blur-2xl"
+style={{ ...glassStyle(c, true), borderRadius: 999, padding: '6px 6px', display: 'flex', width: 360, maxWidth: 'calc(100vw - 24px)' }}
+>
+{items.map(({ key, label, Icon }) => {
+const active = activeTab === key;
+const color = active ? c.blue : c.gray;
+return (
+<button type="button" key={key} onClick={() => onChange(key)} className="sq-control"
+style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, padding: '8px 0 7px', borderRadius: 999, color, background: active ? c.fill : 'transparent' }}>
+<span className={`sq-tab-icon ${active ? 'sq-tab-icon-active' : ''}`}><Icon size={21} strokeWidth={active ? 2.1 : 1.75} color={color} /></span>
+<span style={{ fontSize: 10, fontWeight: 600, letterSpacing: -0.1, color }}>{label}</span>
+</button>
+);
+})}
+</div>
+</div>
+);
+});
+
+// add to home screen prompt
+function DeviceInstallPrompt({ onDismiss, c }) {
+const [step, setStep] = useState(0);
+const [os, setOs] = useState(null);
+
+const nextStep = () => { if (step === 1) setStep(2); else onDismiss(); };
+
+const rowStyle = { width: '100%', padding: '16px 18px', borderRadius: 18, fontSize: 16, fontWeight: 500, textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: c.bgSecondary, color: c.label };
+
+return (
+<div className="fixed inset-0 z-[100] flex flex-col sq-anim-in" style={{ background: c.bg }}>
+<div className="flex-1 flex flex-col justify-center px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
+{step === 0 && (
+<>
+<div className="text-center mb-8">
+<div className="sq-icon-fff" style={{ width: 84, height: 84, borderRadius: 32, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+<IOSAddIcon style={{ width: 40, height: 40 }} />
+</div>
+<h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 8 }}>Add to Home Screen</h3>
+<p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.4 }}>Which device are you using?</p>
+</div>
+<div className="flex flex-col gap-3">
+<button onClick={() => { setOs('ios'); setStep(1); }} style={rowStyle}>
+<span>iPhone or iPad</span><ChevronIcon color={c.labelTertiary} />
+</button>
+<button onClick={() => { setOs('android'); setStep(1); }} style={rowStyle}>
+<span>Android</span><ChevronIcon color={c.labelTertiary} />
+</button>
+</div>
+</>
+)}
+
+{step > 0 && os === 'ios' && (
+<>
+<div className="text-center mb-2">
+<h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 6 }}>Install on iOS</h3>
+<p style={{ fontSize: 14, color: c.labelSecondary, marginBottom: 28 }}>Step {step} of 2</p>
+</div>
+<div style={{ ...glassStyle(c), borderRadius: 28, padding: '40px 24px', marginBottom: 20, textAlign: 'center' }}>
+<div className="sq-icon-fff" style={{ width: 72, height: 72, borderRadius: 999, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+{step === 1 ? <IOSShareIcon style={{ width: 30, height: 30 }} /> : <IOSAddIcon style={{ width: 30, height: 30 }} />}
+</div>
+<p style={{ fontSize: 18, fontWeight: 600, color: c.label, marginBottom: 6 }}>
+{step === 1 ? 'Tap the Share button' : 'Tap Add to Home Screen'}
+</p>
+<p style={{ fontSize: 14, color: c.labelSecondary }}>
+{step === 1 ? 'Find it in the Safari toolbar.' : 'Scroll down the share sheet to find it.'}
+</p>
+</div>
+</>
+)}
+
+{step > 0 && os === 'android' && (
+<>
+<div className="text-center mb-2">
+<h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 6 }}>Install on Android</h3>
+<p style={{ fontSize: 14, color: c.labelSecondary, marginBottom: 28 }}>Step {step} of 2</p>
+</div>
+<div style={{ ...glassStyle(c), borderRadius: 28, padding: '40px 24px', marginBottom: 20, textAlign: 'center' }}>
+<div className="sq-icon-fff" style={{ width: 72, height: 72, borderRadius: 999, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+{step === 1 ? <AndroidMenuIcon style={{ width: 30, height: 30 }} /> : <AndroidAddIcon style={{ width: 30, height: 30 }} />}
+</div>
+<p style={{ fontSize: 18, fontWeight: 600, color: c.label, marginBottom: 6 }}>
+{step === 1 ? 'Tap the menu icon' : 'Tap Add to Home Screen'}
+</p>
+<p style={{ fontSize: 14, color: c.labelSecondary }}>
+{step === 1 ? 'Three dots, usually top right in Chrome.' : 'Select it from the menu, or "Install app".'}
+</p>
+</div>
+</>
+)}
+</div>
+
+<div className="px-6" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 24px)' }}>
+{step === 0 ? (
+<button onClick={onDismiss} style={{ width: '100%', padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, color: c.blue, background: c.fill }}>
+Not Now
+</button>
+) : (
+<div className="flex gap-3">
+{step === 2 && <button onClick={() => setStep(1)} style={{ flex: 1, padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, background: c.fill, color: c.label }}>Back</button>}
+<button onClick={nextStep} style={{ flex: 2, padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, background: os === 'ios' ? c.blue : c.green, color: '#fff' }}>
+{step === 1 ? 'Next' : 'Done'}
+</button>
+</div>
 )}
 </div>
 </div>
@@ -3848,17 +3955,27 @@ const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
 return (
 <div className="sq-root" style={{ background: c.bg, minHeight: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: 'background-color 0.3s ease' }}>
-{isSaqoom && (
-  <div aria-hidden="true" className="sq-heart-rain">
-    {Array.from({ length: 32 }, (_, i) => (
-      <span key={i} style={{ left: `${(i * 37) % 100}%`, animationDelay: `${-((i * 0.47) % 9)}s`, animationDuration: `${7 + (i % 5)}s`, fontSize: `${14 + (i % 5) * 4}px` }}>♡</span>
-    ))}
-  </div>
-)}
-
 <SystemType />
 <div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg, zIndex: 2 }}>
 <AmbientBackground c={c} />
+
+{isSaqoom && (
+  <div aria-hidden="true" className="sq-heart-rain">
+    {Array.from({ length: 32 }, (_, i) => (
+      <span
+        key={i}
+        style={{
+          left: `${(i * 37) % 100}%`,
+          animationDelay: `${-((i * 0.47) % 9)}s`,
+          animationDuration: `${7 + (i % 5)}s`,
+          fontSize: `${14 + (i % 5) * 4}px`
+        }}
+      >
+        ♡
+      </span>
+    ))}
+  </div>
+)}
 
 {!hasSeenWelcome && (
 <WelcomeScreen c={c} onContinue={() => { haptic(10); localStorage.setItem('sq_has_seen_welcome', 'true'); setHasSeenWelcome(true); }} />
