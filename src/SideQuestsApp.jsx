@@ -2261,6 +2261,8 @@ const passStreakRef = useRef(0);
 const poseStateRef = useRef(createPoseRepState(quest.reps ? (quest.progress || 0) : 0));
 const poseRafRef = useRef(null);
 const poseLastVideoTimeRef = useRef(-1);
+const smoothedLandmarksRef = useRef(null);
+const poseStableFramesRef = useRef(0);
 const smoothedActRef = useRef(null);
 const smoothedNegRef = useRef(null);
 const smoothedSpoofRef = useRef(null);
@@ -2306,7 +2308,7 @@ const [timerRunning, setTimerRunning] = useState(false);
 
 const labels = QUEST_LABELS[quest.id];
 const questType = labels?.type || 'action';
-const hasSkeletonTracking = Boolean(quest.reps) || MOVEMENT_ACTION_IDS.has(quest.id);
+const hasSkeletonTracking = true; // Always show the live body/skeleton layer on every camera challenge.
 
 const activeNegatives = useMemo(() => getNegativeLabels(questType), [questType]);
 const classifierLabels = useMemo(
@@ -2574,6 +2576,35 @@ return () => { disposed = true; scanRunRef.current += 1; clearTimeout(scanTimerR
 useEffect(() => {
 if (!hasSkeletonTracking || phase !== 'live' || confirmed) return undefined;
 let cancelled = false;
+
+const SMOOTH = 0.32;
+const MIN_VIS = 0.28;
+const MAJOR_JOINTS = new Set([11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]);
+
+const smoothLandmarks = (landmarks) => {
+  if (!landmarks) return null;
+  if (!smoothedLandmarksRef.current || smoothedLandmarksRef.current.length !== landmarks.length) {
+    smoothedLandmarksRef.current = landmarks.map(p => ({ ...p }));
+    return smoothedLandmarksRef.current;
+  }
+
+  const prev = smoothedLandmarksRef.current;
+  const next = landmarks.map((p, i) => {
+    const q = prev[i] || p;
+    const alpha = (p.visibility ?? 1) < 0.45 ? SMOOTH * 0.75 : SMOOTH;
+    return {
+      ...p,
+      x: q.x + (p.x - q.x) * alpha,
+      y: q.y + (p.y - q.y) * alpha,
+      z: q.z !== undefined && p.z !== undefined ? q.z + (p.z - q.z) * alpha : p.z,
+      visibility: Math.max(0, Math.min(1, (q.visibility ?? 1) + ((p.visibility ?? 1) - (q.visibility ?? 1)) * alpha))
+    };
+  });
+
+  smoothedLandmarksRef.current = next;
+  return next;
+};
+
 (async () => {
 try {
 setPoseError(null);
@@ -2585,23 +2616,32 @@ const loop = () => {
 if (cancelled) return;
 const video = videoRef.current;
 const canvas = skeletonCanvasRef.current;
-if (video && video.readyState >= 2 && video.currentTime !== poseLastVideoTimeRef.current) {
+
+if (video && canvas && video.readyState >= 2 && video.currentTime !== poseLastVideoTimeRef.current) {
 poseLastVideoTimeRef.current = video.currentTime;
 const now = performance.now();
+
 try {
 const result = landmarker.detectForVideo(video, now);
-const landmarks = result?.landmarks?.[0] ?? null;
+const rawLandmarks = result?.landmarks?.[0] ?? null;
+const landmarks = smoothLandmarks(rawLandmarks);
+
+if (rawLandmarks) {
+  poseStableFramesRef.current = Math.min(30, poseStableFramesRef.current + 1);
+} else {
+  poseStableFramesRef.current = Math.max(0, poseStableFramesRef.current - 1);
+}
+
 if (landmarks && quest.reps) {
 const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, now);
 setRepPhase(update.phase);
 setRepCue(update.cue);
+
 if (update.counted) {
 setRepsDone(update.reps);
+
 if (update.reps >= quest.reps) {
 if (repSpoofSuspectedRef.current) {
-// hold one rep short until the screen/photo signal clears —
-// this stops a looped video of someone else exercising
-// (which pose angles alone can't distinguish from the real thing)
 poseStateRef.current.reps = quest.reps - 1;
 setRepsDone(quest.reps - 1);
 haptic(10);
@@ -2626,7 +2666,10 @@ canvas.height = canvas.clientHeight || 300;
 }
 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-if (landmarks && !confirmedRef.current) {
+// The skeleton is now visual-only on non-rep challenges, and visual + rep-counting on rep challenges.
+// This means every challenge gets live body framing without incorrectly requiring pose-based reps for
+// food, map, upload, sleep, meditation, etc.
+if (landmarks) {
 const Wc = canvas.width;
 const Hc = canvas.height;
 const Wv = video.videoWidth || 640;
@@ -2637,56 +2680,83 @@ const Hr = Hv * scale;
 const Ox = (Wc - Wr) / 2;
 const Oy = (Hc - Hr) / 2;
 
-const mapPt = (pt) => ({ x: Ox + pt.x * Wr, y: Oy + pt.y * Hr, vis: pt.visibility ?? 1 });
+const mapPt = pt => ({
+  x: Ox + pt.x * Wr,
+  y: Oy + pt.y * Hr,
+  vis: pt.visibility ?? 1
+});
+
 const mapped = landmarks.map(mapPt);
+const poseReadyNow = poseStableFramesRef.current >= 3;
+const repActive = Boolean(quest.reps);
 const currentPhase = poseStateRef.current.phase;
-const lineColor = currentPhase === 'down' ? '#30D158' : '#0A84FF';
+const lineColor = repActive
+  ? (currentPhase === 'down' ? '#30D158' : '#0A84FF')
+  : (poseReadyNow ? '#0A84FF' : 'rgba(255,255,255,.72)');
 
 ctx.save();
-ctx.lineWidth = 3;
+ctx.globalAlpha = poseReadyNow ? 0.95 : 0.65;
+ctx.lineWidth = 3.2;
 ctx.lineCap = 'round';
 ctx.lineJoin = 'round';
 ctx.strokeStyle = lineColor;
+ctx.shadowColor = lineColor;
+ctx.shadowBlur = 7;
+
 POSE_CONNECTIONS.forEach(([i, j]) => {
-const p1 = mapped[i]; const p2 = mapped[j];
-if (p1 && p2 && p1.vis > 0.4 && p2.vis > 0.4) {
-ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+const p1 = mapped[i];
+const p2 = mapped[j];
+if (p1 && p2 && p1.vis > MIN_VIS && p2.vis > MIN_VIS) {
+ctx.beginPath();
+ctx.moveTo(p1.x, p1.y);
+ctx.lineTo(p2.x, p2.y);
+ctx.stroke();
 }
 });
 ctx.restore();
 
 ctx.save();
+ctx.globalAlpha = poseReadyNow ? 1 : 0.72;
 mapped.forEach((pt, idx) => {
-if (pt.vis > 0.4 && (idx === 0 || (idx >= 11 && idx <= 32))) {
-const isMajorJoint = [11, 12, 13, 14, 23, 24, 25, 26].includes(idx);
+if (pt.vis <= MIN_VIS) return;
+const isMajorJoint = MAJOR_JOINTS.has(idx);
 ctx.beginPath();
-ctx.arc(pt.x, pt.y, isMajorJoint ? 6 : 4, 0, 2 * Math.PI);
-ctx.fillStyle = 'rgba(0,0,0,0.65)';
+ctx.arc(pt.x, pt.y, isMajorJoint ? 6.5 : 4, 0, 2 * Math.PI);
+ctx.fillStyle = 'rgba(0,0,0,.72)';
 ctx.fill();
-ctx.lineWidth = isMajorJoint ? 2 : 1.5;
+ctx.lineWidth = isMajorJoint ? 2.1 : 1.5;
 ctx.strokeStyle = lineColor;
 ctx.stroke();
 ctx.beginPath();
-ctx.arc(pt.x, pt.y, isMajorJoint ? 2.5 : 1.6, 0, 2 * Math.PI);
-ctx.fillStyle = '#ffffff';
+ctx.arc(pt.x, pt.y, isMajorJoint ? 2.7 : 1.65, 0, 2 * Math.PI);
+ctx.fillStyle = '#fff';
 ctx.fill();
-}
 });
 ctx.restore();
 }
 }
-} catch (err) { /* transient frame errors are fine, keep looping */ }
+} catch (err) {
+console.debug('Pose frame skipped:', err);
 }
-if (!cancelled) poseRafRef.current = requestAnimationFrame(loop);
+}
+
+if (!cancelled) {
+poseRafRef.current = requestAnimationFrame(loop);
+}
 };
+
 poseRafRef.current = requestAnimationFrame(loop);
 } catch (err) {
 if (!cancelled) setPoseError('Could not load the pose tracking model. Check your connection and try again.');
 }
 })();
+
 return () => {
 cancelled = true;
 if (poseRafRef.current) cancelAnimationFrame(poseRafRef.current);
+poseRafRef.current = null;
+smoothedLandmarksRef.current = null;
+poseStableFramesRef.current = 0;
 if (skeletonCanvasRef.current) {
 const ctx = skeletonCanvasRef.current.getContext('2d');
 ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
@@ -2851,7 +2921,7 @@ return (
 <div className="relative flex-1 mx-4 rounded-3xl overflow-hidden sq-cam-shell" style={{ background: '#000' }}>
 <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ opacity: phase === 'live' && !uploadedProof ? 1 : 0, transition: 'opacity 0.3s' }} />
 <canvas ref={skeletonCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none object-cover z-10"
-style={{ opacity: phase === 'live' && !uploadedProof && hasSkeletonTracking ? 1 : 0, transition: 'opacity 0.3s' }} />
+style={{ opacity: phase === 'live' && !uploadedProof && hasSkeletonTracking ? 1 : 0, transition: 'opacity 0.3s ease' }} />
 
 {phase === 'live' && !uploadedProof && labels?.bodyParts && (
 <div className="absolute top-3 left-3 z-10" style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(10px)', borderRadius: 12, padding: '9px 11px' }}>
