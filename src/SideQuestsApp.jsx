@@ -3524,10 +3524,11 @@ const hapticsInitial = savedHaptics === null ? true : savedHaptics === 'true';
 setHapticsOnState(hapticsInitial);
 setHapticsPref(hapticsInitial);
 setDailyReminderOn(localStorage.getItem('sq_daily_reminder') === 'true' && notificationsSupported && Notification.permission === 'granted');
-setProofImages(JSON.parse(localStorage.getItem('sq_proofs')) || {});
-setHistory(JSON.parse(localStorage.getItem('sq_history')) || []);
+try { setProofImages(JSON.parse(localStorage.getItem('sq_proofs') || '{}') || {}); } catch { setProofImages({}); }
+try { setHistory(JSON.parse(localStorage.getItem('sq_history') || '[]') || []); } catch { setHistory([]); }
 
-const savedQuests = JSON.parse(localStorage.getItem('sq_quests')) || [];
+let savedQuests = [];
+try { savedQuests = JSON.parse(localStorage.getItem('sq_quests') || '[]') || []; } catch { savedQuests = []; }
 const anyDone = savedQuests.some(q => q.completed);
 const lastResetTs = parseInt(localStorage.getItem('sq_lastReset')) || 0;
 const expired = Date.now() - lastResetTs >= ONE_DAY_MS;
@@ -3926,9 +3927,21 @@ setQuests(prev => prev.map(q => q.id === proofModalId ? { ...q, progress } : q))
 setProofModalId(null);
 };
 
-if (!isMounted || authLoading) return null;
-
 const c = dark ? C.dark : C.light;
+
+// Never render a completely blank page while React/Firebase initializes.
+// The previous version returned null here, which made every startup problem
+// look like a white-screen crash.
+if (!isMounted || authLoading) {
+  return (
+    <div style={{ minHeight: '100vh', width: '100vw', background: c.bg, color: c.label, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 14, fontFamily: '-apple-system, BlinkMacSystemFont, \"SF Pro Text\", Arial, sans-serif' }}>
+      <div style={{ width: 34, height: 34, border: `3px solid ${c.fill}`, borderTopColor: c.blue, borderRadius: '50%', animation: 'sq-spin 0.8s linear infinite' }} />
+      <div style={{ fontSize: 14, fontWeight: 600, opacity: 0.72 }}>Starting QuestDaily…</div>
+      <style>{`@keyframes sq-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
 const xpPct = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
 const allDone = quests.length > 0 && quests.every(q => q.completed);
 
