@@ -6,14 +6,15 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as exifr from 'exifr';
 import { initializeApp, getApps } from 'firebase/app';
 import {
-getAuth, onAuthStateChanged, signOut, deleteUser,
-createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile,
+getAuth, onAuthStateChanged, signOut, deleteUser, getRedirectResult,
+createUserWithEmailAndPassword, signInWithEmailAndPassword,
+GoogleAuthProvider, signInWithRedirect, setPersistence, browserLocalPersistence,
 updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 import {
 Sun, Moon, CheckSquare, History as HistoryIcon, Settings as SettingsIcon,
-Dumbbell, PersonStanding, Activity, Bike, Footprints, CircleDot, Timer, ChevronsUp,
+Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Timer, ChevronsUp,
 Droplet, Leaf, Utensils, CookingPot, Flower2, Move, Zap, Flame,
 Pencil, Snowflake, Wind, Waves, Target, GlassWater, CupSoda,
 LogOut, Eye, EyeOff, Lock, AtSign, Camera, Trash2, ShieldCheck, Sparkles, ListChecks,
@@ -34,22 +35,13 @@ appId: "1:628879821292:web:997e8155a24b806eb2d8c9",
 measurementId: "G-C6S86XMFRZ",
 };
 
-let firebaseApp = null;
-let auth = null;
-let db = null;
-let firebaseInitError = null;
-try {
-  firebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-  auth = getAuth(firebaseApp);
-  db = getFirestore(firebaseApp);
-} catch (err) {
-  firebaseInitError = err;
-  console.error('QuestDaily Firebase initialization failed:', err);
-}
-const LEADERBOARD_COLLECTION = 'leaderboard_v2';
+const firebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
+const db = getFirestore(firebaseApp);
+const LEADERBOARD_COLLECTION = 'leaderboard';
 const LEADERBOARD_SIZE = 100;
-const USERS_COLLECTION = 'users_v2';
-const USERNAMES_COLLECTION = 'usernames_v2';
 
 // pushes the player's stats up to their leaderboard doc. ranked by lifetime
 // xp earned (not current xp) so leveling up never makes your rank go down.
@@ -92,7 +84,7 @@ return null;
 async function syncHistoryEntry(uid, entry) {
 if (!uid) return;
 try {
-await setDoc(doc(db, USERS_COLLECTION, uid, 'history', entry.id), entry);
+await setDoc(doc(db, 'users', uid, 'history', entry.id), entry);
 } catch (err) {
 console.error('History sync failed:', err);
 }
@@ -101,7 +93,7 @@ console.error('History sync failed:', err);
 async function fetchRemoteHistory(uid) {
 if (!uid) return [];
 try {
-const q = query(collection(db, USERS_COLLECTION, uid, 'history'), orderBy('ts', 'desc'), limit(500));
+const q = query(collection(db, 'users', uid, 'history'), orderBy('ts', 'desc'), limit(500));
 const snap = await getDocs(q);
 return snap.docs.map(d => d.data());
 } catch (err) {
@@ -123,7 +115,7 @@ return [];
 // A `usernames/{usernameLower}` doc is the source of truth for "is this
 // username taken" and for looking up the display-cased username on login;
 // the account's own profile lives in `users/{uid}`.
-const USERNAME_EMAIL_DOMAIN = 'questdaily-v2-users.app';
+const USERNAME_EMAIL_DOMAIN = 'questdaily-users.app';
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 
 function usernameToEmail(usernameLower) {
@@ -152,8 +144,13 @@ if (code === 'auth/too-many-requests') return 'Too many attempts — try again i
 if (code === 'auth/network-request-failed') return "Can't reach the server. Check your connection.";
 if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
 if (code === 'auth/invalid-email') return 'That username can\'t be used. Try a different one.';
+if (code === 'auth/popup-blocked') return 'Your browser blocked the sign-in popup. Please allow popups for this site and try again.';
+if (code === 'auth/unauthorized-domain') return 'Google sign-in is blocked for this site. Add your deployed Replit domain in Firebase Authentication → Settings → Authorized domains.';
+if (code === 'auth/operation-not-allowed') return 'Google sign-in is disabled. Enable Google under Firebase Authentication → Sign-in method.';
+if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return 'Google sign-in was cancelled. Try again.';
+if (code === 'auth/account-exists-with-different-credential') return 'That Google account\'s email is already tied to a different sign-in method here.';
 if (code === 'permission-denied' || code === 'firestore/permission-denied') {
-return 'The database is unavailable right now. Your account sign-in itself does not require the database; please try again.';
+return "Your database's security rules are blocking this — the 'usernames', 'users', and 'leaderboard' collections in Firestore need read/write rules set up. This is a Firebase Console configuration step, not something wrong with what you typed.";
 }
 return err?.message ? `Something went wrong: ${err.message}` : 'Something went wrong. Please try again.';
 }
@@ -167,58 +164,117 @@ return err?.message ? `Something went wrong: ${err.message}` : 'Something went w
 async function signUpAccount(usernameRaw, password) {
 const username = usernameRaw.trim();
 const usernameLower = username.toLowerCase();
+const usernameDoc = doc(db, 'usernames', usernameLower);
 
-// IMPORTANT: account creation must not depend on Firestore permissions.
-// Firebase Auth itself is the source of truth for username + password here.
-// The deterministic email is only an internal Auth identifier; users never
-// need a real mailbox for it.
-const cred = await createUserWithEmailAndPassword(
-  auth,
-  usernameToEmail(usernameLower),
-  password
-);
-
+let existing;
 try {
-  await updateProfile(cred.user, { displayName: username });
+existing = await getDoc(usernameDoc);
 } catch (err) {
-  // The account already exists in Auth, so a profile metadata failure should
-  // never turn a successful signup into a fake "database rules" error.
-  console.warn('Could not save Auth display name:', err);
+console.error('Username availability check failed:', err);
+throw err; // surfaced via friendlyAuthError, including the permission-denied case
+}
+if (existing.exists()) {
+const err = new Error('That username is already taken.');
+err.code = 'auth/email-already-in-use';
+throw err;
 }
 
-// Firestore is optional for the account itself. Leaderboard/profile sync can
-// happen later when rules permit it, but signup succeeds without it.
-return { uid: cred.user.uid, username: cred.user.displayName || username };
+const cred = await createUserWithEmailAndPassword(auth, usernameToEmail(usernameLower), password);
+try {
+await Promise.all([
+setDoc(usernameDoc, { uid: cred.user.uid, username }),
+setDoc(doc(db, 'users', cred.user.uid), { username, createdAt: Date.now() }),
+]);
+} catch (err) {
+console.error('Failed to finish account setup:', err);
+throw err;
+}
+return { uid: cred.user.uid, username };
 }
 
-// Login only touches Firebase Authentication. No Firestore reads are needed,
-// so a user's ability to sign in is independent of database security rules.
+// Logs into an existing account. Looks up the reservation doc first purely
+// to recover the original display-cased username (login itself only needs
+// the deterministic email, so a typo'd case still signs in fine).
 async function logInAccount(usernameRaw, password) {
 const username = usernameRaw.trim();
 const usernameLower = username.toLowerCase();
-const cred = await signInWithEmailAndPassword(
-  auth,
-  usernameToEmail(usernameLower),
-  password
-);
+const cred = await signInWithEmailAndPassword(auth, usernameToEmail(usernameLower), password);
 
-return {
-  uid: cred.user.uid,
-  username: cred.user.displayName || username,
-};
+let displayUsername = username;
+try {
+const snap = await getDoc(doc(db, 'usernames', usernameLower));
+if (snap.exists() && snap.data()?.username) displayUsername = snap.data().username;
+} catch { /* non-fatal — fall back to what they typed */ }
+
+return { uid: cred.user.uid, username: displayUsername };
 }
 
 async function logOutAccount() {
 await signOut(auth);
 }
 
-// Google sign-in removed. QuestDaily now uses username + password only.
+// Signs in with a Google popup. Google accounts don't come with a username
+// the person chose, so on a person's very first Google sign-in one is
+// minted automatically from their Google display name (falling back to
+// their email), retried with a random numeric suffix if it's taken — same
+// `usernames` reservation + `users/{uid}` profile doc that the username/
+// password flow creates, so everything downstream (hydration, leaderboard,
+// settings) treats a Google account exactly like any other. Their Google
+// avatar is carried over as the initial profile photo too. Returning users
+// don't need any of this — their `users/{uid}` doc already exists, and the
+// app's normal auth-state hydration effect picks it up the same way a page
+// reload does.
+async function mintUsernameForGoogleUser(user) {
+const rawBase = user.displayName || (user.email ? user.email.split('@')[0] : 'Player');
+let base = rawBase.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 16);
+if (base.length < 3) base = (base + 'Player').slice(0, 16);
+
+let display = base;
+let usernameLower = base.toLowerCase();
+for (let attempt = 0; attempt < 8; attempt++) {
+const snap = await getDoc(doc(db, 'usernames', usernameLower));
+if (!snap.exists()) break;
+const suffix = String(Math.floor(1000 + Math.random() * 9000));
+display = `${base}${suffix}`.slice(0, 20);
+usernameLower = display.toLowerCase();
+}
+
+await Promise.all([
+setDoc(doc(db, 'usernames', usernameLower), { uid: user.uid, username: display }),
+setDoc(doc(db, 'users', user.uid), { username: display, createdAt: Date.now(), photoURL: user.photoURL || null }),
+]);
+if (user.photoURL) {
+await setDoc(doc(db, 'leaderboard', user.uid), { photoURL: user.photoURL }, { merge: true }).catch(() => {});
+}
+}
+
+// Popup-based Google sign-in breaks on hosts that send strict
+// Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy headers (needed
+// here for MediaPipe's multi-threaded WASM) — the popup can't message the
+// result back to this window, so the sign-in just hangs silently.
+// Redirect-based sign-in sidesteps that entirely: the browser navigates to
+// Google and back, and Firebase Auth picks up the result via
+// onAuthStateChanged on reload. The "first time this Google account has
+// ever signed in" username-minting step used to happen right here after
+// the popup resolved — it now lives in hydrateAccount() instead, since
+// nothing runs in *this* page load once the redirect kicks off.
+async function signInWithGoogle() {
+googleProvider.setCustomParameters({ prompt: 'select_account' });
+// Explicitly persist the Firebase session so the Google redirect comes back
+// to the same signed-in account instead of looking like a fresh session.
+await setPersistence(auth, browserLocalPersistence);
+// The welcome screen is already completed before the auth modal is shown.
+// Keep that state across the full-page Google redirect as an extra safety net.
+try { localStorage.setItem('sq_google_redirect_pending', 'true'); } catch {}
+await signInWithRedirect(auth, googleProvider);
+}
 
 // editing an existing account
 // -----------------------------------------------------------------------
 function getAuthProviderLabel(user) {
 if (!user) return null;
 const ids = (user.providerData || []).map(p => p.providerId);
+if (ids.includes('google.com')) return 'google';
 if (ids.includes('password')) return 'password';
 return 'other';
 }
@@ -244,14 +300,14 @@ if (newLower === oldLower) {
 // same underlying name, only casing changed (or literally unchanged) —
 // no Auth email involved, just update the display casing everywhere
 await Promise.all([
-setDoc(doc(db, USERNAMES_COLLECTION, oldLower), { uid: currentUser.uid, username: newUsername }, { merge: true }),
-setDoc(doc(db, USERS_COLLECTION, currentUser.uid), { username: newUsername }, { merge: true }),
-setDoc(doc(db, LEADERBOARD_COLLECTION, currentUser.uid), { username: newUsername }, { merge: true }),
+setDoc(doc(db, 'usernames', oldLower), { uid: currentUser.uid, username: newUsername }, { merge: true }),
+setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
+setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
 ]);
 return newUsername;
 }
 
-const takenSnap = await getDoc(doc(db, USERNAMES_COLLECTION, newLower));
+const takenSnap = await getDoc(doc(db, 'usernames', newLower));
 if (takenSnap.exists()) {
 throw Object.assign(new Error('That username is already taken.'), { code: 'auth/email-already-in-use' });
 }
@@ -272,11 +328,11 @@ throw err;
 }
 
 await Promise.all([
-setDoc(doc(db, USERNAMES_COLLECTION, newLower), { uid: currentUser.uid, username: newUsername }),
-setDoc(doc(db, USERS_COLLECTION, currentUser.uid), { username: newUsername }, { merge: true }),
-setDoc(doc(db, LEADERBOARD_COLLECTION, currentUser.uid), { username: newUsername }, { merge: true }),
+setDoc(doc(db, 'usernames', newLower), { uid: currentUser.uid, username: newUsername }),
+setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
+setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
 ]);
-await deleteDoc(doc(db, USERNAMES_COLLECTION, oldLower)).catch(() => {});
+await deleteDoc(doc(db, 'usernames', oldLower)).catch(() => {});
 
 return newUsername;
 }
@@ -327,8 +383,8 @@ reader.readAsDataURL(file);
 
 async function updateProfilePhoto(uid, dataUrl) {
 await Promise.all([
-setDoc(doc(db, USERS_COLLECTION, uid), { photoURL: dataUrl }, { merge: true }),
-setDoc(doc(db, LEADERBOARD_COLLECTION, uid), { photoURL: dataUrl }, { merge: true }),
+setDoc(doc(db, 'users', uid), { photoURL: dataUrl }, { merge: true }),
+setDoc(doc(db, 'leaderboard', uid), { photoURL: dataUrl }, { merge: true }),
 ]);
 }
 
@@ -340,7 +396,7 @@ setDoc(doc(db, LEADERBOARD_COLLECTION, uid), { photoURL: dataUrl }, { merge: tru
 async function deleteAccountData(uid, usernameLower) {
 let historyDocs = [];
 try {
-const historySnap = await getDocs(collection(db, USERS_COLLECTION, uid, 'history'));
+const historySnap = await getDocs(collection(db, 'users', uid, 'history'));
 historyDocs = historySnap.docs;
 } catch (err) {
 console.error('Could not list history for deletion (continuing with the rest):', err);
@@ -348,9 +404,9 @@ console.error('Could not list history for deletion (continuing with the rest):',
 await Promise.all(historyDocs.map(d => deleteDoc(d.ref).catch(() => {})));
 
 const results = await Promise.allSettled([
-deleteDoc(doc(db, USERS_COLLECTION, uid)),
-deleteDoc(doc(db, LEADERBOARD_COLLECTION, uid)),
-usernameLower ? deleteDoc(doc(db, USERNAMES_COLLECTION, usernameLower)) : Promise.resolve(),
+deleteDoc(doc(db, 'users', uid)),
+deleteDoc(doc(db, 'leaderboard', uid)),
+usernameLower ? deleteDoc(doc(db, 'usernames', usernameLower)) : Promise.resolve(),
 ]);
 const failure = results.find(r => r.status === 'rejected');
 if (failure) {
@@ -372,52 +428,45 @@ const [authError, setAuthError] = useState(null);
 
 useEffect(() => {
 let mounted = true;
-let resetPromise = Promise.resolve();
+let redirectHandled = false;
 
-// One-time migration reset: sign out any Firebase session created by the old
-// build and clear stale client-side account state. New sessions are preserved.
+// Wait for Firebase to finish resolving any Google redirect before allowing
+// the main app to decide which screen to show. This prevents the post-Google
+// reload from briefly being treated as a signed-out/fresh app.
+const finishRedirect = async () => {
 try {
-  const resetKey = 'sq_account_namespace_reset_v2';
-  if (!localStorage.getItem(resetKey)) {
-    localStorage.setItem(resetKey, 'true');
-    resetPromise = auth ? signOut(auth).catch(() => {}) : Promise.resolve();
-  }
-  // Remove the old Google redirect marker and auth-related leftovers.
-  localStorage.removeItem('sq_google_redirect_pending');
-  localStorage.removeItem('firebase:authUser:old');
-} catch {}
-
-if (!auth) {
-  setAuthError(firebaseInitError ? friendlyAuthError(firebaseInitError) : 'Authentication is unavailable.');
-  setLoading(false);
-  return () => { mounted = false; };
+const result = await getRedirectResult(auth);
+redirectHandled = true;
+if (!mounted) return;
+if (result?.user) {
+setUser(result.user);
+setAuthError(null);
 }
+try { localStorage.removeItem('sq_google_redirect_pending'); } catch {}
+} catch (err) {
+redirectHandled = true;
+if (!mounted) return;
+try { localStorage.removeItem('sq_google_redirect_pending'); } catch {}
+if (err?.code && err.code !== 'auth/no-auth-event') {
+console.error('Google redirect result failed:', err);
+setAuthError(friendlyAuthError(err));
+}
+} finally {
+if (mounted && redirectHandled) setLoading(false);
+}
+};
 
-let unsub = null;
-const timeout = setTimeout(() => {
-  if (mounted) setLoading(false);
-}, 5000);
-
-resetPromise.finally(() => {
-  if (!mounted) return;
-  unsub = onAuthStateChanged(auth, u => {
-    if (!mounted) return;
-    setUser(u || null);
-    setLoading(false);
-    if (u) setAuthError(null);
-  }, err => {
-    if (!mounted) return;
-    console.error('Firebase auth state error:', err);
-    setAuthError(friendlyAuthError(err));
-    setLoading(false);
-  });
+const unsub = onAuthStateChanged(auth, u => {
+if (!mounted) return;
+setUser(u);
+// The redirect handler controls the initial loading gate. After that, normal
+// auth changes can update immediately.
+if (redirectHandled) setLoading(false);
+if (u) setAuthError(null);
 });
 
-return () => {
-  mounted = false;
-  clearTimeout(timeout);
-  if (unsub) unsub();
-};
+finishRedirect();
+return () => { mounted = false; unsub(); };
 }, []);
 
 return { user, loading, authError };
@@ -437,22 +486,7 @@ setErrorDetail(prev => prev || 'Timed out waiting for a response. Firestore Data
 const unsub = onSnapshot(
 q,
 snap => { clearTimeout(timeout); setEntries(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setStatus('ready'); setErrorDetail(null); },
-err => {
-  clearTimeout(timeout);
-  console.error('Leaderboard listener error:', err);
-  // A Firestore permission error must never block the rest of QuestDaily.
-  // The server rules, not client code, decide whether this collection is readable.
-  // Treat a denied leaderboard as an unavailable/empty leaderboard instead of
-  // showing a scary database error screen in the app.
-  if (err?.code === 'permission-denied' || err?.code === 'firestore/permission-denied') {
-    setEntries([]);
-    setStatus('ready');
-    setErrorDetail(null);
-    return;
-  }
-  setStatus('error');
-  setErrorDetail(`${err.code || 'error'}: ${err.message}`);
-}
+err => { clearTimeout(timeout); console.error('Leaderboard listener error:', err); setStatus('error'); setErrorDetail(`${err.code || 'error'}: ${err.message}`); }
 );
 return () => { clearTimeout(timeout); unsub(); };
 }, []);
@@ -1298,6 +1332,16 @@ return (
 </svg>
 );
 });
+const GoogleIcon = React.memo(function GoogleIcon({ size = 18 }) {
+return (
+<svg width={size} height={size} viewBox="0 0 48 48">
+<path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12s5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24s8.955,20,20,20s20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
+<path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
+<path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
+<path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
+</svg>
+);
+});
 
 // quest icons — mapped straight onto Lucide (SF-Symbols-style) components.
 // Each is a drop-in React component, so existing call sites (which pass
@@ -1621,10 +1665,25 @@ const [confirmPassword, setConfirmPassword] = useState('');
 const [showPassword, setShowPassword] = useState(false);
 const [error, setError] = useState(null);
 const [submitting, setSubmitting] = useState(false);
-useEffect(() => { if (initialError) setError(initialError); }, [initialError]);
+const [googleSubmitting, setGoogleSubmitting] = useState(false);
+useEffect(() => { if (initialError) { setError(initialError); setGoogleSubmitting(false); } }, [initialError]);
 
 const switchMode = (next) => {
 setMode(next); setError(null); setPassword(''); setConfirmPassword(''); setShowPassword(false);
+};
+
+const handleGoogleClick = async () => {
+if (submitting || googleSubmitting) return;
+setError(null);
+setGoogleSubmitting(true);
+haptic(10);
+try {
+await signInWithGoogle(); // navigates away — nothing after this runs on success
+} catch (err) {
+console.error('Google sign-in failed:', err);
+setError(friendlyAuthError(err));
+setGoogleSubmitting(false);
+}
 };
 
 const handleSubmit = async (e) => {
@@ -1676,6 +1735,20 @@ return (
 ? 'Your progress syncs to this account on any device.'
 : 'Log in to pick up where you left off.'}
 </p>
+
+<button type="button" onClick={handleGoogleClick} disabled={submitting || googleSubmitting}
+style={{ width: '100%', marginTop: 18, padding: '12px', borderRadius: 14, fontSize: 14, fontWeight: 600, color: c.label, background: c.bgSecondary, border: `1px solid ${c.separator}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, opacity: googleSubmitting ? 0.7 : 1 }}>
+{googleSubmitting
+? <span style={{ width: 16, height: 16, border: `2px solid ${c.fill}`, borderTopColor: c.label, borderRadius: '50%' }} className="animate-spin" />
+: <GoogleIcon size={17} />}
+{googleSubmitting ? 'Connecting…' : 'Continue with Google'}
+</button>
+
+<div className="flex items-center gap-3" style={{ margin: '16px 0' }}>
+<div style={{ flex: 1, height: 1, background: c.separator }} />
+<span style={{ fontSize: 11, fontWeight: 500, color: c.labelTertiary, textTransform: 'uppercase', letterSpacing: 0.4 }}>or</span>
+<div style={{ flex: 1, height: 1, background: c.separator }} />
+</div>
 
 <form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
 <div style={{ position: 'relative' }}>
@@ -2096,7 +2169,7 @@ onChange={e => { const f = e.target.files?.[0]; if (f) onPhotoFile(f); e.target.
 <CircleUserRound size={15} strokeWidth={1.9} />
 </div>
 <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Signed in with</span>
-<span style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>Username & password</span>
+<span style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>{authProviderLabel === 'google' ? 'Google' : 'Username & password'}</span>
 </div>
 <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
 
@@ -2626,6 +2699,12 @@ const [uploadedProof, setUploadedProof] = useState(null);
 
 const [secondsLeft, setSecondsLeft] = useState(quest.duration ? (quest.progress ?? quest.duration) : 0);
 const [timerRunning, setTimerRunning] = useState(false);
+const timerLastTickRef = useRef(null);
+const timerAutoPausedRef = useRef(false);
+const lastPoseSeenRef = useRef(0);
+const lastPoseCenterRef = useRef(null);
+const poseMotionRef = useRef(0);
+const poseActiveRef = useRef(false);
 
 const labels = QUEST_LABELS[quest.id];
 const questType = labels?.type || 'action';
@@ -2645,27 +2724,56 @@ if (questType === 'map') { instructionText = "Upload a metric summary screenshot
 else if (questType === 'food') { instructionText = "Take a clear picture of the food on your plate."; uiSubtext = "Must be a real photo of a prepared meal or plate."; }
 else if (questType === 'reps') { instructionText = `Position the camera for full-body tracking: ${quest.reps} reps.`; uiSubtext = "Keep your entire working frame visible to log movements."; }
 
+// Duration timers use a single timestamp-driven loop. It avoids interval drift and
+// does not recreate the animation loop every time the displayed seconds change.
 useEffect(() => {
-let intervalId = null;
-if (timerRunning && secondsLeft > 0) {
-intervalId = setInterval(() => {
-setSecondsLeft(prev => {
-if (prev <= 1) {
-setTimerRunning(false);
-if (!quest.reps && questType === 'action') {
-setConfirmed(true);
-confirmedRef.current = true;
-}
-return 0;
-}
-return prev - 1;
-});
-}, 1000);
-}
-return () => clearInterval(intervalId);
-}, [timerRunning, secondsLeft, questType, quest.reps]);
+if (!quest.duration || !timerRunning) return undefined;
+let raf = 0;
+let last = performance.now();
+let accumulated = 0;
 
-const formatTimerString = (secs) => `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
+const tick = (now) => {
+  const delta = Math.max(0, Math.min(0.5, (now - last) / 1000));
+  last = now;
+  accumulated += delta;
+
+  // Update the React display at 4 FPS; the actual elapsed time remains precise.
+  if (accumulated >= 0.25) {
+    const elapsed = accumulated;
+    accumulated = 0;
+    setSecondsLeft(prev => {
+      const next = Math.max(0, prev - elapsed);
+      if (next <= 0.001) {
+        setTimerRunning(false);
+        timerLastTickRef.current = null;
+        if (!quest.reps && questType === 'action') {
+          setConfirmed(true);
+          confirmedRef.current = true;
+        }
+        return 0;
+      }
+      return next;
+    });
+  }
+
+  raf = requestAnimationFrame(tick);
+};
+
+raf = requestAnimationFrame(tick);
+return () => cancelAnimationFrame(raf);
+}, [timerRunning, quest.duration, quest.reps, questType]);
+
+// Duration quests begin automatically once the camera is live.
+useEffect(() => {
+if (!quest.duration || quest.reps || phase !== 'live' || confirmed || secondsLeft <= 0) return undefined;
+if (!timerRunning && !timerAutoPausedRef.current) setTimerRunning(true);
+return undefined;
+}, [quest.duration, quest.reps, phase, confirmed, secondsLeft, timerRunning]);
+
+const formatTimerString = (secs) => {
+const safe = Math.max(0, Math.ceil(secs));
+return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`;
+};
 
 const stopCamera = useCallback(() => {
 const stream = streamRef.current;
@@ -2933,19 +3041,43 @@ const landmarker = await getPoseLandmarker();
 if (cancelled) return;
 setPoseReady(true);
 
-const loop = () => {
+const POSE_INTERVAL_MS = 33; // Cap expensive pose inference at ~30 FPS while keeping the canvas responsive.
+let lastPoseDetectAt = 0;
+let lastDrawAt = 0;
+let lastDisplayedPhase = '';
+let lastDisplayedCue = '';
+
+const loop = (rafNow = performance.now()) => {
 if (cancelled) return;
 const video = videoRef.current;
 const canvas = skeletonCanvasRef.current;
 
-if (video && canvas && video.readyState >= 2 && video.currentTime !== poseLastVideoTimeRef.current) {
+if (video && canvas && video.readyState >= 2 && video.currentTime !== poseLastVideoTimeRef.current && rafNow - lastPoseDetectAt >= POSE_INTERVAL_MS) {
 poseLastVideoTimeRef.current = video.currentTime;
-const now = performance.now();
+lastPoseDetectAt = rafNow;
+const now = rafNow;
 
 try {
 const result = landmarker.detectForVideo(video, now);
 const rawLandmarks = result?.landmarks?.[0] ?? null;
 const landmarks = smoothLandmarks(rawLandmarks);
+
+// Keep a tiny, cheap pose-activity signal for automatic duration-timer pausing.
+// It does not affect rep counting; it only prevents the clock from running when
+// the user has actually left the frame.
+if (landmarks) {
+  const visible = landmarks.filter(p => (p.visibility ?? 1) > MIN_VIS);
+  if (visible.length >= 5) {
+    const cx = visible.reduce((a, p) => a + p.x, 0) / visible.length;
+    const cy = visible.reduce((a, p) => a + p.y, 0) / visible.length;
+    const prev = lastPoseCenterRef.current;
+    const movement = prev ? Math.hypot(cx - prev.x, cy - prev.y) : 0;
+    poseMotionRef.current = poseMotionRef.current * 0.75 + movement * 0.25;
+    lastPoseCenterRef.current = { x: cx, y: cy };
+    lastPoseSeenRef.current = now;
+    poseActiveRef.current = true;
+  }
+}
 
 if (rawLandmarks) {
   poseStableFramesRef.current = Math.min(30, poseStableFramesRef.current + 1);
@@ -2953,10 +3085,28 @@ if (rawLandmarks) {
   poseStableFramesRef.current = Math.max(0, poseStableFramesRef.current - 1);
 }
 
+if (quest.duration && !quest.reps && secondsLeft > 0 && !confirmedRef.current) {
+  const poseMissingFor = performance.now() - lastPoseSeenRef.current;
+  const shouldPause = lastPoseSeenRef.current > 0 && poseMissingFor > 900;
+  if (shouldPause && timerRunning) {
+    timerAutoPausedRef.current = true;
+    setTimerRunning(false);
+  } else if (!shouldPause && timerAutoPausedRef.current && poseStableFramesRef.current >= 3) {
+    timerAutoPausedRef.current = false;
+    setTimerRunning(true);
+  }
+}
+
 if (landmarks && quest.reps) {
 const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, now);
-setRepPhase(update.phase);
-setRepCue(update.cue);
+if (update.phase !== lastDisplayedPhase) {
+  lastDisplayedPhase = update.phase;
+  setRepPhase(update.phase);
+}
+if (update.cue !== lastDisplayedCue) {
+  lastDisplayedCue = update.cue;
+  setRepCue(update.cue);
+}
 
 if (update.counted) {
 setRepsDone(update.reps);
@@ -2979,8 +3129,9 @@ haptic(10);
 setRepCue('Step back so your full body is visible');
 }
 
-if (canvas && video) {
-const ctx = canvas.getContext('2d');
+if (canvas && video && (now - lastDrawAt >= 16)) {
+lastDrawAt = now;
+const ctx = canvas.getContext('2d', { alpha: true });
 if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
 canvas.width = canvas.clientWidth || 300;
 canvas.height = canvas.clientHeight || 300;
@@ -3196,6 +3347,10 @@ isScanningRef.current = false;
 verifyingRef.current = false;
 confirmedRef.current = false;
 setTimerRunning(false);
+timerAutoPausedRef.current = false;
+lastPoseSeenRef.current = 0;
+lastPoseCenterRef.current = null;
+poseMotionRef.current = 0;
 setScanning(false);
 setUploading(false);
 setVerifying(false);
@@ -3368,7 +3523,7 @@ Tracking
 <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary }}>Duration</span>
 <p className="sq-mono" style={{ fontSize: 20, fontWeight: 700, color: c.label, marginTop: 2 }}>{formatTimerString(secondsLeft)}</p>
 </div>
-<button onClick={() => setTimerRunning(!timerRunning)} disabled={secondsLeft === 0}
+<button onClick={() => { timerAutoPausedRef.current = false; setTimerRunning(v => !v); }} disabled={secondsLeft === 0}
 style={{ padding: '10px 20px', borderRadius: 12, fontSize: 13, fontWeight: 600, color: '#fff', background: secondsLeft === 0 ? c.gray : timerRunning ? c.red : c.green, opacity: secondsLeft === 0 ? 0.5 : 1 }}>
 {secondsLeft === 0 ? 'Done' : timerRunning ? 'Pause' : 'Start'}
 </button>
@@ -3410,32 +3565,8 @@ Upload a photo
 );
 }
 
-class QuestDailyErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { error: null };
-  }
-  static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(error, info) { console.error('QuestDaily render crash:', error, info); }
-  render() {
-    if (this.state.error) {
-      return (
-        <div style={{ minHeight: '100vh', width: '100vw', background: '#000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, boxSizing: 'border-box', fontFamily: '-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif' }}>
-          <div style={{ width: '100%', maxWidth: 520 }}>
-            <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>QuestDaily hit an error</div>
-            <div style={{ fontSize: 14, lineHeight: 1.5, opacity: .75, marginBottom: 16 }}>The app crashed while starting instead of hiding the error behind a white screen.</div>
-            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 11, lineHeight: 1.45, padding: 14, borderRadius: 14, background: '#1c1c1e', color: '#ff9f0a' }}>{String(this.state.error?.stack || this.state.error?.message || this.state.error)}</pre>
-            <button onClick={() => window.location.reload()} style={{ marginTop: 14, width: '100%', padding: 13, border: 0, borderRadius: 999, background: '#0a84ff', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Reload QuestDaily</button>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
 // main app
-function QuestDailyAppInner() {
+export default function QuestDailyApp() {
 const [isMounted, setIsMounted] = useState(false);
 const { user: authUser, loading: authLoading, authError } = useAuthUser();
 const uid = authUser?.uid ?? null;
@@ -3481,11 +3612,10 @@ const hapticsInitial = savedHaptics === null ? true : savedHaptics === 'true';
 setHapticsOnState(hapticsInitial);
 setHapticsPref(hapticsInitial);
 setDailyReminderOn(localStorage.getItem('sq_daily_reminder') === 'true' && notificationsSupported && Notification.permission === 'granted');
-try { setProofImages(JSON.parse(localStorage.getItem('sq_proofs') || '{}') || {}); } catch { setProofImages({}); }
-try { setHistory(JSON.parse(localStorage.getItem('sq_history') || '[]') || []); } catch { setHistory([]); }
+setProofImages(JSON.parse(localStorage.getItem('sq_proofs')) || {});
+setHistory(JSON.parse(localStorage.getItem('sq_history')) || []);
 
-let savedQuests = [];
-try { savedQuests = JSON.parse(localStorage.getItem('sq_quests') || '[]') || []; } catch { savedQuests = []; }
+const savedQuests = JSON.parse(localStorage.getItem('sq_quests')) || [];
 const anyDone = savedQuests.some(q => q.completed);
 const lastResetTs = parseInt(localStorage.getItem('sq_lastReset')) || 0;
 const expired = Date.now() - lastResetTs >= ONE_DAY_MS;
@@ -3519,7 +3649,20 @@ localStorage.setItem('sq_lastReset', String(now));
 // showing a full-screen loading state. If every source were empty and
 // this left username null, that loading screen would never go away.
 const hydrateAccount = useCallback(async (uidToLoad, fallbackEmail, currentUser) => {
-let profileDoc = await getDoc(doc(db, USERS_COLLECTION, uidToLoad)).catch(() => null);
+let profileDoc = await getDoc(doc(db, 'users', uidToLoad)).catch(() => null);
+
+// First time this Google account has ever signed in. With popup-based
+// sign-in this used to happen right after signInWithPopup resolved;
+// redirect-based sign-in reloads the page instead, so it's caught here —
+// the first time we see this uid with no profile doc yet.
+if (!profileDoc?.exists?.() && currentUser && getAuthProviderLabel(currentUser) === 'google') {
+try {
+await mintUsernameForGoogleUser(currentUser);
+profileDoc = await getDoc(doc(db, 'users', uidToLoad)).catch(() => null);
+} catch (err) {
+console.error('Failed to set up new Google account:', err);
+}
+}
 
 const [profile, remoteHistory] = await Promise.all([
 fetchRemoteProfile(uidToLoad),
@@ -3650,10 +3793,7 @@ return { ok: false, error: friendlyAuthError(err) };
 const retryLeaderboardSync = () => {
 if (uid && username) {
 syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned, streak })
-.then(res => {
-  const denied = !res.ok && /permission-denied|insufficient permissions|Missing or insufficient permissions/i.test(res.error || '');
-  setLeaderboardSyncError(denied ? null : (res.ok ? null : res.error));
-});
+.then(res => setLeaderboardSyncError(res.ok ? null : res.error));
 }
 };
 
@@ -3738,10 +3878,7 @@ const authProviderLabel = getAuthProviderLabel(authUser);
 useEffect(() => {
 if (uid && username) {
 syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned, streak })
-.then(res => {
-  const denied = !res.ok && /permission-denied|insufficient permissions|Missing or insufficient permissions/i.test(res.error || '');
-  setLeaderboardSyncError(denied ? null : (res.ok ? null : res.error));
-});
+.then(res => setLeaderboardSyncError(res.ok ? null : res.error));
 }
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [uid, username]);
@@ -3863,10 +4000,7 @@ localStorage.setItem('sq_streak_date', todayStr);
 }
 
 syncLeaderboardEntry(uid, { username, level: newLevel, xp: newXp, totalXpEarned: newTotal, streak: newStreak })
-.then(res => {
-  const denied = !res.ok && /permission-denied|insufficient permissions|Missing or insufficient permissions/i.test(res.error || '');
-  setLeaderboardSyncError(denied ? null : (res.ok ? null : res.error));
-});
+.then(res => setLeaderboardSyncError(res.ok ? null : res.error));
 
 setProofModalId(null);
 setDetailQuestId(null);
@@ -3880,21 +4014,9 @@ setQuests(prev => prev.map(q => q.id === proofModalId ? { ...q, progress } : q))
 setProofModalId(null);
 };
 
+if (!isMounted || authLoading) return null;
+
 const c = dark ? C.dark : C.light;
-
-// Never render a completely blank page while React/Firebase initializes.
-// The previous version returned null here, which made every startup problem
-// look like a white-screen crash.
-if (!isMounted || authLoading) {
-  return (
-    <div style={{ minHeight: '100vh', width: '100vw', background: c.bg, color: c.label, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 14, fontFamily: '-apple-system, BlinkMacSystemFont, \"SF Pro Text\", Arial, sans-serif' }}>
-      <div style={{ width: 34, height: 34, border: `3px solid ${c.fill}`, borderTopColor: c.blue, borderRadius: '50%', animation: 'sq-spin 0.8s linear infinite' }} />
-      <div style={{ fontSize: 14, fontWeight: 600, opacity: 0.72 }}>Starting QuestDaily…</div>
-      <style>{`@keyframes sq-spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
-  );
-}
-
 const xpPct = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
 const allDone = quests.length > 0 && quests.every(q => q.completed);
 
@@ -4080,12 +4202,4 @@ Checked on your device — nothing you record ever leaves your phone.
 </div>
 </div>
 );
-}
-
-export default function QuestDailyApp() {
-  return (
-    <QuestDailyErrorBoundary>
-      <QuestDailyAppInner />
-    </QuestDailyErrorBoundary>
-  );
 }
