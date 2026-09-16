@@ -127,6 +127,9 @@ function friendlyAuthError(err) {
   if (code === 'auth/user-not-found') return 'No account found with that email.';
   if (code === 'auth/too-many-requests') return 'Too many attempts — try again in a bit.';
   if (code === 'auth/network-request-failed') return "Can't reach the server. Check your connection.";
+  if (code === 'auth/operation-not-allowed') return 'Email/password sign-up is disabled in Firebase. Enable Email/Password under Firebase Authentication > Sign-in method.';
+  if (code === 'auth/admin-restricted-operation') return 'Account creation is currently disabled for this Firebase project.';
+  if (code === 'auth/invalid-api-key') return 'Firebase configuration is invalid. Check the Firebase API key and project settings.';
   if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
   if (code === 'auth/invalid-email') return 'Enter a valid email address.';
   if (code === 'permission-denied' || code === 'firestore/permission-denied') {
@@ -139,6 +142,10 @@ async function signUpAccount(emailRaw, password) {
   const email = emailRaw.trim().toLowerCase();
   const cred = await createUserWithEmailAndPassword(auth, email, password);
   const displayName = email.split('@')[0] || 'You';
+
+  // Creating the Firebase Auth user is the important part. Do not make
+  // account creation fail just because Firestore rules temporarily reject
+  // the profile write. The auth state listener will still sign the user in.
   try {
     await setDoc(doc(db, 'users', cred.user.uid), {
       username: displayName,
@@ -146,9 +153,9 @@ async function signUpAccount(emailRaw, password) {
       createdAt: Date.now(),
     }, { merge: true });
   } catch (err) {
-    console.error('Failed to finish account setup:', err);
-    throw err;
+    console.warn('Account created, but profile setup was blocked:', err);
   }
+
   return { uid: cred.user.uid, username: displayName, email };
 }
 
@@ -1197,10 +1204,14 @@ function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
 
-  useEffect(() => { if (initialError) setError(initialError); }, [initialError]);
+  useEffect(() => {
+    if (initialError) setError(initialError);
+  }, [initialError]);
 
   const switchMode = (next) => {
+    if (submitting) return;
     setMode(next);
     setError(null);
     setPassword('');
@@ -1209,40 +1220,62 @@ function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
   };
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (submitting) return;
+    if (e?.preventDefault) e.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError(null);
 
     const emailError = validateEmail(email);
-    if (emailError) { setError(emailError); return; }
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
 
-    if (mode === 'signup') {
-      const passwordError = validatePassword(password);
-      if (passwordError) { setError(passwordError); return; }
-      if (password !== confirmPassword) { setError("Passwords don't match."); return; }
-    } else if (!password) {
-      setError('Enter your password.');
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      setError(passwordError);
+      return;
+    }
+
+    if (mode === 'signup' && password !== confirmPassword) {
+      setError("Passwords don't match.");
       return;
     }
 
     setSubmitting(true);
     haptic(10);
+
     try {
       if (mode === 'signup') {
-        const { username: finalUsername } = await signUpAccount(email, password);
-        onSignedUp(finalUsername);
+        const result = await signUpAccount(email, password);
+        setSubmitting(false);
+        submittingRef.current = false;
+        onSignedUp(result.username);
       } else {
-        const { username: finalUsername } = await logInAccount(email, password);
-        onLoggedIn(finalUsername);
+        const result = await logInAccount(email, password);
+        setSubmitting(false);
+        submittingRef.current = false;
+        onLoggedIn(result.username);
       }
     } catch (err) {
       console.error(`${mode} failed:`, err);
       setError(friendlyAuthError(err));
       setSubmitting(false);
+      submittingRef.current = false;
     }
   };
 
-  const inputStyle = { width: '100%', borderRadius: 14, border: `1px solid ${c.separator}`, background: c.bgSecondary, color: c.label, padding: '11px 40px 11px 40px', fontSize: 15, fontWeight: 500, outline: 'none' };
+  const inputStyle = {
+    width: '100%',
+    borderRadius: 14,
+    border: `1px solid ${c.separator}`,
+    background: c.bgSecondary,
+    color: c.label,
+    padding: '11px 40px 11px 40px',
+    fontSize: 15,
+    fontWeight: 500,
+    outline: 'none',
+  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-5 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
@@ -1250,27 +1283,29 @@ function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
         <div style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
           <BrandLogo size={28} />
         </div>
+
         <h2 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label }}>
           {mode === 'signup' ? 'Create your account' : 'Welcome back'}
         </h2>
         <p style={{ fontSize: 13, lineHeight: 1.4, color: c.labelSecondary, marginTop: 6 }}>
-          {mode === 'signup' ? 'Your progress syncs to this account on any device.' : 'Log in to pick up where you left off.'}
+          {mode === 'signup' ? 'Create an account with your email to save your progress.' : 'Log in to pick up where you left off.'}
         </p>
 
-        <form onSubmit={handleSubmit} style={{ textAlign: 'left', marginTop: 18 }}>
+        <form onSubmit={handleSubmit} noValidate style={{ textAlign: 'left', marginTop: 18 }}>
           <div style={{ position: 'relative' }}>
             <AtSign size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
             <input
               type="email"
               value={email}
               autoFocus
-              autoComplete={mode === 'signup' ? 'email' : 'username'}
               autoCapitalize="none"
               autoCorrect="off"
+              autoComplete={mode === 'signup' ? 'email' : 'username'}
               inputMode="email"
               onChange={e => { setEmail(e.target.value); setError(null); }}
               placeholder="Email address"
               style={{ ...inputStyle, paddingRight: 14 }}
+              disabled={submitting}
             />
           </div>
 
@@ -1283,8 +1318,10 @@ function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
               onChange={e => { setPassword(e.target.value); setError(null); }}
               placeholder="Password"
               style={inputStyle}
+              disabled={submitting}
             />
-            <button type="button" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: c.labelTertiary, padding: 4 }}>
+            <button type="button" onClick={() => setShowPassword(s => !s)} aria-label={showPassword ? 'Hide password' : 'Show password'} disabled={submitting}
+              style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: c.labelTertiary, padding: 4 }}>
               {showPassword ? <EyeOff size={16} strokeWidth={2} /> : <Eye size={16} strokeWidth={2} />}
             </button>
           </div>
@@ -1299,19 +1336,26 @@ function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
                 onChange={e => { setConfirmPassword(e.target.value); setError(null); }}
                 placeholder="Confirm password"
                 style={{ ...inputStyle, paddingRight: 14 }}
+                disabled={submitting}
               />
             </div>
           )}
 
-          {error && <p style={{ color: c.red, fontSize: 12, fontWeight: 500, marginTop: 10 }}>{error}</p>}
+          {error && <p role="alert" style={{ color: c.red, fontSize: 12, fontWeight: 500, marginTop: 10 }}>{error}</p>}
 
-          <button type="submit" disabled={submitting} style={{ width: '100%', marginTop: 14, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: '#FFFFFF', background: c.blue, opacity: submitting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <button
+            type="submit"
+            onClick={handleSubmit}
+            disabled={submitting}
+            style={{ width: '100%', marginTop: 14, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: '#FFFFFF', background: c.blue, opacity: submitting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: submitting ? 'wait' : 'pointer' }}
+          >
             {submitting && <span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,0.35)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
             {submitting ? (mode === 'signup' ? 'Creating account…' : 'Logging in…') : (mode === 'signup' ? 'Create account' : 'Log in')}
           </button>
         </form>
 
-        <button onClick={() => switchMode(mode === 'signup' ? 'login' : 'signup')} disabled={submitting} style={{ marginTop: 16, fontSize: 13, fontWeight: 500, color: c.blue }}>
+        <button type="button" onClick={() => switchMode(mode === 'signup' ? 'login' : 'signup')} disabled={submitting}
+          style={{ marginTop: 16, fontSize: 13, fontWeight: 500, color: c.blue }}>
           {mode === 'signup' ? 'Already have an account? Log in' : 'New here? Create an account'}
         </button>
       </div>
