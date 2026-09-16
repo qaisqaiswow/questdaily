@@ -1619,6 +1619,94 @@ Get started
 
 // rest of the app until resolved, same as the old name-picker did, but now
 // backs onto real Firebase Auth accounts instead of a purely local name.
+function DeviceInstallPrompt({ onDismiss, c }) {
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [installing, setInstalling] = useState(false);
+  const [installed, setInstalled] = useState(false);
+
+  useEffect(() => {
+    const handleBeforeInstall = (event) => {
+      event.preventDefault();
+      setDeferredPrompt(event);
+    };
+    const handleInstalled = () => {
+      setInstalled(true);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    window.addEventListener('appinstalled', handleInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+      window.removeEventListener('appinstalled', handleInstalled);
+    };
+  }, []);
+
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent || '');
+  const isStandalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+  useEffect(() => {
+    if (isStandalone) setInstalled(true);
+  }, [isStandalone]);
+
+  const handleInstall = async () => {
+    if (!deferredPrompt) return;
+    setInstalling(true);
+    try {
+      await deferredPrompt.prompt();
+      await deferredPrompt.userChoice;
+    } catch (err) {
+      console.warn('Install prompt failed:', err);
+    } finally {
+      setDeferredPrompt(null);
+      setInstalling(false);
+      onDismiss();
+    }
+  };
+
+  if (installed) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(8px)' }}>
+        <div style={{ ...glassStyle(c), width: '100%', maxWidth: 380, borderRadius: 24, padding: 22, textAlign: 'center' }}>
+          <div style={{ fontSize: 34, marginBottom: 8 }}>✓</div>
+          <p style={{ fontSize: 18, fontWeight: 800, color: c.label }}>QuestDaily is installed</p>
+          <button type="button" onClick={onDismiss} style={{ marginTop: 16, width: '100%', border: 0, borderRadius: 14, padding: 13, background: c.blue, color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Continue</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'rgba(0,0,0,0.35)', backdropFilter: 'blur(8px)' }}>
+      <div style={{ ...glassStyle(c), width: '100%', maxWidth: 380, borderRadius: 24, padding: 22 }}>
+        <div style={{ width: 52, height: 52, borderRadius: 16, background: c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, marginBottom: 14 }}>＋</div>
+        <p style={{ fontSize: 19, fontWeight: 800, color: c.label }}>Install QuestDaily</p>
+        <p style={{ marginTop: 6, fontSize: 13, lineHeight: 1.5, color: c.labelSecondary }}>
+          Add QuestDaily to your home screen for a faster, app-like experience.
+        </p>
+
+        {deferredPrompt ? (
+          <button type="button" onClick={handleInstall} disabled={installing} style={{ marginTop: 18, width: '100%', border: 0, borderRadius: 14, padding: 13, background: c.blue, color: '#fff', fontWeight: 700, cursor: installing ? 'default' : 'pointer', opacity: installing ? 0.7 : 1 }}>
+            {installing ? 'Installing…' : 'Install app'}
+          </button>
+        ) : isIOS ? (
+          <div style={{ marginTop: 16, borderRadius: 14, padding: 12, background: c.fill, color: c.labelSecondary, fontSize: 12, lineHeight: 1.5 }}>
+            On iPhone or iPad, tap <strong style={{ color: c.label }}>Share</strong>, then choose <strong style={{ color: c.label }}>Add to Home Screen</strong>.
+          </div>
+        ) : (
+          <p style={{ marginTop: 16, fontSize: 12, lineHeight: 1.5, color: c.labelTertiary }}>
+            If your browser supports installation, the install option will appear when it is available.
+          </p>
+        )}
+
+        <button type="button" onClick={onDismiss} style={{ marginTop: 12, width: '100%', border: `1px solid ${c.glassBorder}`, borderRadius: 14, padding: 12, background: 'transparent', color: c.labelSecondary, fontWeight: 600, cursor: 'pointer' }}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
 const [mode, setMode] = useState('signup'); // 'signup' | 'login'
 const [username, setUsername] = useState('');
