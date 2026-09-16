@@ -14,7 +14,7 @@ updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 import {
 Sun, Moon, CheckSquare, History as HistoryIcon, Settings as SettingsIcon,
-Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Timer, ChevronsUp,
+Activity, Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Timer, ChevronsUp,
 Droplet, Leaf, Utensils, CookingPot, Flower2, Move, Zap, Flame,
 Pencil, Snowflake, Wind, Waves, Target, GlassWater, CupSoda,
 LogOut, Eye, EyeOff, Lock, AtSign, Camera, Trash2, ShieldCheck, Sparkles, ListChecks,
