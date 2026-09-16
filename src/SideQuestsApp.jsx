@@ -6,14 +6,13 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as exifr from 'exifr';
 import { initializeApp, getApps } from 'firebase/app';
 import {
-getAuth, onAuthStateChanged, signOut, deleteUser,
-createUserWithEmailAndPassword, signInWithEmailAndPassword,
-updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
+getAuth, onAuthStateChanged, signOut, deleteUser, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 import {
 Sun, Moon, CheckSquare, History as HistoryIcon, Settings as SettingsIcon,
-Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Activity, Timer, ChevronsUp,
+Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Timer, ChevronsUp,
 Droplet, Leaf, Utensils, CookingPot, Flower2, Move, Zap, Flame,
 Pencil, Snowflake, Wind, Waves, Target, GlassWater, CupSoda,
 LogOut, Eye, EyeOff, Lock, AtSign, Camera, Trash2, ShieldCheck, Sparkles, ListChecks,
@@ -101,112 +100,100 @@ return [];
 
 // account system
 // -----------------------------------------------------------------------
-// QuestDaily uses real email + password authentication. The app still keeps
-// a small display username internally for avatars/leaderboards, but users
-// never need to enter a username to create or access their account.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function displayNameFromEmail(email) {
-  const local = (email || '').split('@')[0] || 'Player';
-  const cleaned = local.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 20);
-  return cleaned.length >= 1 ? cleaned : 'Player';
-}
-
+// Firebase Auth doesn't have native "username + password" accounts — it
+// wants an email. So a username is mapped to a deterministic, fake-but-
+// validly-formatted email (`somebody` -> `somebody@questdaily-users.app`)
+// and Firebase Auth is used normally underneath. This means:
+// - usernames are case-insensitive (the email is always lowercased)
+// - there's no real inbox behind that address, so Firebase's built-in
+// "forgot password" email reset can't work here — if that's needed
+// later it requires collecting a real email address at signup instead
+// A `usernames/{usernameLower}` doc is the source of truth for "is this
+// username taken" and for looking up the display-cased username on login;
+// the account's own profile lives in `users/{uid}`.
 function validateEmail(raw) {
-  const email = raw.trim().toLowerCase();
+  const email = raw.trim();
   if (!email) return 'Enter your email address.';
-  if (!EMAIL_RE.test(email)) return 'Enter a valid email address.';
-  return null;
-}
-
-
-function validatePassword(password) {
-  if (!password) return 'Enter your password.';
-  if (password.length < 6) return 'Password must be at least 6 characters.';
-  return null;
-}
-
-function validateUsername(raw) {
-  const value = (raw || '').trim();
-  if (!value) return 'Enter a display name.';
-  if (!/^[a-zA-Z0-9_]{3,20}$/.test(value)) return 'Display name must be 3–20 letters, numbers, or underscores.';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Enter a valid email address.';
+  if (email.length > 320) return 'That email address is too long.';
   return null;
 }
 
 function friendlyAuthError(err) {
   const code = err?.code || '';
   if (code === 'auth/email-already-in-use') return 'That email is already registered. Try logging in instead.';
-  if (code === 'auth/invalid-email') return 'Enter a valid email address.';
   if (code === 'auth/weak-password') return 'Password must be at least 6 characters.';
-  if (code === 'auth/user-not-found') return 'No account was found with that email.';
   if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') return 'Incorrect email or password.';
-  if (code === 'auth/too-many-requests') return 'Too many attempts. Please wait a moment and try again.';
-  if (code === 'auth/network-request-failed') return 'Network error. Check your connection and try again.';
-  if (code === 'permission-denied' || code === 'firestore/permission-denied') return "Your database's security rules are blocking this request.";
+  if (code === 'auth/user-not-found') return 'No account found with that email.';
+  if (code === 'auth/too-many-requests') return 'Too many attempts — try again in a bit.';
+  if (code === 'auth/network-request-failed') return "Can't reach the server. Check your connection.";
+  if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
+  if (code === 'auth/invalid-email') return 'Enter a valid email address.';
+  if (code === 'permission-denied' || code === 'firestore/permission-denied') {
+    return "Your database's security rules are blocking this — check the Firestore rules for the users and leaderboard collections.";
+  }
   return err?.message ? `Something went wrong: ${err.message}` : 'Something went wrong. Please try again.';
 }
 
 async function signUpAccount(emailRaw, password) {
   const email = emailRaw.trim().toLowerCase();
   const cred = await createUserWithEmailAndPassword(auth, email, password);
-  const username = displayNameFromEmail(email);
+  const displayName = email.split('@')[0] || 'You';
   try {
     await setDoc(doc(db, 'users', cred.user.uid), {
-      username,
+      username: displayName,
       email,
       createdAt: Date.now(),
     }, { merge: true });
   } catch (err) {
-    console.error('Failed to save new account profile:', err);
+    console.error('Failed to finish account setup:', err);
+    throw err;
   }
-  return { uid: cred.user.uid, username, email };
+  return { uid: cred.user.uid, username: displayName, email };
 }
 
 async function logInAccount(emailRaw, password) {
   const email = emailRaw.trim().toLowerCase();
   const cred = await signInWithEmailAndPassword(auth, email, password);
-  let displayUsername = displayNameFromEmail(email);
+  const displayName = email.split('@')[0] || 'You';
   try {
     const snap = await getDoc(doc(db, 'users', cred.user.uid));
-    if (snap.exists() && snap.data()?.username) displayUsername = snap.data().username;
-  } catch { /* non-fatal */ }
-  return { uid: cred.user.uid, username: displayUsername, email };
+    return { uid: cred.user.uid, username: snap.exists() && snap.data()?.username ? snap.data().username : displayName, email: cred.user.email || email };
+  } catch {
+    return { uid: cred.user.uid, username: displayName, email: cred.user.email || email };
+  }
 }
 
 async function logOutAccount() {
   await signOut(auth);
 }
 
-function getAuthProviderLabel(user) {
-  if (!user) return null;
-  return (user.providerData || []).some(p => p.providerId === 'password') ? 'password' : 'other';
-}
-
 // editing an existing account
 // -----------------------------------------------------------------------
+function getAuthProviderLabel(user) {
+if (!user) return null;
+const ids = (user.providerData || []).map(p => p.providerId);
+if (ids.includes('google.com')) return 'google';
+if (ids.includes('password')) return 'password';
+return 'other';
+}
+
 // Renames the account's username. For password accounts this is more than
 // a display change: login derives the (fake) Auth email straight from the
 // username, so the underlying Firebase Auth email has to move in lockstep
 // or the person would be locked out under their new name. That rename can
 // require a recent login — if so, this reauthenticates with the password
-async function updateUsername({ newUsernameRaw, oldUsername }) {
-const currentUser = auth.currentUser;
-if (!currentUser) throw Object.assign(new Error('You need to be signed in to do that.'), { code: 'auth/no-current-user' });
-const newUsername = newUsernameRaw.trim();
-const validationError = validateUsername(newUsername);
-if (validationError) throw new Error(validationError);
-if (newUsername.toLowerCase() === (oldUsername || '').toLowerCase()) {
-  await Promise.all([
-    setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
-    setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
-  ]);
+// the caller supplied and retries once. Google accounts skip all of that;
+// their real Google email never changes, so renaming is purely a Firestore
+// metadata update.
+async function updateUsername({ newUsernameRaw }) {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw Object.assign(new Error('You need to be signed in to do that.'), { code: 'auth/no-current-user' });
+  const newUsername = newUsernameRaw.trim();
+  if (!/^[a-zA-Z0-9_]{3,20}$/.test(newUsername)) throw new Error('Display name must be 3-20 letters, numbers, or underscores.');
+  await setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true });
+  await setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true });
   return newUsername;
-}
-await Promise.all([
-  setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
-  setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
-]);
-return newUsername;
 }
 
 // Password-account only. Requires the current password to reauthenticate
@@ -265,7 +252,7 @@ setDoc(doc(db, 'leaderboard', uid), { photoURL: dataUrl }, { merge: true }),
 // since Firestore has no client-side "delete a collection" call), the
 // profile doc, the leaderboard entry, and the username reservation so the
 // name becomes available again.
-async function deleteAccountData(uid, usernameLower) {
+async function deleteAccountData(uid) {
 let historyDocs = [];
 try {
 const historySnap = await getDocs(collection(db, 'users', uid, 'history'));
@@ -278,7 +265,6 @@ await Promise.all(historyDocs.map(d => deleteDoc(d.ref).catch(() => {})));
 const results = await Promise.allSettled([
 deleteDoc(doc(db, 'users', uid)),
 deleteDoc(doc(db, 'leaderboard', uid)),
-Promise.resolve(),
 ]);
 const failure = results.find(r => r.status === 'rejected');
 if (failure) {
@@ -294,22 +280,22 @@ throw failure.reason;
 // nobody's signed in) — the account system's version of the old anonymous
 // uid hook.
 function useAuthUser() {
-const [user, setUser] = useState(null);
-const [loading, setLoading] = useState(true);
-const [authError, setAuthError] = useState(null);
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
 
-useEffect(() => {
-let mounted = true;
-const unsub = onAuthStateChanged(auth, u => {
-  if (!mounted) return;
-  setUser(u);
-  setLoading(false);
-  if (u) setAuthError(null);
-});
-return () => { mounted = false; unsub(); };
-}, []);
+  useEffect(() => {
+    let mounted = true;
+    const unsub = onAuthStateChanged(auth, u => {
+      if (!mounted) return;
+      setUser(u);
+      setAuthError(null);
+      setLoading(false);
+    });
+    return () => { mounted = false; unsub(); };
+  }, []);
 
-return { user, loading, authError };
+  return { user, loading, authError };
 }
 
 // live top-100, onSnapshot keeps it updated in realtime so no polling needed
@@ -480,347 +466,64 @@ return null;
 }
 
 const REP_METRICS = {
-q1: (lms) => {
-  const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]);
-  return p ? angleBetween(p[0], p[1], p[2]) : null;
-},
-q2: (lms) => {
-  const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]);
-  return p ? angleBetween(p[0], p[1], p[2]) : null;
-},
-q4: (lms) => {
-  const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]);
-  return p ? angleBetween(p[0], p[1], p[2]) : null;
-},
-q12: (lms) => {
-  const p = pickSide(lms, [LM.L_SHOULDER, LM.L_HIP, LM.L_KNEE], [LM.R_SHOULDER, LM.R_HIP, LM.R_KNEE]);
-  return p ? angleBetween(p[0], p[1], p[2]) : null;
-},
-q17: (lms) => {
-  const ankles = [lms[LM.L_ANKLE], lms[LM.R_ANKLE]].filter(p => visiblePt(p));
-  if (!ankles.length) return null;
-  return ankles.reduce((sum, p) => sum + p.y, 0) / ankles.length;
-},
-q23: (lms) => {
-  const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]);
-  return p ? angleBetween(p[0], p[1], p[2]) : null;
-},
+q1: (lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+q2: (lms) => { const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+q4: (lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+q12:(lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_HIP, LM.L_KNEE], [LM.R_SHOULDER, LM.R_HIP, LM.R_KNEE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+q17:(lms) => { const hips = [lms[LM.L_HIP], lms[LM.R_HIP]].filter(p => visiblePt(p)); if (!hips.length) return null; return hips.reduce((s, p) => s + p.y, 0) / hips.length; },
+q23:(lms) => { const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
 };
 
 const REP_CONFIG = {
 q1: { mode: 'angle', downThreshold: 100, upThreshold: 155, cueDown: 'Lower into the pushup', cueUp: 'Push back up to full extension' },
 q2: { mode: 'angle', downThreshold: 110, upThreshold: 160, cueDown: 'Squat down', cueUp: 'Stand back up' },
-q4: { mode: 'angle', downThreshold: 80, upThreshold: 150, cueDown: 'Pull your chin toward the bar', cueUp: 'Lower to a full hang' },
-q12: { mode: 'angle', downThreshold: 110, upThreshold: 150, cueDown: 'Sit up and bring your torso forward', cueUp: 'Lie completely back down' },
-q17: { mode: 'height', downThreshold: 0.025, upThreshold: 0.008, cueDown: 'Jump', cueUp: 'Land and jump again' },
+q4: { mode: 'angle', downThreshold: 80, upThreshold: 150, cueDown: 'Pull up to the bar', cueUp: 'Lower to a full hang' },
+q12: { mode: 'angle', downThreshold: 110, upThreshold: 150, cueDown: 'Crunch up', cueUp: 'Lower back down' },
+q17: { mode: 'height', downThreshold: 0.02, upThreshold: 0.005, cueDown: 'Jump!', cueUp: 'Land' },
 q23: { mode: 'angle', downThreshold: 110, upThreshold: 160, cueDown: 'Lower into the lunge', cueUp: 'Return to standing' },
 };
 
 const MIN_REP_MS = 500;
-const FORM_STABLE_FRAMES = 5;
 
 function createPoseRepState(initialReps = 0) {
-return {
-  phase: 'up',
-  reps: initialReps,
-  baselineY: null,
-  lastRepAt: 0,
-  smoothed: null,
-  validFrames: 0,
-  invalidFrames: 0,
-  movementStarted: false,
-};
-}
-
-function distance2D(a, b) {
-if (!a || !b) return null;
-return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-function getAveragePoint(lms, leftIndex, rightIndex) {
-const left = lms[leftIndex];
-const right = lms[rightIndex];
-if (visiblePt(left, 0.40) && visiblePt(right, 0.40)) {
-  return {
-    x: (left.x + right.x) / 2,
-    y: (left.y + right.y) / 2,
-    visibility: Math.min(left.visibility ?? 1, right.visibility ?? 1),
-  };
-}
-return visiblePt(left, 0.40) ? left : visiblePt(right, 0.40) ? right : null;
-}
-
-function getBestExerciseSide(lms) {
-const left = [lms[LM.L_SHOULDER], lms[LM.L_HIP], lms[LM.L_KNEE], lms[LM.L_ANKLE]];
-const right = [lms[LM.R_SHOULDER], lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]];
-const score = points => points.reduce((n, p) => n + (visiblePt(p, 0.40) ? 1 : 0), 0);
-return score(right) >= score(left) ? 'right' : 'left';
-}
-
-function getExerciseSidePoints(lms, side) {
-if (side === 'left') {
-  return {
-    shoulder: lms[LM.L_SHOULDER],
-    elbow: lms[LM.L_ELBOW],
-    wrist: lms[LM.L_WRIST],
-    hip: lms[LM.L_HIP],
-    knee: lms[LM.L_KNEE],
-    ankle: lms[LM.L_ANKLE],
-  };
-}
-return {
-  shoulder: lms[LM.R_SHOULDER],
-  elbow: lms[LM.R_ELBOW],
-  wrist: lms[LM.R_WRIST],
-  hip: lms[LM.R_HIP],
-  knee: lms[LM.R_KNEE],
-  ankle: lms[LM.R_ANKLE],
-};
-}
-
-function straightBodyAngle(shoulder, hip, ankle) {
-if (!shoulder || !hip || !ankle) return null;
-return angleBetween(shoulder, hip, ankle);
-}
-
-// This is deliberately separate from the rep angle. The rep angle answers
-// "did a joint move?" while this answers "does the whole body look like the
-// exercise?". A rep can only progress after both checks pass.
-function validateExerciseForm(questId, lms) {
-if (!lms) return { valid: false, cue: 'Move fully into frame' };
-
-const side = getBestExerciseSide(lms);
-const p = getExerciseSidePoints(lms, side);
-const shoulders = getAveragePoint(lms, LM.L_SHOULDER, LM.R_SHOULDER);
-const hips = getAveragePoint(lms, LM.L_HIP, LM.R_HIP);
-const knees = getAveragePoint(lms, LM.L_KNEE, LM.R_KNEE);
-const ankles = getAveragePoint(lms, LM.L_ANKLE, LM.R_ANKLE);
-
-// PUSHUPS: require a long, plank-like body instead of only an elbow bend.
-if (questId === 'q1') {
-  if (![p.shoulder, p.hip, p.knee, p.ankle, p.elbow, p.wrist].every(x => visiblePt(x, 0.40))) {
-    return { valid: false, cue: 'Keep your full body and arms visible' };
-  }
-
-  const bodyAngle = straightBodyAngle(p.shoulder, p.hip, p.ankle);
-  const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
-  const shoulderHip = distance2D(p.shoulder, p.hip);
-  const hipAnkle = distance2D(p.hip, p.ankle);
-
-  if (bodyAngle === null || bodyAngle < 145) {
-    return { valid: false, cue: 'Keep your body straight like a plank' };
-  }
-  if (kneeAngle !== null && kneeAngle < 145) {
-    return { valid: false, cue: 'Keep your legs extended' };
-  }
-  if ((shoulderHip ?? 0) < 0.10 || (hipAnkle ?? 0) < 0.20) {
-    return { valid: false, cue: 'Use a full pushup position' };
-  }
-  return { valid: true, cue: 'Good pushup form' };
-}
-
-// SQUATS: require both feet/legs and a real hip/knee bend. This rejects
-// seated arm movements because the torso/leg geometry must also match.
-if (questId === 'q2') {
-  if (![p.hip, p.knee, p.ankle, p.shoulder].every(x => visiblePt(x, 0.40))) {
-    return { valid: false, cue: 'Keep your legs and upper body visible' };
-  }
-
-  const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
-  const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
-
-  if (kneeAngle === null || torsoAngle === null) {
-    return { valid: false, cue: 'Show your whole squat' };
-  }
-  if (torsoAngle < 105) {
-    return { valid: false, cue: 'Keep your chest up' };
-  }
-  return { valid: true, cue: 'Good squat form' };
-}
-
-// PULLUPS: require a vertical hanging body and hands above the shoulders.
-// Sitting arm curls cannot satisfy this geometry.
-if (questId === 'q4') {
-  if (![p.shoulder, p.elbow, p.wrist, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.40))) {
-    return { valid: false, cue: 'Show your full body hanging from the bar' };
-  }
-
-  const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
-  const legAngle = angleBetween(p.hip, p.knee, p.ankle);
-  const wristShoulderDistance = Math.abs(p.wrist.y - p.shoulder.y);
-
-  if (torsoAngle === null || torsoAngle < 145) {
-    return { valid: false, cue: 'Hang vertically from the bar' };
-  }
-  if (legAngle !== null && legAngle < 125) {
-    return { valid: false, cue: 'Keep your legs mostly extended' };
-  }
-  if (p.wrist.y > p.shoulder.y + 0.12 || wristShoulderDistance < 0.05) {
-    return { valid: false, cue: 'Keep your hands above the bar area' };
-  }
-  return { valid: true, cue: 'Good pullup form' };
-}
-
-// SITUPS: require the hips and knees to stay anchored while the torso changes
-// angle. Arm-only movement while sitting/standing won't match this geometry.
-if (questId === 'q12') {
-  if (![p.shoulder, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.40))) {
-    return { valid: false, cue: 'Lie down with your full body visible' };
-  }
-
-  const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
-  const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
-
-  if (torsoAngle === null) return { valid: false, cue: 'Keep your torso visible' };
-  if (kneeAngle !== null && kneeAngle < 75) {
-    return { valid: false, cue: 'Keep your knees reasonably stable' };
-  }
-  if (torsoAngle < 45) {
-    return { valid: false, cue: 'Use a controlled situp, not a standing movement' };
-  }
-  return { valid: true, cue: 'Good situp position' };
-}
-
-// JUMP ROPE: track the ankles rather than just hip movement, and require the
-// person to remain upright with both feet close together.
-if (questId === 'q17') {
-  if (![shoulders, hips, knees, ankles].every(x => visiblePt(x, 0.40))) {
-    return { valid: false, cue: 'Keep your whole body and both feet visible' };
-  }
-
-  const torsoAngle = angleBetween(shoulders, hips, knees);
-  const kneeLeft = angleBetween(lms[LM.L_HIP], lms[LM.L_KNEE], lms[LM.L_ANKLE]);
-  const kneeRight = angleBetween(lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]);
-  const ankleGap = Math.abs(lms[LM.L_ANKLE].x - lms[LM.R_ANKLE].x);
-
-  if (torsoAngle !== null && torsoAngle < 145) {
-    return { valid: false, cue: 'Stay upright while jumping' };
-  }
-  if ((kneeLeft !== null && kneeLeft < 105) || (kneeRight !== null && kneeRight < 105)) {
-    return { valid: false, cue: 'Use small rope jumps, not deep squats' };
-  }
-  if (ankleGap > 0.35) {
-    return { valid: false, cue: 'Keep your feet closer together' };
-  }
-  return { valid: true, cue: 'Good jump-rope form' };
-}
-
-// LUNGES: require a real split stance. A seated knee bend or arm movement
-// cannot satisfy both legs' geometry.
-if (questId === 'q23') {
-  const leftHip = lms[LM.L_HIP], rightHip = lms[LM.R_HIP];
-  const leftKnee = lms[LM.L_KNEE], rightKnee = lms[LM.R_KNEE];
-  const leftAnkle = lms[LM.L_ANKLE], rightAnkle = lms[LM.R_ANKLE];
-
-  if (![leftHip, rightHip, leftKnee, rightKnee, leftAnkle, rightAnkle].every(x => visiblePt(x, 0.40))) {
-    return { valid: false, cue: 'Keep both legs completely visible' };
-  }
-
-  const leftKneeAngle = angleBetween(leftHip, leftKnee, leftAnkle);
-  const rightKneeAngle = angleBetween(rightHip, rightKnee, rightAnkle);
-  const stanceWidth = Math.abs(leftAnkle.x - rightAnkle.x);
-  const hipWidth = Math.abs(leftHip.x - rightHip.x);
-
-  if (stanceWidth < Math.max(0.12, hipWidth * 1.15)) {
-    return { valid: false, cue: 'Step one foot forward into a real lunge stance' };
-  }
-  if (leftKneeAngle === null || rightKneeAngle === null) {
-    return { valid: false, cue: 'Keep both knees visible' };
-  }
-  if (leftKneeAngle < 55 || rightKneeAngle < 55) {
-    return { valid: false, cue: 'Do not collapse your knees inward' };
-  }
-  return { valid: true, cue: 'Good lunge form' };
-}
-
-return { valid: true, cue: '' };
+return { phase: 'up', reps: initialReps, baselineY: null, lastRepAt: 0, smoothed: null };
 }
 
 function updatePoseRepState(state, questId, landmarks, now) {
 const config = REP_CONFIG[questId];
 const metricFn = REP_METRICS[questId];
 if (!config || !metricFn || !landmarks) {
-return { reps: state.reps, phase: state.phase, cue: 'Move into frame', counted: false, formValid: false };
+return { reps: state.reps, phase: state.phase, cue: 'Move into frame', counted: false };
 }
-
-const form = validateExerciseForm(questId, landmarks);
-
-if (!form.valid) {
-  state.invalidFrames = Math.min(30, state.invalidFrames + 1);
-  state.validFrames = Math.max(0, state.validFrames - 2);
-  state.movementStarted = false;
-  return {
-    reps: state.reps,
-    phase: state.phase,
-    cue: form.cue,
-    counted: false,
-    formValid: false,
-  };
-}
-
-state.invalidFrames = Math.max(0, state.invalidFrames - 1);
-state.validFrames = Math.min(FORM_STABLE_FRAMES + 4, state.validFrames + 1);
-
-// Never let a one-frame pose glitch start or finish a rep.
-if (state.validFrames < FORM_STABLE_FRAMES) {
-  return {
-    reps: state.reps,
-    phase: state.phase,
-    cue: 'Hold the correct exercise position',
-    counted: false,
-    formValid: true,
-  };
-}
-
 const raw = metricFn(landmarks);
 if (raw === null) {
-return { reps: state.reps, phase: state.phase, cue: 'Move fully into frame', counted: false, formValid: false };
+return { reps: state.reps, phase: state.phase, cue: 'Move fully into frame', counted: false };
 }
-
 state.smoothed = state.smoothed === null ? raw : state.smoothed * 0.6 + raw * 0.4;
 const value = state.smoothed;
 let counted = false;
 
 if (config.mode === 'height') {
-  // Establish the jump baseline only while the athlete is in a valid standing
-  // rope-jump posture. This prevents camera movement from becoming a "rep".
-  if (state.baselineY === null) {
-    state.baselineY = value;
-  } else {
-    state.baselineY = state.baselineY * 0.985 + value * 0.015;
-  }
-
-  const jumpHeight = state.baselineY - value;
-
-  if (state.phase === 'up' && jumpHeight >= config.downThreshold) {
-    state.phase = 'down';
-    state.movementStarted = true;
-  } else if (state.phase === 'down' && jumpHeight <= config.upThreshold) {
-    if (state.movementStarted && now - state.lastRepAt >= MIN_REP_MS) {
-      state.reps += 1;
-      state.lastRepAt = now;
-      counted = true;
-    }
-    state.phase = 'up';
-    state.movementStarted = false;
-  }
+if (state.baselineY === null) state.baselineY = value;
+else state.baselineY = state.baselineY * 0.98 + value * 0.02;
+const jumpHeight = state.baselineY - value;
+if (state.phase === 'up' && jumpHeight >= config.downThreshold) {
+state.phase = 'down';
+} else if (state.phase === 'down' && jumpHeight <= config.upThreshold) {
+if (now - state.lastRepAt >= MIN_REP_MS) { state.reps += 1; state.lastRepAt = now; counted = true; }
+state.phase = 'up';
+}
 } else {
-  if (state.phase === 'up' && value <= config.downThreshold) {
-    state.phase = 'down';
-    state.movementStarted = true;
-  } else if (state.phase === 'down' && value >= config.upThreshold) {
-    if (state.movementStarted && now - state.lastRepAt >= MIN_REP_MS) {
-      state.reps += 1;
-      state.lastRepAt = now;
-      counted = true;
-    }
-    state.phase = 'up';
-    state.movementStarted = false;
-  }
+if (state.phase === 'up' && value <= config.downThreshold) {
+state.phase = 'down';
+} else if (state.phase === 'down' && value >= config.upThreshold) {
+if (now - state.lastRepAt >= MIN_REP_MS) { state.reps += 1; state.lastRepAt = now; counted = true; }
+state.phase = 'up';
+}
 }
 
 const cue = state.phase === 'up' ? config.cueDown : config.cueUp;
-return { reps: state.reps, phase: state.phase, cue, counted, formValid: true };
+return { reps: state.reps, phase: state.phase, cue, counted };
 }
 
 // quest labels
@@ -1172,16 +875,6 @@ return (
 </svg>
 );
 });
-const CircleUserRound = React.memo(function ({ size = 18 }) {
-return (
-<svg width={size} height={size} viewBox="0 0 48 48">
-<path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12s5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24s8.955,20,20,20s20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
-<path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
-<path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
-<path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
-</svg>
-);
-});
 
 // quest icons — mapped straight onto Lucide (SF-Symbols-style) components.
 // Each is a drop-in React component, so existing call sites (which pass
@@ -1419,7 +1112,6 @@ const updates = [
 { Icon: Sparkles, title: 'Expo glass UI', body: 'A cleaner, deeper glass treatment with blur, highlights, reflections, and smoother depth across the app.' },
 { Icon: CircleDot, title: 'Thinking orbs', body: 'New animated thinking orbs make AI processing and verification states feel alive without blocking the experience.' },
 { Icon: ShieldCheck, title: 'AI camera upgrade', body: 'The body skeleton now stays visible on every camera challenge, with smoother tracking and clearer verification feedback.' },
-{ Icon: Activity, title: 'Smarter exercise form detection', body: 'AI now checks your actual exercise posture, movement, and range of motion before counting a rep, making fake or incorrect movements much harder to count.' },
 { Icon: Camera, title: 'Camera controls', body: 'The camera flow and cancel behavior were cleaned up so leaving a challenge is more reliable.' },
 { Icon: Timer, title: '24-hour quests', body: 'The daily countdown and automatic 24-hour refresh are back, with the next reset always visible.' },
 { Icon: ListChecks, title: 'Cleaner navigation', body: 'The leaderboard is now its own page and zero-XP players stay out of the rankings.' },
@@ -1495,126 +1187,136 @@ Get started
 );
 }
 
-// Email/password account modal.
+// rest of the app until resolved, same as the old name-picker did, but now
+// backs onto real Firebase Auth accounts instead of a purely local name.
 function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
-const [mode, setMode] = useState('signup'); // 'signup' | 'login'
-const [email, setEmail] = useState('');
-const [password, setPassword] = useState('');
-const [confirmPassword, setConfirmPassword] = useState('');
-const [showPassword, setShowPassword] = useState(false);
-const [error, setError] = useState(null);
-const [submitting, setSubmitting] = useState(false);
-useEffect(() => { if (initialError) setError(initialError); }, [initialError]);
+  const [mode, setMode] = useState('signup');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
-const switchMode = (next) => {
-setMode(next); setError(null); setPassword(''); setConfirmPassword(''); setShowPassword(false);
-};
+  useEffect(() => { if (initialError) setError(initialError); }, [initialError]);
 
-const handleSubmit = async (e) => {
-e.preventDefault();
-if (submitting) return;
-setError(null);
+  const switchMode = (next) => {
+    setMode(next);
+    setError(null);
+    setPassword('');
+    setConfirmPassword('');
+    setShowPassword(false);
+  };
 
-const emailError = validateEmail(email);
-if (emailError) { setError(emailError); return; }
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (submitting) return;
+    setError(null);
 
-if (mode === 'signup') {
-const passwordError = validatePassword(password);
-if (passwordError) { setError(passwordError); return; }
-if (password !== confirmPassword) { setError('Passwords don\'t match.'); return; }
-} else if (!password) {
-setError('Enter your password.'); return;
-}
+    const emailError = validateEmail(email);
+    if (emailError) { setError(emailError); return; }
 
-setSubmitting(true);
-haptic(10);
-try {
-if (mode === 'signup') {
-const { username: finalUsername } = await signUpAccount(email, password);
-onSignedUp(finalUsername);
-} else {
-const { username: finalUsername } = await logInAccount(email, password);
-onLoggedIn(finalUsername);
-}
-} catch (err) {
-console.error(`${mode} failed:`, err);
-setError(friendlyAuthError(err));
-setSubmitting(false);
-}
-};
+    if (mode === 'signup') {
+      const passwordError = validatePassword(password);
+      if (passwordError) { setError(passwordError); return; }
+      if (password !== confirmPassword) { setError("Passwords don't match."); return; }
+    } else if (!password) {
+      setError('Enter your password.');
+      return;
+    }
 
-const inputStyle = { width: '100%', borderRadius: 14, border: `1px solid ${c.separator}`, background: c.bgSecondary, color: c.label, padding: '11px 40px 11px 40px', fontSize: 15, fontWeight: 500, outline: 'none' };
+    setSubmitting(true);
+    haptic(10);
+    try {
+      if (mode === 'signup') {
+        const { username: finalUsername } = await signUpAccount(email, password);
+        onSignedUp(finalUsername);
+      } else {
+        const { username: finalUsername } = await logInAccount(email, password);
+        onLoggedIn(finalUsername);
+      }
+    } catch (err) {
+      console.error(`${mode} failed:`, err);
+      setError(friendlyAuthError(err));
+      setSubmitting(false);
+    }
+  };
 
-return (
-<div className="fixed inset-0 z-[100] flex items-center justify-center p-5 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
-<div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 360, padding: '28px 24px 22px', textAlign: 'center' }}>
-<div style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-<BrandLogo size={28} />
-</div>
-<h2 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label }}>
-{mode === 'signup' ? 'Create your account' : 'Welcome back'}
-</h2>
-<p style={{ fontSize: 13, lineHeight: 1.4, color: c.labelSecondary, marginTop: 6 }}>
-{mode === 'signup'
-? 'Your progress syncs to this account on any device.'
-: 'Log in to pick up where you left off.'}
-</p>
+  const inputStyle = { width: '100%', borderRadius: 14, border: `1px solid ${c.separator}`, background: c.bgSecondary, color: c.label, padding: '11px 40px 11px 40px', fontSize: 15, fontWeight: 500, outline: 'none' };
 
-<form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
-<div style={{ position: 'relative' }}>
-<AtSign size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-<input
-type="email" value={email} autoFocus autoCapitalize="none" autoCorrect="off" autoComplete="email"
-onChange={e => { setEmail(e.target.value); setError(null); }}
-placeholder="Email address"
-style={{ ...inputStyle, paddingRight: 14 }}
-/>
-</div>
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-5 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
+      <div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 360, padding: '28px 24px 22px', textAlign: 'center' }}>
+        <div style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+          <BrandLogo size={28} />
+        </div>
+        <h2 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label }}>
+          {mode === 'signup' ? 'Create your account' : 'Welcome back'}
+        </h2>
+        <p style={{ fontSize: 13, lineHeight: 1.4, color: c.labelSecondary, marginTop: 6 }}>
+          {mode === 'signup' ? 'Your progress syncs to this account on any device.' : 'Log in to pick up where you left off.'}
+        </p>
 
-<div style={{ position: 'relative', marginTop: 10 }}>
-<Lock size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-<input
-type={showPassword ? 'text' : 'password'} value={password}
-autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-onChange={e => { setPassword(e.target.value); setError(null); }}
-placeholder="Password"
-style={inputStyle}
-/>
-<button type="button" onClick={() => setShowPassword(s => !s)} aria-label={showPassword ? 'Hide password' : 'Show password'}
-style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: c.labelTertiary, padding: 4 }}>
-{showPassword ? <EyeOff size={16} strokeWidth={2} /> : <Eye size={16} strokeWidth={2} />}
-</button>
-</div>
+        <form onSubmit={handleSubmit} style={{ textAlign: 'left', marginTop: 18 }}>
+          <div style={{ position: 'relative' }}>
+            <AtSign size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+            <input
+              type="email"
+              value={email}
+              autoFocus
+              autoComplete={mode === 'signup' ? 'email' : 'username'}
+              autoCapitalize="none"
+              autoCorrect="off"
+              inputMode="email"
+              onChange={e => { setEmail(e.target.value); setError(null); }}
+              placeholder="Email address"
+              style={{ ...inputStyle, paddingRight: 14 }}
+            />
+          </div>
 
-{mode === 'signup' && (
-<div style={{ position: 'relative', marginTop: 10 }}>
-<Lock size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-<input
-type={showPassword ? 'text' : 'password'} value={confirmPassword}
-autoComplete="new-password"
-onChange={e => { setConfirmPassword(e.target.value); setError(null); }}
-placeholder="Confirm password"
-style={{ ...inputStyle, paddingRight: 14 }}
-/>
-</div>
-)}
+          <div style={{ position: 'relative', marginTop: 10 }}>
+            <Lock size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+            <input
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+              onChange={e => { setPassword(e.target.value); setError(null); }}
+              placeholder="Password"
+              style={inputStyle}
+            />
+            <button type="button" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: c.labelTertiary, padding: 4 }}>
+              {showPassword ? <EyeOff size={16} strokeWidth={2} /> : <Eye size={16} strokeWidth={2} />}
+            </button>
+          </div>
 
-{error && <p style={{ color: c.red, fontSize: 12, fontWeight: 500, marginTop: 10 }}>{error}</p>}
+          {mode === 'signup' && (
+            <div style={{ position: 'relative', marginTop: 10 }}>
+              <Lock size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={confirmPassword}
+                autoComplete="new-password"
+                onChange={e => { setConfirmPassword(e.target.value); setError(null); }}
+                placeholder="Confirm password"
+                style={{ ...inputStyle, paddingRight: 14 }}
+              />
+            </div>
+          )}
 
-<button type="submit" disabled={submitting}
-style={{ width: '100%', marginTop: 14, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: '#FFFFFF', background: c.blue, opacity: submitting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-{submitting && <span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,0.35)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
-{submitting ? (mode === 'signup' ? 'Creating account…' : 'Logging in…') : (mode === 'signup' ? 'Create account' : 'Log in')}
-</button>
-</form>
+          {error && <p style={{ color: c.red, fontSize: 12, fontWeight: 500, marginTop: 10 }}>{error}</p>}
 
-<button onClick={() => switchMode(mode === 'signup' ? 'login' : 'signup')} disabled={submitting}
-style={{ marginTop: 16, fontSize: 13, fontWeight: 500, color: c.blue }}>
-{mode === 'signup' ? 'Already have an account? Log in' : 'New here? Create an account'}
-</button>
-</div>
-</div>
-);
+          <button type="submit" disabled={submitting} style={{ width: '100%', marginTop: 14, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: '#FFFFFF', background: c.blue, opacity: submitting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            {submitting && <span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,0.35)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
+            {submitting ? (mode === 'signup' ? 'Creating account…' : 'Logging in…') : (mode === 'signup' ? 'Create account' : 'Log in')}
+          </button>
+        </form>
+
+        <button onClick={() => switchMode(mode === 'signup' ? 'login' : 'signup')} disabled={submitting} style={{ marginTop: 16, fontSize: 13, fontWeight: 500, color: c.blue }}>
+          {mode === 'signup' ? 'Already have an account? Log in' : 'New here? Create an account'}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // leaderboard
@@ -1841,18 +1543,11 @@ const updates = [
   { Icon: Sparkles, title: 'Expo glass UI', body: 'A cleaner, deeper glass treatment with blur, highlights, reflections, and smoother depth across the app.' },
   { Icon: CircleDot, title: 'Thinking orbs', body: 'New animated thinking orbs make AI processing and verification states feel alive without blocking the experience.' },
   { Icon: ShieldCheck, title: 'AI camera upgrade', body: 'The body skeleton now stays visible on every camera challenge, with smoother tracking and clearer verification feedback.' },
-{ Icon: Activity, title: 'Smarter exercise form detection', body: 'AI now checks your actual exercise posture, movement, and range of motion before counting a rep, making fake or incorrect movements much harder to count.' },
   { Icon: Camera, title: 'Camera controls', body: 'The camera flow and cancel behavior were cleaned up so leaving a challenge is more reliable.' },
   { Icon: Timer, title: '24-hour quests', body: 'The daily countdown and automatic 24-hour refresh are back, with the next reset always visible.' },
   { Icon: ListChecks, title: 'Cleaner navigation', body: 'The leaderboard is now its own page and zero-XP players stay out of the rankings.' },
   { Icon: UserCog, title: 'Account + settings', body: 'Your account and settings options stay together in one place, with the previous controls preserved.' },
 ];
-
-const [usernameInput, setUsernameInput] = useState(username || '');
-const [usernameReauthPassword, setUsernameReauthPassword] = useState('');
-const [needsReauthForUsername, setNeedsReauthForUsername] = useState(false);
-const [usernameSaving, setUsernameSaving] = useState(false);
-const [usernameError, setUsernameError] = useState(null);
 
 const [currentPasswordInput, setCurrentPasswordInput] = useState('');
 const [newPasswordInput, setNewPasswordInput] = useState('');
@@ -1869,36 +1564,10 @@ const smallInputStyle = { width: '100%', borderRadius: 12, border: `1px solid ${
 
 const openEditor = (which) => {
 setEditing(which);
-if (which === 'username') { setUsernameInput(username || ''); setUsernameError(null); setNeedsReauthForUsername(false); setUsernameReauthPassword(''); }
 if (which === 'password') { setCurrentPasswordInput(''); setNewPasswordInput(''); setConfirmNewPasswordInput(''); setPasswordError(null); setPasswordSaved(false); }
 if (which === 'delete') setDeleteError(null);
 };
 const closeEditor = () => setEditing(null);
-
-const handleSaveUsername = async () => {
-const validationError = validateUsername(usernameInput);
-if (validationError) { setUsernameError(validationError); return; }
-setUsernameSaving(true); setUsernameError(null);
-try {
-const finalUsername = await updateUsername({
-newUsernameRaw: usernameInput,
-oldUsername: username,
-currentPassword: needsReauthForUsername ? usernameReauthPassword : undefined,
-});
-onUsernameChanged(finalUsername);
-setEditing(null);
-} catch (err) {
-if (err?.code === 'auth/requires-recent-login') {
-setNeedsReauthForUsername(true);
-setUsernameError('For security, enter your password to confirm this change.');
-} else {
-console.error('Username update failed:', err);
-setUsernameError(friendlyAuthError(err));
-}
-} finally {
-setUsernameSaving(false);
-}
-};
 
 const handleSavePassword = async () => {
 if (!currentPasswordInput) { setPasswordError('Enter your current password.'); return; }
@@ -1982,41 +1651,16 @@ onChange={e => { const f = e.target.files?.[0]; if (f) onPhotoFile(f); e.target.
 </div>
 <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
 
-{/* username */}
-{editing !== 'username' ? (
-<button onClick={() => openEditor('username')} style={rowStyle}>
-<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-<UserCog size={14} strokeWidth={1.9} />
+{/* email */}
+<div style={rowStyle}>
+  <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+    <AtSign size={14} strokeWidth={1.9} />
+  </div>
+  <div style={{ flex: 1, minWidth: 0 }}>
+    <p style={{ fontSize: 15, fontWeight: 500, color: c.label }}>Email</p>
+    <p style={{ fontSize: 12, color: c.labelSecondary, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{auth.currentUser?.email || 'Not available'}</p>
+  </div>
 </div>
-<span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Edit username</span>
-<ChevronIcon color={c.labelTertiary} />
-</button>
-) : (
-<div style={{ padding: '14px' }}>
-<p style={{ fontSize: 13, fontWeight: 600, color: c.label, marginBottom: 8 }}>Edit username</p>
-<input value={usernameInput} maxLength={20} autoCapitalize="none" autoCorrect="off"
-onChange={e => { setUsernameInput(e.target.value); setUsernameError(null); }}
-style={smallInputStyle} />
-{needsReauthForUsername && (
-<input type="password" value={usernameReauthPassword} placeholder="Current password"
-onChange={e => { setUsernameReauthPassword(e.target.value); setUsernameError(null); }}
-style={{ ...smallInputStyle, marginTop: 8 }} />
-)}
-{usernameError && <p style={{ fontSize: 12, fontWeight: 500, color: c.red, marginTop: 8 }}>{usernameError}</p>}
-<div className="flex gap-2.5" style={{ marginTop: 12 }}>
-<button onClick={closeEditor} disabled={usernameSaving}
-style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.fill, color: c.label }}>
-Cancel
-</button>
-<button onClick={handleSaveUsername} disabled={usernameSaving || (needsReauthForUsername && !usernameReauthPassword)}
-style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.blue, color: '#fff', opacity: usernameSaving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-{usernameSaving && <span style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
-{usernameSaving ? 'Saving…' : 'Save'}
-</button>
-</div>
-</div>
-)}
-<div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
 
 {/* password — password accounts only */}
 {usesPassword && (
@@ -2967,10 +2611,8 @@ ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.
 };
 }, [hasSkeletonTracking, quest.reps, quest.id, phase, confirmed]);
 
-// Rep quests are verified by body-form validation + joint-angle movement.
-// The form validator must pass for several consecutive frames before movement
-// can start or finish a rep, which blocks common angle-only spoofing such as
-// sitting down and repeatedly moving the arms.
+// rep quests are verified by joint-angle thresholds, which a static photo
+// can't fake (angles never move) — but a *video* of someone else
 // exercising, played on another screen and pointed at the camera, would
 // still cross those thresholds. This runs alongside pose tracking purely
 // to catch that: it doesn't judge the activity, only whether the feed
@@ -3492,9 +3134,8 @@ setPhotoUploading(false);
 const handleDeleteAccount = async () => {
 const currentUser = auth.currentUser;
 if (!currentUser) return { ok: false, error: 'You need to be signed in to do that.' };
-const usernameLower = username ? username.toLowerCase() : null;
 try {
-await deleteAccountData(currentUser.uid, usernameLower);
+await deleteAccountData(currentUser.uid);
 await deleteUser(currentUser);
 resetLocalAccountState();
 return { ok: true };
