@@ -1619,6 +1619,36 @@ Get started
 
 // rest of the app until resolved, same as the old name-picker did, but now
 // backs onto real Firebase Auth accounts instead of a purely local name.
+const TabBar = React.memo(function TabBar({ activeTab, onChange, c }) {
+const items = [
+{ key: 'quests', label: 'Quests', Icon: CheckSquare },
+{ key: 'history', label: 'History', Icon: HistoryIcon },
+{ key: 'leaderboard', label: 'Ranks', Icon: TrophyIcon },
+{ key: 'settings', label: 'Account', Icon: UserCog },
+];
+return (
+<div style={{ position: 'fixed', left: '50%', bottom: 'max(env(safe-area-inset-bottom), 16px)', transform: 'translateX(-50%)', zIndex: 50 }}>
+<div
+className="backdrop-blur-2xl"
+style={{ ...glassStyle(c, true), borderRadius: 999, padding: '6px 6px', display: 'flex', width: 360, maxWidth: 'calc(100vw - 24px)' }}
+>
+{items.map(({ key, label, Icon }) => {
+const active = activeTab === key;
+const color = active ? c.blue : c.gray;
+return (
+<button type="button" key={key} onClick={() => onChange(key)} className="sq-control"
+style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, padding: '8px 0 7px', borderRadius: 999, color, background: active ? c.fill : 'transparent' }}>
+<span className={`sq-tab-icon ${active ? 'sq-tab-icon-active' : ''}`}><Icon size={21} strokeWidth={active ? 2.1 : 1.75} color={color} /></span>
+<span style={{ fontSize: 10, fontWeight: 600, letterSpacing: -0.1, color }}>{label}</span>
+</button>
+);
+})}
+</div>
+</div>
+);
+});
+
+
 function DeviceInstallPrompt({ onDismiss, c }) {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [installing, setInstalling] = useState(false);
