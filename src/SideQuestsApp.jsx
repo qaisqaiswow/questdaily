@@ -8,13 +8,13 @@ import { initializeApp, getApps } from 'firebase/app';
 import {
 getAuth, onAuthStateChanged, signOut, deleteUser, getRedirectResult,
 createUserWithEmailAndPassword, signInWithEmailAndPassword,
-GoogleAuthProvider, signInWithRedirect, setPersistence, browserLocalPersistence,
+
 updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 import {
 Sun, Moon, CheckSquare, History as HistoryIcon, Settings as SettingsIcon,
-Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Activity, Timer, ChevronsUp,
+Dumbbell, PersonStanding, Bike, Footprints, CircleDot, Timer, ChevronsUp,
 Droplet, Leaf, Utensils, CookingPot, Flower2, Move, Zap, Flame,
 Pencil, Snowflake, Wind, Waves, Target, GlassWater, CupSoda,
 LogOut, Eye, EyeOff, Lock, AtSign, Camera, Trash2, ShieldCheck, Sparkles, ListChecks,
@@ -37,8 +37,6 @@ measurementId: "G-C6S86XMFRZ",
 
 const firebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
-const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: 'select_account' });
 const db = getFirestore(firebaseApp);
 const LEADERBOARD_COLLECTION = 'leaderboard';
 const LEADERBOARD_SIZE = 100;
@@ -117,14 +115,17 @@ return [];
 // the account's own profile lives in `users/{uid}`.
 const USERNAME_EMAIL_DOMAIN = 'questdaily-users.app';
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
-
-function usernameToEmail(usernameLower) {
-return `${usernameLower}@${USERNAME_EMAIL_DOMAIN}`;
-}
-
+function usernameToEmail(usernameLower) { return `${usernameLower}@${USERNAME_EMAIL_DOMAIN}`; }
 function validateUsername(raw) {
 const trimmed = raw.trim();
 if (!USERNAME_RE.test(trimmed)) return 'Username must be 3-20 characters: letters, numbers, and underscores only.';
+return null;
+}
+
+function validateEmail(raw) {
+const email = raw.trim();
+if (!email) return 'Enter your email address.';
+if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Enter a valid email address.';
 return null;
 }
 
@@ -136,19 +137,15 @@ return null;
 
 function friendlyAuthError(err) {
 const code = err?.code || '';
-if (code === 'auth/email-already-in-use') return 'That username is already taken.';
+if (code === 'auth/email-already-in-use') return 'That email is already registered.';
 if (code === 'auth/weak-password') return 'Password must be at least 6 characters.';
-if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') return 'Incorrect username or password.';
-if (code === 'auth/user-not-found') return 'No account found with that username.';
+if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') return 'Incorrect email or password.';
+if (code === 'auth/user-not-found') return 'No account found with that email.';
 if (code === 'auth/too-many-requests') return 'Too many attempts — try again in a bit.';
 if (code === 'auth/network-request-failed') return "Can't reach the server. Check your connection.";
 if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
 if (code === 'auth/invalid-email') return 'That username can\'t be used. Try a different one.';
 if (code === 'auth/popup-blocked') return 'Your browser blocked the sign-in popup. Please allow popups for this site and try again.';
-if (code === 'auth/unauthorized-domain') return 'Google sign-in is blocked for this site. Add your deployed Replit domain in Firebase Authentication → Settings → Authorized domains.';
-if (code === 'auth/operation-not-allowed') return 'Google sign-in is disabled. Enable Google under Firebase Authentication → Sign-in method.';
-if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return 'Google sign-in was cancelled. Try again.';
-if (code === 'auth/account-exists-with-different-credential') return 'That Google account\'s email is already tied to a different sign-in method here.';
 if (code === 'permission-denied' || code === 'firestore/permission-denied') {
 return "Your database's security rules are blocking this — the 'usernames', 'users', and 'leaderboard' collections in Firestore need read/write rules set up. This is a Firebase Console configuration step, not something wrong with what you typed.";
 }
@@ -161,52 +158,24 @@ return err?.message ? `Something went wrong: ${err.message}` : 'Something went w
 // username reservation + profile doc. If the profile writes fail after the
 // Auth user was already created, the reservation is rolled back so the
 // username isn't permanently stuck on a half-created account.
-async function signUpAccount(usernameRaw, password) {
-const username = usernameRaw.trim();
-const usernameLower = username.toLowerCase();
-const usernameDoc = doc(db, 'usernames', usernameLower);
-
-let existing;
-try {
-existing = await getDoc(usernameDoc);
-} catch (err) {
-console.error('Username availability check failed:', err);
-throw err; // surfaced via friendlyAuthError, including the permission-denied case
-}
-if (existing.exists()) {
-const err = new Error('That username is already taken.');
-err.code = 'auth/email-already-in-use';
-throw err;
+async function signUpAccount(emailRaw, password) {
+const email = emailRaw.trim().toLowerCase();
+const displayName = email.split('@')[0].slice(0, 20) || 'Player';
+const cred = await createUserWithEmailAndPassword(auth, email, password);
+await setDoc(doc(db, 'users', cred.user.uid), {
+email,
+username: displayName,
+createdAt: Date.now(),
+});
+return { uid: cred.user.uid, email, username: displayName };
 }
 
-const cred = await createUserWithEmailAndPassword(auth, usernameToEmail(usernameLower), password);
-try {
-await Promise.all([
-setDoc(usernameDoc, { uid: cred.user.uid, username }),
-setDoc(doc(db, 'users', cred.user.uid), { username, createdAt: Date.now() }),
-]);
-} catch (err) {
-console.error('Failed to finish account setup:', err);
-throw err;
-}
-return { uid: cred.user.uid, username };
-}
-
-// Logs into an existing account. Looks up the reservation doc first purely
-// to recover the original display-cased username (login itself only needs
-// the deterministic email, so a typo'd case still signs in fine).
-async function logInAccount(usernameRaw, password) {
-const username = usernameRaw.trim();
-const usernameLower = username.toLowerCase();
-const cred = await signInWithEmailAndPassword(auth, usernameToEmail(usernameLower), password);
-
-let displayUsername = username;
-try {
-const snap = await getDoc(doc(db, 'usernames', usernameLower));
-if (snap.exists() && snap.data()?.username) displayUsername = snap.data().username;
-} catch { /* non-fatal — fall back to what they typed */ }
-
-return { uid: cred.user.uid, username: displayUsername };
+async function logInAccount(emailRaw, password) {
+const email = emailRaw.trim().toLowerCase();
+const cred = await signInWithEmailAndPassword(auth, email, password);
+const snap = await getDoc(doc(db, 'users', cred.user.uid));
+const data = snap.exists() ? snap.data() : {};
+return { uid: cred.user.uid, email, username: data.username || email.split('@')[0].slice(0, 20) || 'Player' };
 }
 
 async function logOutAccount() {
@@ -258,17 +227,6 @@ await setDoc(doc(db, 'leaderboard', user.uid), { photoURL: user.photoURL }, { me
 // ever signed in" username-minting step used to happen right here after
 // the popup resolved — it now lives in hydrateAccount() instead, since
 // nothing runs in *this* page load once the redirect kicks off.
-async function signInWithGoogle() {
-googleProvider.setCustomParameters({ prompt: 'select_account' });
-// Explicitly persist the Firebase session so the Google redirect comes back
-// to the same signed-in account instead of looking like a fresh session.
-await setPersistence(auth, browserLocalPersistence);
-// The welcome screen is already completed before the auth modal is shown.
-// Keep that state across the full-page Google redirect as an extra safety net.
-try { localStorage.setItem('sq_google_redirect_pending', 'true'); } catch {}
-await signInWithRedirect(auth, googleProvider);
-}
-
 // editing an existing account
 // -----------------------------------------------------------------------
 function getAuthProviderLabel(user) {
@@ -309,7 +267,7 @@ return newUsername;
 
 const takenSnap = await getDoc(doc(db, 'usernames', newLower));
 if (takenSnap.exists()) {
-throw Object.assign(new Error('That username is already taken.'), { code: 'auth/email-already-in-use' });
+throw Object.assign(new Error('That email is already registered.'), { code: 'auth/email-already-in-use' });
 }
 
 if (usesPassword) {
@@ -428,44 +386,12 @@ const [authError, setAuthError] = useState(null);
 
 useEffect(() => {
 let mounted = true;
-let redirectHandled = false;
-
-// Wait for Firebase to finish resolving any Google redirect before allowing
-// the main app to decide which screen to show. This prevents the post-Google
-// reload from briefly being treated as a signed-out/fresh app.
-const finishRedirect = async () => {
-try {
-const result = await getRedirectResult(auth);
-redirectHandled = true;
-if (!mounted) return;
-if (result?.user) {
-setUser(result.user);
-setAuthError(null);
-}
-try { localStorage.removeItem('sq_google_redirect_pending'); } catch {}
-} catch (err) {
-redirectHandled = true;
-if (!mounted) return;
-try { localStorage.removeItem('sq_google_redirect_pending'); } catch {}
-if (err?.code && err.code !== 'auth/no-auth-event') {
-console.error('Google redirect result failed:', err);
-setAuthError(friendlyAuthError(err));
-}
-} finally {
-if (mounted && redirectHandled) setLoading(false);
-}
-};
-
 const unsub = onAuthStateChanged(auth, u => {
 if (!mounted) return;
 setUser(u);
-// The redirect handler controls the initial loading gate. After that, normal
-// auth changes can update immediately.
-if (redirectHandled) setLoading(false);
+setLoading(false);
 if (u) setAuthError(null);
 });
-
-finishRedirect();
 return () => { mounted = false; unsub(); };
 }, []);
 
@@ -1332,17 +1258,6 @@ return (
 </svg>
 );
 });
-const GoogleIcon = React.memo(function GoogleIcon({ size = 18 }) {
-return (
-<svg width={size} height={size} viewBox="0 0 48 48">
-<path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12s5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24s8.955,20,20,20s20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
-<path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
-<path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
-<path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
-</svg>
-);
-});
-
 // quest icons — mapped straight onto Lucide (SF-Symbols-style) components.
 // Each is a drop-in React component, so existing call sites (which pass
 // size/color/style props) work unchanged.
@@ -1659,31 +1574,16 @@ Get started
 // backs onto real Firebase Auth accounts instead of a purely local name.
 function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
 const [mode, setMode] = useState('signup'); // 'signup' | 'login'
-const [username, setUsername] = useState('');
+const [email, setEmail] = useState('');
 const [password, setPassword] = useState('');
 const [confirmPassword, setConfirmPassword] = useState('');
 const [showPassword, setShowPassword] = useState(false);
 const [error, setError] = useState(null);
 const [submitting, setSubmitting] = useState(false);
-const [googleSubmitting, setGoogleSubmitting] = useState(false);
-useEffect(() => { if (initialError) { setError(initialError); setGoogleSubmitting(false); } }, [initialError]);
+useEffect(() => { if (initialError) setError(initialError); }, [initialError]);
 
 const switchMode = (next) => {
 setMode(next); setError(null); setPassword(''); setConfirmPassword(''); setShowPassword(false);
-};
-
-const handleGoogleClick = async () => {
-if (submitting || googleSubmitting) return;
-setError(null);
-setGoogleSubmitting(true);
-haptic(10);
-try {
-await signInWithGoogle(); // navigates away — nothing after this runs on success
-} catch (err) {
-console.error('Google sign-in failed:', err);
-setError(friendlyAuthError(err));
-setGoogleSubmitting(false);
-}
 };
 
 const handleSubmit = async (e) => {
@@ -1691,8 +1591,8 @@ e.preventDefault();
 if (submitting) return;
 setError(null);
 
-const usernameError = validateUsername(username);
-if (usernameError) { setError(usernameError); return; }
+const emailError = validateEmail(email);
+if (emailError) { setError(emailError); return; }
 
 if (mode === 'signup') {
 const passwordError = validatePassword(password);
@@ -1706,10 +1606,10 @@ setSubmitting(true);
 haptic(10);
 try {
 if (mode === 'signup') {
-const { username: finalUsername } = await signUpAccount(username, password);
+const { username: finalUsername } = await signUpAccount(email, password);
 onSignedUp(finalUsername);
 } else {
-const { username: finalUsername } = await logInAccount(username, password);
+const { username: finalUsername } = await logInAccount(email, password);
 onLoggedIn(finalUsername);
 }
 } catch (err) {
@@ -1736,28 +1636,14 @@ return (
 : 'Log in to pick up where you left off.'}
 </p>
 
-<button type="button" onClick={handleGoogleClick} disabled={submitting || googleSubmitting}
-style={{ width: '100%', marginTop: 18, padding: '12px', borderRadius: 14, fontSize: 14, fontWeight: 600, color: c.label, background: c.bgSecondary, border: `1px solid ${c.separator}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, opacity: googleSubmitting ? 0.7 : 1 }}>
-{googleSubmitting
-? <span style={{ width: 16, height: 16, border: `2px solid ${c.fill}`, borderTopColor: c.label, borderRadius: '50%' }} className="animate-spin" />
-: <GoogleIcon size={17} />}
-{googleSubmitting ? 'Connecting…' : 'Continue with Google'}
-</button>
-
-<div className="flex items-center gap-3" style={{ margin: '16px 0' }}>
-<div style={{ flex: 1, height: 1, background: c.separator }} />
-<span style={{ fontSize: 11, fontWeight: 500, color: c.labelTertiary, textTransform: 'uppercase', letterSpacing: 0.4 }}>or</span>
-<div style={{ flex: 1, height: 1, background: c.separator }} />
-</div>
-
 <form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
 <div style={{ position: 'relative' }}>
 <AtSign size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
 <input
-type="text" value={username} autoFocus autoCapitalize="none" autoCorrect="off"
-maxLength={20}
-onChange={e => { setUsername(e.target.value); setError(null); }}
-placeholder="Username"
+type="email" value={email} autoFocus autoCapitalize="none" autoCorrect="off"
+maxLength={254}
+onChange={e => { setEmail(e.target.value); setError(null); }}
+placeholder="Email"
 style={{ ...inputStyle, paddingRight: 14 }}
 />
 </div>
@@ -3568,19 +3454,6 @@ localStorage.setItem('sq_lastReset', String(now));
 // this left username null, that loading screen would never go away.
 const hydrateAccount = useCallback(async (uidToLoad, fallbackEmail, currentUser) => {
 let profileDoc = await getDoc(doc(db, 'users', uidToLoad)).catch(() => null);
-
-// First time this Google account has ever signed in. With popup-based
-// sign-in this used to happen right after signInWithPopup resolved;
-// redirect-based sign-in reloads the page instead, so it's caught here —
-// the first time we see this uid with no profile doc yet.
-if (!profileDoc?.exists?.() && currentUser && getAuthProviderLabel(currentUser) === 'google') {
-try {
-await mintUsernameForGoogleUser(currentUser);
-profileDoc = await getDoc(doc(db, 'users', uidToLoad)).catch(() => null);
-} catch (err) {
-console.error('Failed to set up new Google account:', err);
-}
-}
 
 const [profile, remoteHistory] = await Promise.all([
 fetchRemoteProfile(uidToLoad),
