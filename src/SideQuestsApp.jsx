@@ -428,45 +428,39 @@ const [authError, setAuthError] = useState(null);
 
 useEffect(() => {
 let mounted = true;
-let redirectHandled = false;
+let resolved = false;
 
-// Wait for Firebase to finish resolving any Google redirect before allowing
-// the main app to decide which screen to show. This prevents the post-Google
-// reload from briefly being treated as a signed-out/fresh app.
-const finishRedirect = async () => {
-try {
-const result = await getRedirectResult(auth);
-redirectHandled = true;
+// Keep auth initialization simple and reliable. The previous redirect-result
+// flow could leave the app stuck behind authLoading on hosts that do not have
+// a pending Google redirect. Username/password accounts do not need it.
+const finish = (u) => {
 if (!mounted) return;
-if (result?.user) {
-setUser(result.user);
-setAuthError(null);
-}
-try { localStorage.removeItem('sq_google_redirect_pending'); } catch {}
-} catch (err) {
-redirectHandled = true;
-if (!mounted) return;
-try { localStorage.removeItem('sq_google_redirect_pending'); } catch {}
-if (err?.code && err.code !== 'auth/no-auth-event') {
-console.error('Google redirect result failed:', err);
-setAuthError(friendlyAuthError(err));
-}
-} finally {
-if (mounted && redirectHandled) setLoading(false);
-}
+resolved = true;
+setUser(u || null);
+setLoading(false);
+if (u) setAuthError(null);
 };
 
-const unsub = onAuthStateChanged(auth, u => {
+const unsub = onAuthStateChanged(auth, finish, (err) => {
 if (!mounted) return;
-setUser(u);
-// The redirect handler controls the initial loading gate. After that, normal
-// auth changes can update immediately.
-if (redirectHandled) setLoading(false);
-if (u) setAuthError(null);
+console.error('Firebase auth state error:', err);
+setAuthError(friendlyAuthError(err));
+setLoading(false);
 });
 
-finishRedirect();
-return () => { mounted = false; unsub(); };
+// Never leave the entire app white forever if Firebase initialization hangs.
+const timeout = setTimeout(() => {
+if (!resolved && mounted) {
+console.warn('Firebase auth initialization timed out; continuing as signed out.');
+setLoading(false);
+}
+}, 5000);
+
+return () => {
+mounted = false;
+clearTimeout(timeout);
+unsub();
+};
 }, []);
 
 return { user, loading, authError };
