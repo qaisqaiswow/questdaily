@@ -6,9 +6,8 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as exifr from 'exifr';
 import { initializeApp, getApps } from 'firebase/app';
 import {
-getAuth, onAuthStateChanged, signOut, deleteUser, getRedirectResult,
+getAuth, onAuthStateChanged, signOut, deleteUser,
 createUserWithEmailAndPassword, signInWithEmailAndPassword,
-GoogleAuthProvider, signInWithRedirect, setPersistence, browserLocalPersistence,
 updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
@@ -37,21 +36,20 @@ measurementId: "G-C6S86XMFRZ",
 
 let firebaseApp = null;
 let auth = null;
-let googleProvider = null;
 let db = null;
 let firebaseInitError = null;
 try {
   firebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
   auth = getAuth(firebaseApp);
-  googleProvider = new GoogleAuthProvider();
-  googleProvider.setCustomParameters({ prompt: 'select_account' });
   db = getFirestore(firebaseApp);
 } catch (err) {
   firebaseInitError = err;
   console.error('QuestDaily Firebase initialization failed:', err);
 }
-const LEADERBOARD_COLLECTION = 'leaderboard';
+const LEADERBOARD_COLLECTION = 'leaderboard_v2';
 const LEADERBOARD_SIZE = 100;
+const USERS_COLLECTION = 'users_v2';
+const USERNAMES_COLLECTION = 'usernames_v2';
 
 // pushes the player's stats up to their leaderboard doc. ranked by lifetime
 // xp earned (not current xp) so leveling up never makes your rank go down.
@@ -94,7 +92,7 @@ return null;
 async function syncHistoryEntry(uid, entry) {
 if (!uid) return;
 try {
-await setDoc(doc(db, 'users', uid, 'history', entry.id), entry);
+await setDoc(doc(db, USERS_COLLECTION, uid, 'history', entry.id), entry);
 } catch (err) {
 console.error('History sync failed:', err);
 }
@@ -103,7 +101,7 @@ console.error('History sync failed:', err);
 async function fetchRemoteHistory(uid) {
 if (!uid) return [];
 try {
-const q = query(collection(db, 'users', uid, 'history'), orderBy('ts', 'desc'), limit(500));
+const q = query(collection(db, USERS_COLLECTION, uid, 'history'), orderBy('ts', 'desc'), limit(500));
 const snap = await getDocs(q);
 return snap.docs.map(d => d.data());
 } catch (err) {
@@ -125,7 +123,7 @@ return [];
 // A `usernames/{usernameLower}` doc is the source of truth for "is this
 // username taken" and for looking up the display-cased username on login;
 // the account's own profile lives in `users/{uid}`.
-const USERNAME_EMAIL_DOMAIN = 'questdaily-users.app';
+const USERNAME_EMAIL_DOMAIN = 'questdaily-v2-users.app';
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 
 function usernameToEmail(usernameLower) {
@@ -154,11 +152,6 @@ if (code === 'auth/too-many-requests') return 'Too many attempts — try again i
 if (code === 'auth/network-request-failed') return "Can't reach the server. Check your connection.";
 if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
 if (code === 'auth/invalid-email') return 'That username can\'t be used. Try a different one.';
-if (code === 'auth/popup-blocked') return 'Your browser blocked the sign-in popup. Please allow popups for this site and try again.';
-if (code === 'auth/unauthorized-domain') return 'Google sign-in is blocked for this site. Add your deployed Replit domain in Firebase Authentication → Settings → Authorized domains.';
-if (code === 'auth/operation-not-allowed') return 'Google sign-in is disabled. Enable Google under Firebase Authentication → Sign-in method.';
-if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return 'Google sign-in was cancelled. Try again.';
-if (code === 'auth/account-exists-with-different-credential') return 'That Google account\'s email is already tied to a different sign-in method here.';
 if (code === 'permission-denied' || code === 'firestore/permission-denied') {
 return "Your database's security rules are blocking this — the 'usernames', 'users', and 'leaderboard' collections in Firestore need read/write rules set up. This is a Firebase Console configuration step, not something wrong with what you typed.";
 }
@@ -174,7 +167,7 @@ return err?.message ? `Something went wrong: ${err.message}` : 'Something went w
 async function signUpAccount(usernameRaw, password) {
 const username = usernameRaw.trim();
 const usernameLower = username.toLowerCase();
-const usernameDoc = doc(db, 'usernames', usernameLower);
+const usernameDoc = doc(db, USERNAMES_COLLECTION, usernameLower);
 
 let existing;
 try {
@@ -193,7 +186,7 @@ const cred = await createUserWithEmailAndPassword(auth, usernameToEmail(username
 try {
 await Promise.all([
 setDoc(usernameDoc, { uid: cred.user.uid, username }),
-setDoc(doc(db, 'users', cred.user.uid), { username, createdAt: Date.now() }),
+setDoc(doc(db, USERS_COLLECTION, cred.user.uid), { username, createdAt: Date.now() }),
 ]);
 } catch (err) {
 console.error('Failed to finish account setup:', err);
@@ -212,7 +205,7 @@ const cred = await signInWithEmailAndPassword(auth, usernameToEmail(usernameLowe
 
 let displayUsername = username;
 try {
-const snap = await getDoc(doc(db, 'usernames', usernameLower));
+const snap = await getDoc(doc(db, USERNAMES_COLLECTION, usernameLower));
 if (snap.exists() && snap.data()?.username) displayUsername = snap.data().username;
 } catch { /* non-fatal — fall back to what they typed */ }
 
@@ -223,68 +216,13 @@ async function logOutAccount() {
 await signOut(auth);
 }
 
-// Signs in with a Google popup. Google accounts don't come with a username
-// the person chose, so on a person's very first Google sign-in one is
-// minted automatically from their Google display name (falling back to
-// their email), retried with a random numeric suffix if it's taken — same
-// `usernames` reservation + `users/{uid}` profile doc that the username/
-// password flow creates, so everything downstream (hydration, leaderboard,
-// settings) treats a Google account exactly like any other. Their Google
-// avatar is carried over as the initial profile photo too. Returning users
-// don't need any of this — their `users/{uid}` doc already exists, and the
-// app's normal auth-state hydration effect picks it up the same way a page
-// reload does.
-async function mintUsernameForGoogleUser(user) {
-const rawBase = user.displayName || (user.email ? user.email.split('@')[0] : 'Player');
-let base = rawBase.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 16);
-if (base.length < 3) base = (base + 'Player').slice(0, 16);
-
-let display = base;
-let usernameLower = base.toLowerCase();
-for (let attempt = 0; attempt < 8; attempt++) {
-const snap = await getDoc(doc(db, 'usernames', usernameLower));
-if (!snap.exists()) break;
-const suffix = String(Math.floor(1000 + Math.random() * 9000));
-display = `${base}${suffix}`.slice(0, 20);
-usernameLower = display.toLowerCase();
-}
-
-await Promise.all([
-setDoc(doc(db, 'usernames', usernameLower), { uid: user.uid, username: display }),
-setDoc(doc(db, 'users', user.uid), { username: display, createdAt: Date.now(), photoURL: user.photoURL || null }),
-]);
-if (user.photoURL) {
-await setDoc(doc(db, 'leaderboard', user.uid), { photoURL: user.photoURL }, { merge: true }).catch(() => {});
-}
-}
-
-// Popup-based Google sign-in breaks on hosts that send strict
-// Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy headers (needed
-// here for MediaPipe's multi-threaded WASM) — the popup can't message the
-// result back to this window, so the sign-in just hangs silently.
-// Redirect-based sign-in sidesteps that entirely: the browser navigates to
-// Google and back, and Firebase Auth picks up the result via
-// onAuthStateChanged on reload. The "first time this Google account has
-// ever signed in" username-minting step used to happen right here after
-// the popup resolved — it now lives in hydrateAccount() instead, since
-// nothing runs in *this* page load once the redirect kicks off.
-async function signInWithGoogle() {
-googleProvider.setCustomParameters({ prompt: 'select_account' });
-// Explicitly persist the Firebase session so the Google redirect comes back
-// to the same signed-in account instead of looking like a fresh session.
-await setPersistence(auth, browserLocalPersistence);
-// The welcome screen is already completed before the auth modal is shown.
-// Keep that state across the full-page Google redirect as an extra safety net.
-try { localStorage.setItem('sq_google_redirect_pending', 'true'); } catch {}
-await signInWithRedirect(auth, googleProvider);
-}
+// Google sign-in removed. QuestDaily now uses username + password only.
 
 // editing an existing account
 // -----------------------------------------------------------------------
 function getAuthProviderLabel(user) {
 if (!user) return null;
 const ids = (user.providerData || []).map(p => p.providerId);
-if (ids.includes('google.com')) return 'google';
 if (ids.includes('password')) return 'password';
 return 'other';
 }
@@ -310,14 +248,14 @@ if (newLower === oldLower) {
 // same underlying name, only casing changed (or literally unchanged) —
 // no Auth email involved, just update the display casing everywhere
 await Promise.all([
-setDoc(doc(db, 'usernames', oldLower), { uid: currentUser.uid, username: newUsername }, { merge: true }),
-setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
-setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
+setDoc(doc(db, USERNAMES_COLLECTION, oldLower), { uid: currentUser.uid, username: newUsername }, { merge: true }),
+setDoc(doc(db, USERS_COLLECTION, currentUser.uid), { username: newUsername }, { merge: true }),
+setDoc(doc(db, LEADERBOARD_COLLECTION, currentUser.uid), { username: newUsername }, { merge: true }),
 ]);
 return newUsername;
 }
 
-const takenSnap = await getDoc(doc(db, 'usernames', newLower));
+const takenSnap = await getDoc(doc(db, USERNAMES_COLLECTION, newLower));
 if (takenSnap.exists()) {
 throw Object.assign(new Error('That username is already taken.'), { code: 'auth/email-already-in-use' });
 }
@@ -338,11 +276,11 @@ throw err;
 }
 
 await Promise.all([
-setDoc(doc(db, 'usernames', newLower), { uid: currentUser.uid, username: newUsername }),
-setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
-setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
+setDoc(doc(db, USERNAMES_COLLECTION, newLower), { uid: currentUser.uid, username: newUsername }),
+setDoc(doc(db, USERS_COLLECTION, currentUser.uid), { username: newUsername }, { merge: true }),
+setDoc(doc(db, LEADERBOARD_COLLECTION, currentUser.uid), { username: newUsername }, { merge: true }),
 ]);
-await deleteDoc(doc(db, 'usernames', oldLower)).catch(() => {});
+await deleteDoc(doc(db, USERNAMES_COLLECTION, oldLower)).catch(() => {});
 
 return newUsername;
 }
@@ -393,8 +331,8 @@ reader.readAsDataURL(file);
 
 async function updateProfilePhoto(uid, dataUrl) {
 await Promise.all([
-setDoc(doc(db, 'users', uid), { photoURL: dataUrl }, { merge: true }),
-setDoc(doc(db, 'leaderboard', uid), { photoURL: dataUrl }, { merge: true }),
+setDoc(doc(db, USERS_COLLECTION, uid), { photoURL: dataUrl }, { merge: true }),
+setDoc(doc(db, LEADERBOARD_COLLECTION, uid), { photoURL: dataUrl }, { merge: true }),
 ]);
 }
 
@@ -406,7 +344,7 @@ setDoc(doc(db, 'leaderboard', uid), { photoURL: dataUrl }, { merge: true }),
 async function deleteAccountData(uid, usernameLower) {
 let historyDocs = [];
 try {
-const historySnap = await getDocs(collection(db, 'users', uid, 'history'));
+const historySnap = await getDocs(collection(db, USERS_COLLECTION, uid, 'history'));
 historyDocs = historySnap.docs;
 } catch (err) {
 console.error('Could not list history for deletion (continuing with the rest):', err);
@@ -414,9 +352,9 @@ console.error('Could not list history for deletion (continuing with the rest):',
 await Promise.all(historyDocs.map(d => deleteDoc(d.ref).catch(() => {})));
 
 const results = await Promise.allSettled([
-deleteDoc(doc(db, 'users', uid)),
-deleteDoc(doc(db, 'leaderboard', uid)),
-usernameLower ? deleteDoc(doc(db, 'usernames', usernameLower)) : Promise.resolve(),
+deleteDoc(doc(db, USERS_COLLECTION, uid)),
+deleteDoc(doc(db, LEADERBOARD_COLLECTION, uid)),
+usernameLower ? deleteDoc(doc(db, USERNAMES_COLLECTION, usernameLower)) : Promise.resolve(),
 ]);
 const failure = results.find(r => r.status === 'rejected');
 if (failure) {
@@ -434,45 +372,56 @@ throw failure.reason;
 function useAuthUser() {
 const [user, setUser] = useState(null);
 const [loading, setLoading] = useState(true);
-const [authError, setAuthError] = useState(firebaseInitError);
+const [authError, setAuthError] = useState(null);
 
 useEffect(() => {
-  let mounted = true;
-  if (!auth) {
-    setLoading(false);
-    return () => { mounted = false; };
-  }
+let mounted = true;
+let resetPromise = Promise.resolve();
 
-  let resolved = false;
-  let unsub = () => {};
-  try {
-    unsub = onAuthStateChanged(auth, (u) => {
-      if (!mounted) return;
-      resolved = true;
-      setUser(u || null);
-      setLoading(false);
-      if (u) setAuthError(null);
-    }, (err) => {
-      if (!mounted) return;
-      resolved = true;
-      console.error('Firebase auth state error:', err);
-      setAuthError(friendlyAuthError(err));
-      setLoading(false);
-    });
-  } catch (err) {
-    console.error('Firebase auth listener failed:', err);
+// One-time migration reset: sign out any Firebase session created by the old
+// build and clear stale client-side account state. New sessions are preserved.
+try {
+  const resetKey = 'sq_account_namespace_reset_v2';
+  if (!localStorage.getItem(resetKey)) {
+    localStorage.setItem(resetKey, 'true');
+    resetPromise = auth ? signOut(auth).catch(() => {}) : Promise.resolve();
+  }
+  // Remove the old Google redirect marker and auth-related leftovers.
+  localStorage.removeItem('sq_google_redirect_pending');
+  localStorage.removeItem('firebase:authUser:old');
+} catch {}
+
+if (!auth) {
+  setAuthError(firebaseInitError ? friendlyAuthError(firebaseInitError) : 'Authentication is unavailable.');
+  setLoading(false);
+  return () => { mounted = false; };
+}
+
+let unsub = null;
+const timeout = setTimeout(() => {
+  if (mounted) setLoading(false);
+}, 5000);
+
+resetPromise.finally(() => {
+  if (!mounted) return;
+  unsub = onAuthStateChanged(auth, u => {
+    if (!mounted) return;
+    setUser(u || null);
+    setLoading(false);
+    if (u) setAuthError(null);
+  }, err => {
+    if (!mounted) return;
+    console.error('Firebase auth state error:', err);
     setAuthError(friendlyAuthError(err));
     setLoading(false);
-  }
+  });
+});
 
-  const timeout = setTimeout(() => {
-    if (!resolved && mounted) {
-      console.warn('Firebase auth initialization timed out; continuing as signed out.');
-      setLoading(false);
-    }
-  }, 5000);
-
-  return () => { mounted = false; clearTimeout(timeout); unsub(); };
+return () => {
+  mounted = false;
+  clearTimeout(timeout);
+  if (unsub) unsub();
+};
 }, []);
 
 return { user, loading, authError };
@@ -1338,16 +1287,6 @@ return (
 </svg>
 );
 });
-const GoogleIcon = React.memo(function GoogleIcon({ size = 18 }) {
-return (
-<svg width={size} height={size} viewBox="0 0 48 48">
-<path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12s5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24s8.955,20,20,20s20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
-<path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
-<path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
-<path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
-</svg>
-);
-});
 
 // quest icons — mapped straight onto Lucide (SF-Symbols-style) components.
 // Each is a drop-in React component, so existing call sites (which pass
@@ -1671,25 +1610,10 @@ const [confirmPassword, setConfirmPassword] = useState('');
 const [showPassword, setShowPassword] = useState(false);
 const [error, setError] = useState(null);
 const [submitting, setSubmitting] = useState(false);
-const [googleSubmitting, setGoogleSubmitting] = useState(false);
-useEffect(() => { if (initialError) { setError(initialError); setGoogleSubmitting(false); } }, [initialError]);
+useEffect(() => { if (initialError) setError(initialError); }, [initialError]);
 
 const switchMode = (next) => {
 setMode(next); setError(null); setPassword(''); setConfirmPassword(''); setShowPassword(false);
-};
-
-const handleGoogleClick = async () => {
-if (submitting || googleSubmitting) return;
-setError(null);
-setGoogleSubmitting(true);
-haptic(10);
-try {
-await signInWithGoogle(); // navigates away — nothing after this runs on success
-} catch (err) {
-console.error('Google sign-in failed:', err);
-setError(friendlyAuthError(err));
-setGoogleSubmitting(false);
-}
 };
 
 const handleSubmit = async (e) => {
@@ -1741,20 +1665,6 @@ return (
 ? 'Your progress syncs to this account on any device.'
 : 'Log in to pick up where you left off.'}
 </p>
-
-<button type="button" onClick={handleGoogleClick} disabled={submitting || googleSubmitting}
-style={{ width: '100%', marginTop: 18, padding: '12px', borderRadius: 14, fontSize: 14, fontWeight: 600, color: c.label, background: c.bgSecondary, border: `1px solid ${c.separator}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, opacity: googleSubmitting ? 0.7 : 1 }}>
-{googleSubmitting
-? <span style={{ width: 16, height: 16, border: `2px solid ${c.fill}`, borderTopColor: c.label, borderRadius: '50%' }} className="animate-spin" />
-: <GoogleIcon size={17} />}
-{googleSubmitting ? 'Connecting…' : 'Continue with Google'}
-</button>
-
-<div className="flex items-center gap-3" style={{ margin: '16px 0' }}>
-<div style={{ flex: 1, height: 1, background: c.separator }} />
-<span style={{ fontSize: 11, fontWeight: 500, color: c.labelTertiary, textTransform: 'uppercase', letterSpacing: 0.4 }}>or</span>
-<div style={{ flex: 1, height: 1, background: c.separator }} />
-</div>
 
 <form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
 <div style={{ position: 'relative' }}>
@@ -2175,7 +2085,7 @@ onChange={e => { const f = e.target.files?.[0]; if (f) onPhotoFile(f); e.target.
 <CircleUserRound size={15} strokeWidth={1.9} />
 </div>
 <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Signed in with</span>
-<span style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>{authProviderLabel === 'google' ? 'Google' : 'Username & password'}</span>
+<span style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>Username & password</span>
 </div>
 <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
 
@@ -3598,20 +3508,7 @@ localStorage.setItem('sq_lastReset', String(now));
 // showing a full-screen loading state. If every source were empty and
 // this left username null, that loading screen would never go away.
 const hydrateAccount = useCallback(async (uidToLoad, fallbackEmail, currentUser) => {
-let profileDoc = await getDoc(doc(db, 'users', uidToLoad)).catch(() => null);
-
-// First time this Google account has ever signed in. With popup-based
-// sign-in this used to happen right after signInWithPopup resolved;
-// redirect-based sign-in reloads the page instead, so it's caught here —
-// the first time we see this uid with no profile doc yet.
-if (!profileDoc?.exists?.() && currentUser && getAuthProviderLabel(currentUser) === 'google') {
-try {
-await mintUsernameForGoogleUser(currentUser);
-profileDoc = await getDoc(doc(db, 'users', uidToLoad)).catch(() => null);
-} catch (err) {
-console.error('Failed to set up new Google account:', err);
-}
-}
+let profileDoc = await getDoc(doc(db, USERS_COLLECTION, uidToLoad)).catch(() => null);
 
 const [profile, remoteHistory] = await Promise.all([
 fetchRemoteProfile(uidToLoad),
