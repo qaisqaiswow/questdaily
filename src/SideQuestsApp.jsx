@@ -6,8 +6,10 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import * as exifr from 'exifr';
 import { initializeApp, getApps } from 'firebase/app';
 import {
-getAuth, onAuthStateChanged, signOut, deleteUser, createUserWithEmailAndPassword, signInWithEmailAndPassword,
-updatePassword, reauthenticateWithCredential, EmailAuthProvider,
+getAuth, onAuthStateChanged, signOut, deleteUser, getRedirectResult,
+createUserWithEmailAndPassword, signInWithEmailAndPassword,
+GoogleAuthProvider, signInWithRedirect, setPersistence, browserLocalPersistence,
+updateEmail, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, getDocs, onSnapshot, collection, query, orderBy, limit } from 'firebase/firestore';
 import {
@@ -35,6 +37,8 @@ measurementId: "G-C6S86XMFRZ",
 
 const firebaseApp = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
+const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 const db = getFirestore(firebaseApp);
 const LEADERBOARD_COLLECTION = 'leaderboard';
 const LEADERBOARD_SIZE = 100;
@@ -111,68 +115,158 @@ return [];
 // A `usernames/{usernameLower}` doc is the source of truth for "is this
 // username taken" and for looking up the display-cased username on login;
 // the account's own profile lives in `users/{uid}`.
-function validateEmail(raw) {
-  const email = raw.trim();
-  if (!email) return 'Enter your email address.';
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'Enter a valid email address.';
-  if (email.length > 320) return 'That email address is too long.';
-  return null;
+const USERNAME_EMAIL_DOMAIN = 'questdaily-users.app';
+const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
+
+function usernameToEmail(usernameLower) {
+return `${usernameLower}@${USERNAME_EMAIL_DOMAIN}`;
+}
+
+function validateUsername(raw) {
+const trimmed = raw.trim();
+if (!USERNAME_RE.test(trimmed)) return 'Username must be 3-20 characters: letters, numbers, and underscores only.';
+return null;
+}
+
+function validatePassword(raw) {
+if (raw.length < 6) return 'Password must be at least 6 characters.';
+if (raw.length > 128) return 'Password is too long.';
+return null;
 }
 
 function friendlyAuthError(err) {
-  const code = err?.code || '';
-  if (code === 'auth/email-already-in-use') return 'That email is already registered. Try logging in instead.';
-  if (code === 'auth/weak-password') return 'Password must be at least 6 characters.';
-  if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') return 'Incorrect email or password.';
-  if (code === 'auth/user-not-found') return 'No account found with that email.';
-  if (code === 'auth/too-many-requests') return 'Too many attempts — try again in a bit.';
-  if (code === 'auth/network-request-failed') return "Can't reach the server. Check your connection.";
-  if (code === 'auth/operation-not-allowed') return 'Email/password sign-up is disabled in Firebase. Enable Email/Password under Firebase Authentication > Sign-in method.';
-  if (code === 'auth/admin-restricted-operation') return 'Account creation is currently disabled for this Firebase project.';
-  if (code === 'auth/invalid-api-key') return 'Firebase configuration is invalid. Check the Firebase API key and project settings.';
-  if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
-  if (code === 'auth/invalid-email') return 'Enter a valid email address.';
-  if (code === 'permission-denied' || code === 'firestore/permission-denied') {
-    return "Your database's security rules are blocking this — check the Firestore rules for the users and leaderboard collections.";
-  }
-  return err?.message ? `Something went wrong: ${err.message}` : 'Something went wrong. Please try again.';
+const code = err?.code || '';
+if (code === 'auth/email-already-in-use') return 'That username is already taken.';
+if (code === 'auth/weak-password') return 'Password must be at least 6 characters.';
+if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') return 'Incorrect username or password.';
+if (code === 'auth/user-not-found') return 'No account found with that username.';
+if (code === 'auth/too-many-requests') return 'Too many attempts — try again in a bit.';
+if (code === 'auth/network-request-failed') return "Can't reach the server. Check your connection.";
+if (code === 'auth/requires-recent-login') return 'For security, please log out and log back in, then try again.';
+if (code === 'auth/invalid-email') return 'That username can\'t be used. Try a different one.';
+if (code === 'auth/popup-blocked') return 'Your browser blocked the sign-in popup. Please allow popups for this site and try again.';
+if (code === 'auth/unauthorized-domain') return 'Google sign-in is blocked for this site. Add your deployed Replit domain in Firebase Authentication → Settings → Authorized domains.';
+if (code === 'auth/operation-not-allowed') return 'Google sign-in is disabled. Enable Google under Firebase Authentication → Sign-in method.';
+if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') return 'Google sign-in was cancelled. Try again.';
+if (code === 'auth/account-exists-with-different-credential') return 'That Google account\'s email is already tied to a different sign-in method here.';
+if (code === 'permission-denied' || code === 'firestore/permission-denied') {
+return "Your database's security rules are blocking this — the 'usernames', 'users', and 'leaderboard' collections in Firestore need read/write rules set up. This is a Firebase Console configuration step, not something wrong with what you typed.";
+}
+return err?.message ? `Something went wrong: ${err.message}` : 'Something went wrong. Please try again.';
 }
 
-async function signUpAccount(emailRaw, password) {
-  const email = emailRaw.trim().toLowerCase();
-  const cred = await createUserWithEmailAndPassword(auth, email, password);
-  const displayName = email.split('@')[0] || 'You';
+// Creates a brand-new account. Reserves the username first (so two people
+// racing on the same name get a clean "taken" error instead of a confusing
+// Firebase Auth error), then creates the Auth user, then writes the
+// username reservation + profile doc. If the profile writes fail after the
+// Auth user was already created, the reservation is rolled back so the
+// username isn't permanently stuck on a half-created account.
+async function signUpAccount(usernameRaw, password) {
+const username = usernameRaw.trim();
+const usernameLower = username.toLowerCase();
+const usernameDoc = doc(db, 'usernames', usernameLower);
 
-  // Creating the Firebase Auth user is the important part. Do not make
-  // account creation fail just because Firestore rules temporarily reject
-  // the profile write. The auth state listener will still sign the user in.
-  try {
-    await setDoc(doc(db, 'users', cred.user.uid), {
-      username: displayName,
-      email,
-      createdAt: Date.now(),
-    }, { merge: true });
-  } catch (err) {
-    console.warn('Account created, but profile setup was blocked:', err);
-  }
-
-  return { uid: cred.user.uid, username: displayName, email };
+let existing;
+try {
+existing = await getDoc(usernameDoc);
+} catch (err) {
+console.error('Username availability check failed:', err);
+throw err; // surfaced via friendlyAuthError, including the permission-denied case
+}
+if (existing.exists()) {
+const err = new Error('That username is already taken.');
+err.code = 'auth/email-already-in-use';
+throw err;
 }
 
-async function logInAccount(emailRaw, password) {
-  const email = emailRaw.trim().toLowerCase();
-  const cred = await signInWithEmailAndPassword(auth, email, password);
-  const displayName = email.split('@')[0] || 'You';
-  try {
-    const snap = await getDoc(doc(db, 'users', cred.user.uid));
-    return { uid: cred.user.uid, username: snap.exists() && snap.data()?.username ? snap.data().username : displayName, email: cred.user.email || email };
-  } catch {
-    return { uid: cred.user.uid, username: displayName, email: cred.user.email || email };
-  }
+const cred = await createUserWithEmailAndPassword(auth, usernameToEmail(usernameLower), password);
+try {
+await Promise.all([
+setDoc(usernameDoc, { uid: cred.user.uid, username }),
+setDoc(doc(db, 'users', cred.user.uid), { username, createdAt: Date.now() }),
+]);
+} catch (err) {
+console.error('Failed to finish account setup:', err);
+throw err;
+}
+return { uid: cred.user.uid, username };
+}
+
+// Logs into an existing account. Looks up the reservation doc first purely
+// to recover the original display-cased username (login itself only needs
+// the deterministic email, so a typo'd case still signs in fine).
+async function logInAccount(usernameRaw, password) {
+const username = usernameRaw.trim();
+const usernameLower = username.toLowerCase();
+const cred = await signInWithEmailAndPassword(auth, usernameToEmail(usernameLower), password);
+
+let displayUsername = username;
+try {
+const snap = await getDoc(doc(db, 'usernames', usernameLower));
+if (snap.exists() && snap.data()?.username) displayUsername = snap.data().username;
+} catch { /* non-fatal — fall back to what they typed */ }
+
+return { uid: cred.user.uid, username: displayUsername };
 }
 
 async function logOutAccount() {
-  await signOut(auth);
+await signOut(auth);
+}
+
+// Signs in with a Google popup. Google accounts don't come with a username
+// the person chose, so on a person's very first Google sign-in one is
+// minted automatically from their Google display name (falling back to
+// their email), retried with a random numeric suffix if it's taken — same
+// `usernames` reservation + `users/{uid}` profile doc that the username/
+// password flow creates, so everything downstream (hydration, leaderboard,
+// settings) treats a Google account exactly like any other. Their Google
+// avatar is carried over as the initial profile photo too. Returning users
+// don't need any of this — their `users/{uid}` doc already exists, and the
+// app's normal auth-state hydration effect picks it up the same way a page
+// reload does.
+async function mintUsernameForGoogleUser(user) {
+const rawBase = user.displayName || (user.email ? user.email.split('@')[0] : 'Player');
+let base = rawBase.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 16);
+if (base.length < 3) base = (base + 'Player').slice(0, 16);
+
+let display = base;
+let usernameLower = base.toLowerCase();
+for (let attempt = 0; attempt < 8; attempt++) {
+const snap = await getDoc(doc(db, 'usernames', usernameLower));
+if (!snap.exists()) break;
+const suffix = String(Math.floor(1000 + Math.random() * 9000));
+display = `${base}${suffix}`.slice(0, 20);
+usernameLower = display.toLowerCase();
+}
+
+await Promise.all([
+setDoc(doc(db, 'usernames', usernameLower), { uid: user.uid, username: display }),
+setDoc(doc(db, 'users', user.uid), { username: display, createdAt: Date.now(), photoURL: user.photoURL || null }),
+]);
+if (user.photoURL) {
+await setDoc(doc(db, 'leaderboard', user.uid), { photoURL: user.photoURL }, { merge: true }).catch(() => {});
+}
+}
+
+// Popup-based Google sign-in breaks on hosts that send strict
+// Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy headers (needed
+// here for MediaPipe's multi-threaded WASM) — the popup can't message the
+// result back to this window, so the sign-in just hangs silently.
+// Redirect-based sign-in sidesteps that entirely: the browser navigates to
+// Google and back, and Firebase Auth picks up the result via
+// onAuthStateChanged on reload. The "first time this Google account has
+// ever signed in" username-minting step used to happen right here after
+// the popup resolved — it now lives in hydrateAccount() instead, since
+// nothing runs in *this* page load once the redirect kicks off.
+async function signInWithGoogle() {
+googleProvider.setCustomParameters({ prompt: 'select_account' });
+// Explicitly persist the Firebase session so the Google redirect comes back
+// to the same signed-in account instead of looking like a fresh session.
+await setPersistence(auth, browserLocalPersistence);
+// The welcome screen is already completed before the auth modal is shown.
+// Keep that state across the full-page Google redirect as an extra safety net.
+try { localStorage.setItem('sq_google_redirect_pending', 'true'); } catch {}
+await signInWithRedirect(auth, googleProvider);
 }
 
 // editing an existing account
@@ -193,14 +287,54 @@ return 'other';
 // the caller supplied and retries once. Google accounts skip all of that;
 // their real Google email never changes, so renaming is purely a Firestore
 // metadata update.
-async function updateUsername({ newUsernameRaw }) {
-  const currentUser = auth.currentUser;
-  if (!currentUser) throw Object.assign(new Error('You need to be signed in to do that.'), { code: 'auth/no-current-user' });
-  const newUsername = newUsernameRaw.trim();
-  if (!/^[a-zA-Z0-9_]{3,20}$/.test(newUsername)) throw new Error('Display name must be 3-20 letters, numbers, or underscores.');
-  await setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true });
-  await setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true });
-  return newUsername;
+async function updateUsername({ newUsernameRaw, oldUsername, currentPassword }) {
+const currentUser = auth.currentUser;
+if (!currentUser) throw Object.assign(new Error('You need to be signed in to do that.'), { code: 'auth/no-current-user' });
+
+const newUsername = newUsernameRaw.trim();
+const newLower = newUsername.toLowerCase();
+const oldLower = (oldUsername || '').toLowerCase();
+const usesPassword = getAuthProviderLabel(currentUser) === 'password';
+
+if (newLower === oldLower) {
+// same underlying name, only casing changed (or literally unchanged) —
+// no Auth email involved, just update the display casing everywhere
+await Promise.all([
+setDoc(doc(db, 'usernames', oldLower), { uid: currentUser.uid, username: newUsername }, { merge: true }),
+setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
+setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
+]);
+return newUsername;
+}
+
+const takenSnap = await getDoc(doc(db, 'usernames', newLower));
+if (takenSnap.exists()) {
+throw Object.assign(new Error('That username is already taken.'), { code: 'auth/email-already-in-use' });
+}
+
+if (usesPassword) {
+const newEmail = usernameToEmail(newLower);
+try {
+await updateEmail(currentUser, newEmail);
+} catch (err) {
+if (err?.code === 'auth/requires-recent-login') {
+if (!currentPassword) throw err; // caller prompts for the password and retries with it
+await reauthenticateWithCredential(currentUser, EmailAuthProvider.credential(usernameToEmail(oldLower), currentPassword));
+await updateEmail(currentUser, newEmail);
+} else {
+throw err;
+}
+}
+}
+
+await Promise.all([
+setDoc(doc(db, 'usernames', newLower), { uid: currentUser.uid, username: newUsername }),
+setDoc(doc(db, 'users', currentUser.uid), { username: newUsername }, { merge: true }),
+setDoc(doc(db, 'leaderboard', currentUser.uid), { username: newUsername }, { merge: true }),
+]);
+await deleteDoc(doc(db, 'usernames', oldLower)).catch(() => {});
+
+return newUsername;
 }
 
 // Password-account only. Requires the current password to reauthenticate
@@ -259,7 +393,7 @@ setDoc(doc(db, 'leaderboard', uid), { photoURL: dataUrl }, { merge: true }),
 // since Firestore has no client-side "delete a collection" call), the
 // profile doc, the leaderboard entry, and the username reservation so the
 // name becomes available again.
-async function deleteAccountData(uid) {
+async function deleteAccountData(uid, usernameLower) {
 let historyDocs = [];
 try {
 const historySnap = await getDocs(collection(db, 'users', uid, 'history'));
@@ -272,6 +406,7 @@ await Promise.all(historyDocs.map(d => deleteDoc(d.ref).catch(() => {})));
 const results = await Promise.allSettled([
 deleteDoc(doc(db, 'users', uid)),
 deleteDoc(doc(db, 'leaderboard', uid)),
+usernameLower ? deleteDoc(doc(db, 'usernames', usernameLower)) : Promise.resolve(),
 ]);
 const failure = results.find(r => r.status === 'rejected');
 if (failure) {
@@ -287,22 +422,54 @@ throw failure.reason;
 // nobody's signed in) — the account system's version of the old anonymous
 // uid hook.
 function useAuthUser() {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [authError, setAuthError] = useState(null);
+const [user, setUser] = useState(null);
+const [loading, setLoading] = useState(true);
+const [authError, setAuthError] = useState(null);
 
-  useEffect(() => {
-    let mounted = true;
-    const unsub = onAuthStateChanged(auth, u => {
-      if (!mounted) return;
-      setUser(u);
-      setAuthError(null);
-      setLoading(false);
-    });
-    return () => { mounted = false; unsub(); };
-  }, []);
+useEffect(() => {
+let mounted = true;
+let redirectHandled = false;
 
-  return { user, loading, authError };
+// Wait for Firebase to finish resolving any Google redirect before allowing
+// the main app to decide which screen to show. This prevents the post-Google
+// reload from briefly being treated as a signed-out/fresh app.
+const finishRedirect = async () => {
+try {
+const result = await getRedirectResult(auth);
+redirectHandled = true;
+if (!mounted) return;
+if (result?.user) {
+setUser(result.user);
+setAuthError(null);
+}
+try { localStorage.removeItem('sq_google_redirect_pending'); } catch {}
+} catch (err) {
+redirectHandled = true;
+if (!mounted) return;
+try { localStorage.removeItem('sq_google_redirect_pending'); } catch {}
+if (err?.code && err.code !== 'auth/no-auth-event') {
+console.error('Google redirect result failed:', err);
+setAuthError(friendlyAuthError(err));
+}
+} finally {
+if (mounted && redirectHandled) setLoading(false);
+}
+};
+
+const unsub = onAuthStateChanged(auth, u => {
+if (!mounted) return;
+setUser(u);
+// The redirect handler controls the initial loading gate. After that, normal
+// auth changes can update immediately.
+if (redirectHandled) setLoading(false);
+if (u) setAuthError(null);
+});
+
+finishRedirect();
+return () => { mounted = false; unsub(); };
+}, []);
+
+return { user, loading, authError };
 }
 
 // live top-100, onSnapshot keeps it updated in realtime so no polling needed
@@ -473,64 +640,347 @@ return null;
 }
 
 const REP_METRICS = {
-q1: (lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
-q2: (lms) => { const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
-q4: (lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
-q12:(lms) => { const p = pickSide(lms, [LM.L_SHOULDER, LM.L_HIP, LM.L_KNEE], [LM.R_SHOULDER, LM.R_HIP, LM.R_KNEE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
-q17:(lms) => { const hips = [lms[LM.L_HIP], lms[LM.R_HIP]].filter(p => visiblePt(p)); if (!hips.length) return null; return hips.reduce((s, p) => s + p.y, 0) / hips.length; },
-q23:(lms) => { const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]); return p ? angleBetween(p[0], p[1], p[2]) : null; },
+q1: (lms) => {
+  const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]);
+  return p ? angleBetween(p[0], p[1], p[2]) : null;
+},
+q2: (lms) => {
+  const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]);
+  return p ? angleBetween(p[0], p[1], p[2]) : null;
+},
+q4: (lms) => {
+  const p = pickSide(lms, [LM.L_SHOULDER, LM.L_ELBOW, LM.L_WRIST], [LM.R_SHOULDER, LM.R_ELBOW, LM.R_WRIST]);
+  return p ? angleBetween(p[0], p[1], p[2]) : null;
+},
+q12: (lms) => {
+  const p = pickSide(lms, [LM.L_SHOULDER, LM.L_HIP, LM.L_KNEE], [LM.R_SHOULDER, LM.R_HIP, LM.R_KNEE]);
+  return p ? angleBetween(p[0], p[1], p[2]) : null;
+},
+q17: (lms) => {
+  const ankles = [lms[LM.L_ANKLE], lms[LM.R_ANKLE]].filter(p => visiblePt(p));
+  if (!ankles.length) return null;
+  return ankles.reduce((sum, p) => sum + p.y, 0) / ankles.length;
+},
+q23: (lms) => {
+  const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]);
+  return p ? angleBetween(p[0], p[1], p[2]) : null;
+},
 };
 
 const REP_CONFIG = {
 q1: { mode: 'angle', downThreshold: 100, upThreshold: 155, cueDown: 'Lower into the pushup', cueUp: 'Push back up to full extension' },
 q2: { mode: 'angle', downThreshold: 110, upThreshold: 160, cueDown: 'Squat down', cueUp: 'Stand back up' },
-q4: { mode: 'angle', downThreshold: 80, upThreshold: 150, cueDown: 'Pull up to the bar', cueUp: 'Lower to a full hang' },
-q12: { mode: 'angle', downThreshold: 110, upThreshold: 150, cueDown: 'Crunch up', cueUp: 'Lower back down' },
-q17: { mode: 'height', downThreshold: 0.02, upThreshold: 0.005, cueDown: 'Jump!', cueUp: 'Land' },
+q4: { mode: 'angle', downThreshold: 80, upThreshold: 150, cueDown: 'Pull your chin toward the bar', cueUp: 'Lower to a full hang' },
+q12: { mode: 'angle', downThreshold: 110, upThreshold: 150, cueDown: 'Sit up and bring your torso forward', cueUp: 'Lie completely back down' },
+q17: { mode: 'height', downThreshold: 0.025, upThreshold: 0.008, cueDown: 'Jump', cueUp: 'Land and jump again' },
 q23: { mode: 'angle', downThreshold: 110, upThreshold: 160, cueDown: 'Lower into the lunge', cueUp: 'Return to standing' },
 };
 
 const MIN_REP_MS = 500;
+const FORM_STABLE_FRAMES = 5;
 
 function createPoseRepState(initialReps = 0) {
-return { phase: 'up', reps: initialReps, baselineY: null, lastRepAt: 0, smoothed: null };
+return {
+  phase: 'up',
+  reps: initialReps,
+  baselineY: null,
+  lastRepAt: 0,
+  smoothed: null,
+  validFrames: 0,
+  invalidFrames: 0,
+  movementStarted: false,
+};
+}
+
+function distance2D(a, b) {
+if (!a || !b) return null;
+return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function getAveragePoint(lms, leftIndex, rightIndex) {
+const left = lms[leftIndex];
+const right = lms[rightIndex];
+if (visiblePt(left, 0.40) && visiblePt(right, 0.40)) {
+  return {
+    x: (left.x + right.x) / 2,
+    y: (left.y + right.y) / 2,
+    visibility: Math.min(left.visibility ?? 1, right.visibility ?? 1),
+  };
+}
+return visiblePt(left, 0.40) ? left : visiblePt(right, 0.40) ? right : null;
+}
+
+function getBestExerciseSide(lms) {
+const left = [lms[LM.L_SHOULDER], lms[LM.L_HIP], lms[LM.L_KNEE], lms[LM.L_ANKLE]];
+const right = [lms[LM.R_SHOULDER], lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]];
+const score = points => points.reduce((n, p) => n + (visiblePt(p, 0.40) ? 1 : 0), 0);
+return score(right) >= score(left) ? 'right' : 'left';
+}
+
+function getExerciseSidePoints(lms, side) {
+if (side === 'left') {
+  return {
+    shoulder: lms[LM.L_SHOULDER],
+    elbow: lms[LM.L_ELBOW],
+    wrist: lms[LM.L_WRIST],
+    hip: lms[LM.L_HIP],
+    knee: lms[LM.L_KNEE],
+    ankle: lms[LM.L_ANKLE],
+  };
+}
+return {
+  shoulder: lms[LM.R_SHOULDER],
+  elbow: lms[LM.R_ELBOW],
+  wrist: lms[LM.R_WRIST],
+  hip: lms[LM.R_HIP],
+  knee: lms[LM.R_KNEE],
+  ankle: lms[LM.R_ANKLE],
+};
+}
+
+function straightBodyAngle(shoulder, hip, ankle) {
+if (!shoulder || !hip || !ankle) return null;
+return angleBetween(shoulder, hip, ankle);
+}
+
+// This is deliberately separate from the rep angle. The rep angle answers
+// "did a joint move?" while this answers "does the whole body look like the
+// exercise?". A rep can only progress after both checks pass.
+function validateExerciseForm(questId, lms) {
+if (!lms) return { valid: false, cue: 'Move fully into frame' };
+
+const side = getBestExerciseSide(lms);
+const p = getExerciseSidePoints(lms, side);
+const shoulders = getAveragePoint(lms, LM.L_SHOULDER, LM.R_SHOULDER);
+const hips = getAveragePoint(lms, LM.L_HIP, LM.R_HIP);
+const knees = getAveragePoint(lms, LM.L_KNEE, LM.R_KNEE);
+const ankles = getAveragePoint(lms, LM.L_ANKLE, LM.R_ANKLE);
+
+// PUSHUPS: require a long, plank-like body instead of only an elbow bend.
+if (questId === 'q1') {
+  if (![p.shoulder, p.hip, p.knee, p.ankle, p.elbow, p.wrist].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Keep your full body and arms visible' };
+  }
+
+  const bodyAngle = straightBodyAngle(p.shoulder, p.hip, p.ankle);
+  const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
+  const shoulderHip = distance2D(p.shoulder, p.hip);
+  const hipAnkle = distance2D(p.hip, p.ankle);
+
+  if (bodyAngle === null || bodyAngle < 145) {
+    return { valid: false, cue: 'Keep your body straight like a plank' };
+  }
+  if (kneeAngle !== null && kneeAngle < 145) {
+    return { valid: false, cue: 'Keep your legs extended' };
+  }
+  if ((shoulderHip ?? 0) < 0.10 || (hipAnkle ?? 0) < 0.20) {
+    return { valid: false, cue: 'Use a full pushup position' };
+  }
+  return { valid: true, cue: 'Good pushup form' };
+}
+
+// SQUATS: require both feet/legs and a real hip/knee bend. This rejects
+// seated arm movements because the torso/leg geometry must also match.
+if (questId === 'q2') {
+  if (![p.hip, p.knee, p.ankle, p.shoulder].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Keep your legs and upper body visible' };
+  }
+
+  const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
+  const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
+
+  if (kneeAngle === null || torsoAngle === null) {
+    return { valid: false, cue: 'Show your whole squat' };
+  }
+  if (torsoAngle < 105) {
+    return { valid: false, cue: 'Keep your chest up' };
+  }
+  return { valid: true, cue: 'Good squat form' };
+}
+
+// PULLUPS: require a vertical hanging body and hands above the shoulders.
+// Sitting arm curls cannot satisfy this geometry.
+if (questId === 'q4') {
+  if (![p.shoulder, p.elbow, p.wrist, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Show your full body hanging from the bar' };
+  }
+
+  const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
+  const legAngle = angleBetween(p.hip, p.knee, p.ankle);
+  const wristShoulderDistance = Math.abs(p.wrist.y - p.shoulder.y);
+
+  if (torsoAngle === null || torsoAngle < 145) {
+    return { valid: false, cue: 'Hang vertically from the bar' };
+  }
+  if (legAngle !== null && legAngle < 125) {
+    return { valid: false, cue: 'Keep your legs mostly extended' };
+  }
+  if (p.wrist.y > p.shoulder.y + 0.12 || wristShoulderDistance < 0.05) {
+    return { valid: false, cue: 'Keep your hands above the bar area' };
+  }
+  return { valid: true, cue: 'Good pullup form' };
+}
+
+// SITUPS: require the hips and knees to stay anchored while the torso changes
+// angle. Arm-only movement while sitting/standing won't match this geometry.
+if (questId === 'q12') {
+  if (![p.shoulder, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Lie down with your full body visible' };
+  }
+
+  const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
+  const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
+
+  if (torsoAngle === null) return { valid: false, cue: 'Keep your torso visible' };
+  if (kneeAngle !== null && kneeAngle < 75) {
+    return { valid: false, cue: 'Keep your knees reasonably stable' };
+  }
+  if (torsoAngle < 45) {
+    return { valid: false, cue: 'Use a controlled situp, not a standing movement' };
+  }
+  return { valid: true, cue: 'Good situp position' };
+}
+
+// JUMP ROPE: track the ankles rather than just hip movement, and require the
+// person to remain upright with both feet close together.
+if (questId === 'q17') {
+  if (![shoulders, hips, knees, ankles].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Keep your whole body and both feet visible' };
+  }
+
+  const torsoAngle = angleBetween(shoulders, hips, knees);
+  const kneeLeft = angleBetween(lms[LM.L_HIP], lms[LM.L_KNEE], lms[LM.L_ANKLE]);
+  const kneeRight = angleBetween(lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]);
+  const ankleGap = Math.abs(lms[LM.L_ANKLE].x - lms[LM.R_ANKLE].x);
+
+  if (torsoAngle !== null && torsoAngle < 145) {
+    return { valid: false, cue: 'Stay upright while jumping' };
+  }
+  if ((kneeLeft !== null && kneeLeft < 105) || (kneeRight !== null && kneeRight < 105)) {
+    return { valid: false, cue: 'Use small rope jumps, not deep squats' };
+  }
+  if (ankleGap > 0.35) {
+    return { valid: false, cue: 'Keep your feet closer together' };
+  }
+  return { valid: true, cue: 'Good jump-rope form' };
+}
+
+// LUNGES: require a real split stance. A seated knee bend or arm movement
+// cannot satisfy both legs' geometry.
+if (questId === 'q23') {
+  const leftHip = lms[LM.L_HIP], rightHip = lms[LM.R_HIP];
+  const leftKnee = lms[LM.L_KNEE], rightKnee = lms[LM.R_KNEE];
+  const leftAnkle = lms[LM.L_ANKLE], rightAnkle = lms[LM.R_ANKLE];
+
+  if (![leftHip, rightHip, leftKnee, rightKnee, leftAnkle, rightAnkle].every(x => visiblePt(x, 0.40))) {
+    return { valid: false, cue: 'Keep both legs completely visible' };
+  }
+
+  const leftKneeAngle = angleBetween(leftHip, leftKnee, leftAnkle);
+  const rightKneeAngle = angleBetween(rightHip, rightKnee, rightAnkle);
+  const stanceWidth = Math.abs(leftAnkle.x - rightAnkle.x);
+  const hipWidth = Math.abs(leftHip.x - rightHip.x);
+
+  if (stanceWidth < Math.max(0.12, hipWidth * 1.15)) {
+    return { valid: false, cue: 'Step one foot forward into a real lunge stance' };
+  }
+  if (leftKneeAngle === null || rightKneeAngle === null) {
+    return { valid: false, cue: 'Keep both knees visible' };
+  }
+  if (leftKneeAngle < 55 || rightKneeAngle < 55) {
+    return { valid: false, cue: 'Do not collapse your knees inward' };
+  }
+  return { valid: true, cue: 'Good lunge form' };
+}
+
+return { valid: true, cue: '' };
 }
 
 function updatePoseRepState(state, questId, landmarks, now) {
 const config = REP_CONFIG[questId];
 const metricFn = REP_METRICS[questId];
 if (!config || !metricFn || !landmarks) {
-return { reps: state.reps, phase: state.phase, cue: 'Move into frame', counted: false };
+return { reps: state.reps, phase: state.phase, cue: 'Move into frame', counted: false, formValid: false };
 }
+
+const form = validateExerciseForm(questId, landmarks);
+
+if (!form.valid) {
+  state.invalidFrames = Math.min(30, state.invalidFrames + 1);
+  state.validFrames = Math.max(0, state.validFrames - 2);
+  state.movementStarted = false;
+  return {
+    reps: state.reps,
+    phase: state.phase,
+    cue: form.cue,
+    counted: false,
+    formValid: false,
+  };
+}
+
+state.invalidFrames = Math.max(0, state.invalidFrames - 1);
+state.validFrames = Math.min(FORM_STABLE_FRAMES + 4, state.validFrames + 1);
+
+// Never let a one-frame pose glitch start or finish a rep.
+if (state.validFrames < FORM_STABLE_FRAMES) {
+  return {
+    reps: state.reps,
+    phase: state.phase,
+    cue: 'Hold the correct exercise position',
+    counted: false,
+    formValid: true,
+  };
+}
+
 const raw = metricFn(landmarks);
 if (raw === null) {
-return { reps: state.reps, phase: state.phase, cue: 'Move fully into frame', counted: false };
+return { reps: state.reps, phase: state.phase, cue: 'Move fully into frame', counted: false, formValid: false };
 }
+
 state.smoothed = state.smoothed === null ? raw : state.smoothed * 0.6 + raw * 0.4;
 const value = state.smoothed;
 let counted = false;
 
 if (config.mode === 'height') {
-if (state.baselineY === null) state.baselineY = value;
-else state.baselineY = state.baselineY * 0.98 + value * 0.02;
-const jumpHeight = state.baselineY - value;
-if (state.phase === 'up' && jumpHeight >= config.downThreshold) {
-state.phase = 'down';
-} else if (state.phase === 'down' && jumpHeight <= config.upThreshold) {
-if (now - state.lastRepAt >= MIN_REP_MS) { state.reps += 1; state.lastRepAt = now; counted = true; }
-state.phase = 'up';
-}
+  // Establish the jump baseline only while the athlete is in a valid standing
+  // rope-jump posture. This prevents camera movement from becoming a "rep".
+  if (state.baselineY === null) {
+    state.baselineY = value;
+  } else {
+    state.baselineY = state.baselineY * 0.985 + value * 0.015;
+  }
+
+  const jumpHeight = state.baselineY - value;
+
+  if (state.phase === 'up' && jumpHeight >= config.downThreshold) {
+    state.phase = 'down';
+    state.movementStarted = true;
+  } else if (state.phase === 'down' && jumpHeight <= config.upThreshold) {
+    if (state.movementStarted && now - state.lastRepAt >= MIN_REP_MS) {
+      state.reps += 1;
+      state.lastRepAt = now;
+      counted = true;
+    }
+    state.phase = 'up';
+    state.movementStarted = false;
+  }
 } else {
-if (state.phase === 'up' && value <= config.downThreshold) {
-state.phase = 'down';
-} else if (state.phase === 'down' && value >= config.upThreshold) {
-if (now - state.lastRepAt >= MIN_REP_MS) { state.reps += 1; state.lastRepAt = now; counted = true; }
-state.phase = 'up';
-}
+  if (state.phase === 'up' && value <= config.downThreshold) {
+    state.phase = 'down';
+    state.movementStarted = true;
+  } else if (state.phase === 'down' && value >= config.upThreshold) {
+    if (state.movementStarted && now - state.lastRepAt >= MIN_REP_MS) {
+      state.reps += 1;
+      state.lastRepAt = now;
+      counted = true;
+    }
+    state.phase = 'up';
+    state.movementStarted = false;
+  }
 }
 
 const cue = state.phase === 'up' ? config.cueDown : config.cueUp;
-return { reps: state.reps, phase: state.phase, cue, counted };
+return { reps: state.reps, phase: state.phase, cue, counted, formValid: true };
 }
 
 // quest labels
@@ -882,6 +1332,16 @@ return (
 </svg>
 );
 });
+const GoogleIcon = React.memo(function GoogleIcon({ size = 18 }) {
+return (
+<svg width={size} height={size} viewBox="0 0 48 48">
+<path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12s5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24s8.955,20,20,20s20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
+<path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
+<path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
+<path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
+</svg>
+);
+});
 
 // quest icons — mapped straight onto Lucide (SF-Symbols-style) components.
 // Each is a drop-in React component, so existing call sites (which pass
@@ -1119,6 +1579,7 @@ const updates = [
 { Icon: Sparkles, title: 'Expo glass UI', body: 'A cleaner, deeper glass treatment with blur, highlights, reflections, and smoother depth across the app.' },
 { Icon: CircleDot, title: 'Thinking orbs', body: 'New animated thinking orbs make AI processing and verification states feel alive without blocking the experience.' },
 { Icon: ShieldCheck, title: 'AI camera upgrade', body: 'The body skeleton now stays visible on every camera challenge, with smoother tracking and clearer verification feedback.' },
+{ Icon: Activity, title: 'Smarter exercise form detection', body: 'AI now checks your actual exercise posture, movement, and range of motion before counting a rep, making fake or incorrect movements much harder to count.' },
 { Icon: Camera, title: 'Camera controls', body: 'The camera flow and cancel behavior were cleaned up so leaving a challenge is more reliable.' },
 { Icon: Timer, title: '24-hour quests', body: 'The daily countdown and automatic 24-hour refresh are back, with the next reset always visible.' },
 { Icon: ListChecks, title: 'Cleaner navigation', body: 'The leaderboard is now its own page and zero-XP players stay out of the rankings.' },
@@ -1197,170 +1658,154 @@ Get started
 // rest of the app until resolved, same as the old name-picker did, but now
 // backs onto real Firebase Auth accounts instead of a purely local name.
 function AuthModal({ onSignedUp, onLoggedIn, c, initialError }) {
-  const [mode, setMode] = useState('signup');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState(null);
-  const [submitting, setSubmitting] = useState(false);
-  const submittingRef = useRef(false);
+const [mode, setMode] = useState('signup'); // 'signup' | 'login'
+const [username, setUsername] = useState('');
+const [password, setPassword] = useState('');
+const [confirmPassword, setConfirmPassword] = useState('');
+const [showPassword, setShowPassword] = useState(false);
+const [error, setError] = useState(null);
+const [submitting, setSubmitting] = useState(false);
+const [googleSubmitting, setGoogleSubmitting] = useState(false);
+useEffect(() => { if (initialError) { setError(initialError); setGoogleSubmitting(false); } }, [initialError]);
 
-  useEffect(() => {
-    if (initialError) setError(initialError);
-  }, [initialError]);
+const switchMode = (next) => {
+setMode(next); setError(null); setPassword(''); setConfirmPassword(''); setShowPassword(false);
+};
 
-  const switchMode = (next) => {
-    if (submitting) return;
-    setMode(next);
-    setError(null);
-    setPassword('');
-    setConfirmPassword('');
-    setShowPassword(false);
-  };
+const handleGoogleClick = async () => {
+if (submitting || googleSubmitting) return;
+setError(null);
+setGoogleSubmitting(true);
+haptic(10);
+try {
+await signInWithGoogle(); // navigates away — nothing after this runs on success
+} catch (err) {
+console.error('Google sign-in failed:', err);
+setError(friendlyAuthError(err));
+setGoogleSubmitting(false);
+}
+};
 
-  const handleSubmit = async (e) => {
-    if (e?.preventDefault) e.preventDefault();
-    if (submittingRef.current) return;
-    submittingRef.current = true;
-    setError(null);
+const handleSubmit = async (e) => {
+e.preventDefault();
+if (submitting) return;
+setError(null);
 
-    const emailError = validateEmail(email);
-    if (emailError) {
-      setError(emailError);
-      return;
-    }
+const usernameError = validateUsername(username);
+if (usernameError) { setError(usernameError); return; }
 
-    const passwordError = validatePassword(password);
-    if (passwordError) {
-      setError(passwordError);
-      return;
-    }
+if (mode === 'signup') {
+const passwordError = validatePassword(password);
+if (passwordError) { setError(passwordError); return; }
+if (password !== confirmPassword) { setError('Passwords don\'t match.'); return; }
+} else if (!password) {
+setError('Enter your password.'); return;
+}
 
-    if (mode === 'signup' && password !== confirmPassword) {
-      setError("Passwords don't match.");
-      return;
-    }
+setSubmitting(true);
+haptic(10);
+try {
+if (mode === 'signup') {
+const { username: finalUsername } = await signUpAccount(username, password);
+onSignedUp(finalUsername);
+} else {
+const { username: finalUsername } = await logInAccount(username, password);
+onLoggedIn(finalUsername);
+}
+} catch (err) {
+console.error(`${mode} failed:`, err);
+setError(friendlyAuthError(err));
+setSubmitting(false);
+}
+};
 
-    setSubmitting(true);
-    haptic(10);
+const inputStyle = { width: '100%', borderRadius: 14, border: `1px solid ${c.separator}`, background: c.bgSecondary, color: c.label, padding: '11px 40px 11px 40px', fontSize: 15, fontWeight: 500, outline: 'none' };
 
-    try {
-      if (mode === 'signup') {
-        const result = await signUpAccount(email, password);
-        setSubmitting(false);
-        submittingRef.current = false;
-        onSignedUp(result.username);
-      } else {
-        const result = await logInAccount(email, password);
-        setSubmitting(false);
-        submittingRef.current = false;
-        onLoggedIn(result.username);
-      }
-    } catch (err) {
-      console.error(`${mode} failed:`, err);
-      setError(friendlyAuthError(err));
-      setSubmitting(false);
-      submittingRef.current = false;
-    }
-  };
+return (
+<div className="fixed inset-0 z-[100] flex items-center justify-center p-5 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
+<div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 360, padding: '28px 24px 22px', textAlign: 'center' }}>
+<div style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+<BrandLogo size={28} />
+</div>
+<h2 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label }}>
+{mode === 'signup' ? 'Create your account' : 'Welcome back'}
+</h2>
+<p style={{ fontSize: 13, lineHeight: 1.4, color: c.labelSecondary, marginTop: 6 }}>
+{mode === 'signup'
+? 'Your progress syncs to this account on any device.'
+: 'Log in to pick up where you left off.'}
+</p>
 
-  const inputStyle = {
-    width: '100%',
-    borderRadius: 14,
-    border: `1px solid ${c.separator}`,
-    background: c.bgSecondary,
-    color: c.label,
-    padding: '11px 40px 11px 40px',
-    fontSize: 15,
-    fontWeight: 500,
-    outline: 'none',
-  };
+<button type="button" onClick={handleGoogleClick} disabled={submitting || googleSubmitting}
+style={{ width: '100%', marginTop: 18, padding: '12px', borderRadius: 14, fontSize: 14, fontWeight: 600, color: c.label, background: c.bgSecondary, border: `1px solid ${c.separator}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, opacity: googleSubmitting ? 0.7 : 1 }}>
+{googleSubmitting
+? <span style={{ width: 16, height: 16, border: `2px solid ${c.fill}`, borderTopColor: c.label, borderRadius: '50%' }} className="animate-spin" />
+: <GoogleIcon size={17} />}
+{googleSubmitting ? 'Connecting…' : 'Continue with Google'}
+</button>
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-5 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
-      <div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 360, padding: '28px 24px 22px', textAlign: 'center' }}>
-        <div style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-          <BrandLogo size={28} />
-        </div>
+<div className="flex items-center gap-3" style={{ margin: '16px 0' }}>
+<div style={{ flex: 1, height: 1, background: c.separator }} />
+<span style={{ fontSize: 11, fontWeight: 500, color: c.labelTertiary, textTransform: 'uppercase', letterSpacing: 0.4 }}>or</span>
+<div style={{ flex: 1, height: 1, background: c.separator }} />
+</div>
 
-        <h2 className="sq-title" style={{ fontSize: 17, fontWeight: 600, color: c.label }}>
-          {mode === 'signup' ? 'Create your account' : 'Welcome back'}
-        </h2>
-        <p style={{ fontSize: 13, lineHeight: 1.4, color: c.labelSecondary, marginTop: 6 }}>
-          {mode === 'signup' ? 'Create an account with your email to save your progress.' : 'Log in to pick up where you left off.'}
-        </p>
+<form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
+<div style={{ position: 'relative' }}>
+<AtSign size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+<input
+type="text" value={username} autoFocus autoCapitalize="none" autoCorrect="off"
+maxLength={20}
+onChange={e => { setUsername(e.target.value); setError(null); }}
+placeholder="Username"
+style={{ ...inputStyle, paddingRight: 14 }}
+/>
+</div>
 
-        <form onSubmit={handleSubmit} noValidate style={{ textAlign: 'left', marginTop: 18 }}>
-          <div style={{ position: 'relative' }}>
-            <AtSign size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-            <input
-              type="email"
-              value={email}
-              autoFocus
-              autoCapitalize="none"
-              autoCorrect="off"
-              autoComplete={mode === 'signup' ? 'email' : 'username'}
-              inputMode="email"
-              onChange={e => { setEmail(e.target.value); setError(null); }}
-              placeholder="Email address"
-              style={{ ...inputStyle, paddingRight: 14 }}
-              disabled={submitting}
-            />
-          </div>
+<div style={{ position: 'relative', marginTop: 10 }}>
+<Lock size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+<input
+type={showPassword ? 'text' : 'password'} value={password}
+autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+onChange={e => { setPassword(e.target.value); setError(null); }}
+placeholder="Password"
+style={inputStyle}
+/>
+<button type="button" onClick={() => setShowPassword(s => !s)} aria-label={showPassword ? 'Hide password' : 'Show password'}
+style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: c.labelTertiary, padding: 4 }}>
+{showPassword ? <EyeOff size={16} strokeWidth={2} /> : <Eye size={16} strokeWidth={2} />}
+</button>
+</div>
 
-          <div style={{ position: 'relative', marginTop: 10 }}>
-            <Lock size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-            <input
-              type={showPassword ? 'text' : 'password'}
-              value={password}
-              autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-              onChange={e => { setPassword(e.target.value); setError(null); }}
-              placeholder="Password"
-              style={inputStyle}
-              disabled={submitting}
-            />
-            <button type="button" onClick={() => setShowPassword(s => !s)} aria-label={showPassword ? 'Hide password' : 'Show password'} disabled={submitting}
-              style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: c.labelTertiary, padding: 4 }}>
-              {showPassword ? <EyeOff size={16} strokeWidth={2} /> : <Eye size={16} strokeWidth={2} />}
-            </button>
-          </div>
+{mode === 'signup' && (
+<div style={{ position: 'relative', marginTop: 10 }}>
+<Lock size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+<input
+type={showPassword ? 'text' : 'password'} value={confirmPassword}
+autoComplete="new-password"
+onChange={e => { setConfirmPassword(e.target.value); setError(null); }}
+placeholder="Confirm password"
+style={{ ...inputStyle, paddingRight: 14 }}
+/>
+</div>
+)}
 
-          {mode === 'signup' && (
-            <div style={{ position: 'relative', marginTop: 10 }}>
-              <Lock size={16} strokeWidth={2} color={c.labelTertiary} style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={confirmPassword}
-                autoComplete="new-password"
-                onChange={e => { setConfirmPassword(e.target.value); setError(null); }}
-                placeholder="Confirm password"
-                style={{ ...inputStyle, paddingRight: 14 }}
-                disabled={submitting}
-              />
-            </div>
-          )}
+{error && <p style={{ color: c.red, fontSize: 12, fontWeight: 500, marginTop: 10 }}>{error}</p>}
 
-          {error && <p role="alert" style={{ color: c.red, fontSize: 12, fontWeight: 500, marginTop: 10 }}>{error}</p>}
+<button type="submit" disabled={submitting}
+style={{ width: '100%', marginTop: 14, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: '#FFFFFF', background: c.blue, opacity: submitting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+{submitting && <span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,0.35)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
+{submitting ? (mode === 'signup' ? 'Creating account…' : 'Logging in…') : (mode === 'signup' ? 'Create account' : 'Log in')}
+</button>
+</form>
 
-          <button
-            type="submit"
-            onClick={handleSubmit}
-            disabled={submitting}
-            style={{ width: '100%', marginTop: 14, padding: '13px', borderRadius: 999, fontSize: 15, fontWeight: 600, color: '#FFFFFF', background: c.blue, opacity: submitting ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: submitting ? 'wait' : 'pointer' }}
-          >
-            {submitting && <span style={{ width: 15, height: 15, border: '2px solid rgba(255,255,255,0.35)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
-            {submitting ? (mode === 'signup' ? 'Creating account…' : 'Logging in…') : (mode === 'signup' ? 'Create account' : 'Log in')}
-          </button>
-        </form>
-
-        <button type="button" onClick={() => switchMode(mode === 'signup' ? 'login' : 'signup')} disabled={submitting}
-          style={{ marginTop: 16, fontSize: 13, fontWeight: 500, color: c.blue }}>
-          {mode === 'signup' ? 'Already have an account? Log in' : 'New here? Create an account'}
-        </button>
-      </div>
-    </div>
-  );
+<button onClick={() => switchMode(mode === 'signup' ? 'login' : 'signup')} disabled={submitting}
+style={{ marginTop: 16, fontSize: 13, fontWeight: 500, color: c.blue }}>
+{mode === 'signup' ? 'Already have an account? Log in' : 'New here? Create an account'}
+</button>
+</div>
+</div>
+);
 }
 
 // leaderboard
@@ -1587,11 +2032,18 @@ const updates = [
   { Icon: Sparkles, title: 'Expo glass UI', body: 'A cleaner, deeper glass treatment with blur, highlights, reflections, and smoother depth across the app.' },
   { Icon: CircleDot, title: 'Thinking orbs', body: 'New animated thinking orbs make AI processing and verification states feel alive without blocking the experience.' },
   { Icon: ShieldCheck, title: 'AI camera upgrade', body: 'The body skeleton now stays visible on every camera challenge, with smoother tracking and clearer verification feedback.' },
+{ Icon: Activity, title: 'Smarter exercise form detection', body: 'AI now checks your actual exercise posture, movement, and range of motion before counting a rep, making fake or incorrect movements much harder to count.' },
   { Icon: Camera, title: 'Camera controls', body: 'The camera flow and cancel behavior were cleaned up so leaving a challenge is more reliable.' },
   { Icon: Timer, title: '24-hour quests', body: 'The daily countdown and automatic 24-hour refresh are back, with the next reset always visible.' },
   { Icon: ListChecks, title: 'Cleaner navigation', body: 'The leaderboard is now its own page and zero-XP players stay out of the rankings.' },
   { Icon: UserCog, title: 'Account + settings', body: 'Your account and settings options stay together in one place, with the previous controls preserved.' },
 ];
+
+const [usernameInput, setUsernameInput] = useState(username || '');
+const [usernameReauthPassword, setUsernameReauthPassword] = useState('');
+const [needsReauthForUsername, setNeedsReauthForUsername] = useState(false);
+const [usernameSaving, setUsernameSaving] = useState(false);
+const [usernameError, setUsernameError] = useState(null);
 
 const [currentPasswordInput, setCurrentPasswordInput] = useState('');
 const [newPasswordInput, setNewPasswordInput] = useState('');
@@ -1608,10 +2060,36 @@ const smallInputStyle = { width: '100%', borderRadius: 12, border: `1px solid ${
 
 const openEditor = (which) => {
 setEditing(which);
+if (which === 'username') { setUsernameInput(username || ''); setUsernameError(null); setNeedsReauthForUsername(false); setUsernameReauthPassword(''); }
 if (which === 'password') { setCurrentPasswordInput(''); setNewPasswordInput(''); setConfirmNewPasswordInput(''); setPasswordError(null); setPasswordSaved(false); }
 if (which === 'delete') setDeleteError(null);
 };
 const closeEditor = () => setEditing(null);
+
+const handleSaveUsername = async () => {
+const validationError = validateUsername(usernameInput);
+if (validationError) { setUsernameError(validationError); return; }
+setUsernameSaving(true); setUsernameError(null);
+try {
+const finalUsername = await updateUsername({
+newUsernameRaw: usernameInput,
+oldUsername: username,
+currentPassword: needsReauthForUsername ? usernameReauthPassword : undefined,
+});
+onUsernameChanged(finalUsername);
+setEditing(null);
+} catch (err) {
+if (err?.code === 'auth/requires-recent-login') {
+setNeedsReauthForUsername(true);
+setUsernameError('For security, enter your password to confirm this change.');
+} else {
+console.error('Username update failed:', err);
+setUsernameError(friendlyAuthError(err));
+}
+} finally {
+setUsernameSaving(false);
+}
+};
 
 const handleSavePassword = async () => {
 if (!currentPasswordInput) { setPasswordError('Enter your current password.'); return; }
@@ -1643,7 +2121,7 @@ if (res && !res.ok) { setDeleting(false); setDeleteError(res.error); }
 // on success this component unmounts (auth state flips to signed-out), nothing more to do
 };
 
-const usesPassword = true;
+const usesPassword = authProviderLabel === 'password';
 
 return (
 <div className="relative z-10 flex flex-col flex-1 sq-anim-in">
@@ -1691,20 +2169,45 @@ onChange={e => { const f = e.target.files?.[0]; if (f) onPhotoFile(f); e.target.
 <CircleUserRound size={15} strokeWidth={1.9} />
 </div>
 <span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Signed in with</span>
-<span style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>Email & password</span>
+<span style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }}>{authProviderLabel === 'google' ? 'Google' : 'Username & password'}</span>
 </div>
 <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
 
-{/* email */}
-<div style={rowStyle}>
-  <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-    <AtSign size={14} strokeWidth={1.9} />
-  </div>
-  <div style={{ flex: 1, minWidth: 0 }}>
-    <p style={{ fontSize: 15, fontWeight: 500, color: c.label }}>Email</p>
-    <p style={{ fontSize: 12, color: c.labelSecondary, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{auth.currentUser?.email || 'Not available'}</p>
-  </div>
+{/* username */}
+{editing !== 'username' ? (
+<button onClick={() => openEditor('username')} style={rowStyle}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<UserCog size={14} strokeWidth={1.9} />
 </div>
+<span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Edit username</span>
+<ChevronIcon color={c.labelTertiary} />
+</button>
+) : (
+<div style={{ padding: '14px' }}>
+<p style={{ fontSize: 13, fontWeight: 600, color: c.label, marginBottom: 8 }}>Edit username</p>
+<input value={usernameInput} maxLength={20} autoCapitalize="none" autoCorrect="off"
+onChange={e => { setUsernameInput(e.target.value); setUsernameError(null); }}
+style={smallInputStyle} />
+{needsReauthForUsername && (
+<input type="password" value={usernameReauthPassword} placeholder="Current password"
+onChange={e => { setUsernameReauthPassword(e.target.value); setUsernameError(null); }}
+style={{ ...smallInputStyle, marginTop: 8 }} />
+)}
+{usernameError && <p style={{ fontSize: 12, fontWeight: 500, color: c.red, marginTop: 8 }}>{usernameError}</p>}
+<div className="flex gap-2.5" style={{ marginTop: 12 }}>
+<button onClick={closeEditor} disabled={usernameSaving}
+style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.fill, color: c.label }}>
+Cancel
+</button>
+<button onClick={handleSaveUsername} disabled={usernameSaving || (needsReauthForUsername && !usernameReauthPassword)}
+style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 600, background: c.blue, color: '#fff', opacity: usernameSaving ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+{usernameSaving && <span style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%' }} className="animate-spin" />}
+{usernameSaving ? 'Saving…' : 'Save'}
+</button>
+</div>
+</div>
+)}
+<div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
 
 {/* password — password accounts only */}
 {usesPassword && (
@@ -2655,8 +3158,10 @@ ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.
 };
 }, [hasSkeletonTracking, quest.reps, quest.id, phase, confirmed]);
 
-// rep quests are verified by joint-angle thresholds, which a static photo
-// can't fake (angles never move) — but a *video* of someone else
+// Rep quests are verified by body-form validation + joint-angle movement.
+// The form validator must pass for several consecutive frames before movement
+// can start or finish a rep, which blocks common angle-only spoofing such as
+// sitting down and repeatedly moving the arms.
 // exercising, played on another screen and pointed at the camera, would
 // still cross those thresholds. This runs alongside pose tracking purely
 // to catch that: it doesn't judge the activity, only whether the feed
@@ -3064,6 +3569,19 @@ localStorage.setItem('sq_lastReset', String(now));
 const hydrateAccount = useCallback(async (uidToLoad, fallbackEmail, currentUser) => {
 let profileDoc = await getDoc(doc(db, 'users', uidToLoad)).catch(() => null);
 
+// First time this Google account has ever signed in. With popup-based
+// sign-in this used to happen right after signInWithPopup resolved;
+// redirect-based sign-in reloads the page instead, so it's caught here —
+// the first time we see this uid with no profile doc yet.
+if (!profileDoc?.exists?.() && currentUser && getAuthProviderLabel(currentUser) === 'google') {
+try {
+await mintUsernameForGoogleUser(currentUser);
+profileDoc = await getDoc(doc(db, 'users', uidToLoad)).catch(() => null);
+} catch (err) {
+console.error('Failed to set up new Google account:', err);
+}
+}
+
 const [profile, remoteHistory] = await Promise.all([
 fetchRemoteProfile(uidToLoad),
 fetchRemoteHistory(uidToLoad),
@@ -3178,8 +3696,9 @@ setPhotoUploading(false);
 const handleDeleteAccount = async () => {
 const currentUser = auth.currentUser;
 if (!currentUser) return { ok: false, error: 'You need to be signed in to do that.' };
+const usernameLower = username ? username.toLowerCase() : null;
 try {
-await deleteAccountData(currentUser.uid);
+await deleteAccountData(currentUser.uid, usernameLower);
 await deleteUser(currentUser);
 resetLocalAccountState();
 return { ok: true };
