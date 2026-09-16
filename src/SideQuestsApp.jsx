@@ -830,11 +830,13 @@ glassShadow: '0 1px 1px rgba(0,0,0,0.2), 0 8px 24px -12px rgba(0,0,0,0.5)',
 // thin specular highlight traced along the inner top edge like light
 // catching the rim of actual glass.
 const glassStyle = (c, strong = false) => ({
-background: `linear-gradient(145deg, ${c.glassHighlight} 0%, ${strong ? c.glassStrong : c.glass} 34%, ${strong ? c.glassStrong : c.glass} 100%)`,
-backdropFilter: 'blur(30px) saturate(180%) contrast(105%)',
-WebkitBackdropFilter: 'blur(30px) saturate(180%) contrast(105%)',
+position: 'relative',
+overflow: 'hidden',
+background: `linear-gradient(155deg, ${c.glassHighlight} 0%, ${strong ? c.glassStrong : c.glass} 28%, ${strong ? c.glassStrong : c.glass} 66%, rgba(255,255,255,0.035) 100%)`,
+backdropFilter: 'blur(34px) saturate(185%) contrast(108%)',
+WebkitBackdropFilter: 'blur(34px) saturate(185%) contrast(108%)',
 border: `1px solid ${c.glassBorder}`,
-boxShadow: `inset 0 1px 0 ${c.glassHighlight}, inset 0 -1px 0 rgba(255,255,255,0.06), 0 18px 50px -28px rgba(0,0,0,${c === C.dark ? '0.55' : '0.20'})`,
+boxShadow: `inset 0 1px 0 ${c.glassHighlight}, inset 0 0 0 0.5px rgba(255,255,255,0.07), inset 0 -18px 45px -40px rgba(255,255,255,0.18), 0 20px 60px -34px rgba(0,0,0,${c === C.dark ? '0.70' : '0.24'})`,
 transform: 'translateZ(0)',
 });
 
@@ -895,18 +897,22 @@ button:active .sq-icon-tap { transform: scale(1.2) rotate(-6deg); }
 .sq-confetti-piece { position: absolute; top: -6%; border-radius: 2px; opacity: 0.9; animation-name: sq-confetti-fall; animation-timing-function: cubic-bezier(0.35,0,0.65,1); animation-fill-mode: forwards; }
 @keyframes sq-confetti-fall { 0% { transform: translate(0,0) rotate(0deg); opacity: 1; } 85% { opacity: 1; } 100% { transform: translate(var(--sq-drift), 115vh) rotate(var(--sq-rot)); opacity: 0; } }
 @keyframes sq-glass-shimmer { 0% { transform: translateX(-120%) skewX(-18deg); opacity: 0; } 18% { opacity: .18; } 45%,100% { transform: translateX(145%) skewX(-18deg); opacity: 0; } }
-.sq-glass { position: relative; isolation: isolate; }
-.sq-glass::after { content: ''; position: absolute; inset: -40% -20%; z-index: -1; pointer-events: none; width: 32%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.42), transparent); filter: blur(10px); transform: translateX(-120%) skewX(-18deg); animation: sq-glass-shimmer 8s ease-in-out infinite; }
+.sq-glass { position: relative; isolation: isolate; overflow: hidden; }
+.sq-glass::before { content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; background: linear-gradient(180deg, rgba(255,255,255,.12), transparent 24%, transparent 72%, rgba(255,255,255,.025)); opacity: .9; }
+.sq-glass::after { content: ''; position: absolute; inset: -40% -20%; z-index: -1; pointer-events: none; width: 30%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.5), transparent); filter: blur(12px); transform: translateX(-140%) skewX(-18deg); animation: sq-glass-shimmer 7.5s cubic-bezier(.4,0,.2,1) infinite; }
+.sq-glass > * { position: relative; z-index: 1; }
+.sq-thinking-orbs { display: inline-flex; align-items: center; gap: 5px; padding: 7px 9px; border-radius: 999px; background: rgba(255,255,255,.075); border: 1px solid rgba(255,255,255,.14); box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 7px 22px -18px rgba(10,132,255,.65); backdrop-filter: blur(18px) saturate(185%); -webkit-backdrop-filter: blur(18px) saturate(185%); }
+.sq-thinking-orb { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.96); box-shadow: 0 0 8px rgba(255,255,255,.75), 0 0 14px rgba(10,132,255,.35); animation: sq-thinking-breathe 1.25s ease-in-out infinite; }
+.sq-thinking-orb:nth-child(2) { animation-delay: .15s; }
+.sq-thinking-orb:nth-child(3) { animation-delay: .3s; }
+@keyframes sq-thinking-breathe { 0%,100% { transform: translateY(0) scale(.82); opacity: .42; } 50% { transform: translateY(-1px) scale(1.32); opacity: 1; } }
+.sq-glass-strong { box-shadow: inset 0 1px 0 rgba(255,255,255,.16), inset 0 0 0 .5px rgba(255,255,255,.08), 0 26px 70px -42px rgba(0,0,0,.75); }
 @keyframes sq-modal-in { from { opacity: 0; transform: translate3d(0,16px,0) scale(.985); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } }
 .sq-modal-in { animation: sq-modal-in .42s cubic-bezier(.22,1,.36,1) both; will-change: transform, opacity; }
 .sq-control { transition: transform .24s cubic-bezier(.22,1,.36,1), opacity .2s ease, background-color .2s ease, box-shadow .24s ease; }
 .sq-control:hover { transform: translateY(-1px); }
 .sq-control:active { transform: translateY(1px) scale(.985); }
 @keyframes sq-pulse-soft { 0%,100% { transform: scale(1); opacity: .52; } 50% { transform: scale(1.18); opacity: 1; } }
-.sq-thinking-orbs { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 999px; background: rgba(255,255,255,.09); border: 1px solid rgba(255,255,255,.13); backdrop-filter: blur(14px) saturate(170%); -webkit-backdrop-filter: blur(14px) saturate(170%); }
-.sq-thinking-orb { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.95); animation: sq-pulse-soft 1.15s ease-in-out infinite; }
-.sq-thinking-orb:nth-child(2) { animation-delay: .16s; }
-.sq-thinking-orb:nth-child(3) { animation-delay: .32s; }
 .sq-cam-shell { box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 22px 55px -32px rgba(0,0,0,.85); }
 @media (prefers-reduced-motion: reduce) {
 .sq-orb-a, .sq-orb-b, .sq-orb-c, .sq-thinking-orb { animation: none; }
@@ -921,9 +927,10 @@ button:active .sq-icon-tap { transform: scale(1.2) rotate(-6deg); }
 const AmbientBackground = React.memo(function AmbientBackground({ c }) {
 return (
 <div className="fixed inset-0 pointer-events-none z-0" aria-hidden="true" style={{ overflow: 'hidden' }}>
-<div className="sq-orb-a" style={{ position: 'absolute', top: '-10%', left: '-15%', width: '75%', height: '42%', borderRadius: '50%', background: c.blue, opacity: 0.16, filter: 'blur(70px)' }} />
-<div className="sq-orb-b" style={{ position: 'absolute', top: '30%', right: '-20%', width: '70%', height: '46%', borderRadius: '50%', background: c.purple, opacity: 0.13, filter: 'blur(80px)' }} />
-<div className="sq-orb-c" style={{ position: 'absolute', bottom: '-14%', left: '5%', width: '65%', height: '40%', borderRadius: '50%', background: c.teal, opacity: 0.13, filter: 'blur(75px)' }} />
+<div className="sq-orb-a" style={{ position: 'absolute', top: '-13%', left: '-18%', width: '78%', height: '48%', borderRadius: '50%', background: c.blue, opacity: 0.18, filter: 'blur(82px)' }} />
+<div className="sq-orb-b" style={{ position: 'absolute', top: '22%', right: '-22%', width: '76%', height: '50%', borderRadius: '50%', background: c.purple, opacity: 0.15, filter: 'blur(90px)' }} />
+<div className="sq-orb-c" style={{ position: 'absolute', bottom: '-18%', left: '0%', width: '72%', height: '44%', borderRadius: '50%', background: c.teal, opacity: 0.15, filter: 'blur(86px)' }} />
+<div className="sq-orb-a" style={{ position: 'absolute', top: '14%', left: '42%', width: '28%', height: '22%', borderRadius: '50%', background: c.indigo, opacity: 0.07, filter: 'blur(58px)', animationDuration: '19s' }} />
 </div>
 );
 });
