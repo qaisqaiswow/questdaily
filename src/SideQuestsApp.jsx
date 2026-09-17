@@ -2557,20 +2557,30 @@ return (
 );
 }
 
-// add to home screen / install prompt. Uses the browser's native PWA install
+// Detailed add-to-home-screen / install walkthrough.
 // prompt when available; on iOS/unsupported browsers it gives the exact
 // manual path because browsers do not permit websites to silently create a
 // bookmark/home-screen icon themselves.
 function DeviceInstallPrompt({ onDismiss, onInstallReady, c }) {
 const [step, setStep] = useState(0);
 const [os, setOs] = useState(null);
+const [browser, setBrowser] = useState(null);
 const [installable, setInstallable] = useState(false);
 const [installed, setInstalled] = useState(false);
 const deferredRef = useRef(null);
 
 useEffect(() => {
+  const ua = navigator.userAgent || '';
   const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const android = /Android/i.test(ua);
+  const isChrome = /Chrome\//i.test(ua) && !/Edg\//i.test(ua) && !/OPR\//i.test(ua);
+  const isSafari = /Safari\//i.test(ua) && !/Chrome\//i.test(ua) && !/CriOS\//i.test(ua);
+  const isSamsung = /SamsungBrowser\//i.test(ua);
   setInstalled(Boolean(standalone));
+  setOs(ios ? 'ios' : android ? 'android' : 'other');
+  setBrowser(isSamsung ? 'samsung' : isChrome ? 'chrome' : isSafari ? 'safari' : 'other');
+
   const handler = e => {
     e.preventDefault();
     deferredRef.current = e;
@@ -2580,12 +2590,53 @@ useEffect(() => {
   return () => window.removeEventListener('beforeinstallprompt', handler);
 }, []);
 
+const platformSteps = useMemo(() => {
+  if (os === 'ios') {
+    return [
+      { icon: Smartphone, title: 'Stay in Safari', body: 'Open QuestDaily in Safari on your iPhone or iPad. The Add to Home Screen option is available from Safari’s Share menu.' },
+      { icon: Download, title: '1. Tap Share', body: 'Tap the Share button in Safari — the square with an upward arrow. It is usually in the bottom toolbar on iPhone, but its position can vary by Safari version.' },
+      { icon: ListChecks, title: '2. Choose “Add to Home Screen”', body: 'Scroll down the Share sheet until you see “Add to Home Screen”. Tap it. If you do not see it, scroll to the bottom, tap “Edit Actions”, and add “Add to Home Screen” to your actions.' },
+      { icon: Check, title: '3. Confirm with “Add”', body: 'Check the QuestDaily name and icon, then tap “Add” in the top-right corner. Safari will place the QuestDaily icon on your home screen.' },
+      { icon: Sparkles, title: '4. Open it like an app', body: 'Return to your home screen and tap QuestDaily. Opening the icon launches the installed web app instead of making you type the website address again.' },
+    ];
+  }
+  if (os === 'android') {
+    if (browser === 'samsung') {
+      return [
+        { icon: Smartphone, title: 'Stay in Samsung Internet', body: 'Open QuestDaily in Samsung Internet on your Android phone. Keep the QuestDaily tab open while you add the shortcut.' },
+        { icon: Download, title: '1. Open the menu', body: 'Tap the three-line menu button in Samsung Internet. From the menu, choose “Add page to” and then choose “Home screen”.' },
+        { icon: ListChecks, title: '2. Check the shortcut', body: 'Review the QuestDaily name and icon. Samsung Internet may let you edit the name before creating the shortcut.' },
+        { icon: Check, title: '3. Tap “Add”', body: 'Confirm the shortcut. Depending on your phone, Android may ask you to confirm one more time before placing QuestDaily on the home screen.' },
+        { icon: Sparkles, title: '4. Launch QuestDaily', body: 'Go to your home screen and tap the QuestDaily icon. You now have one-tap access without searching for the site again.' },
+      ];
+    }
+    return [
+      { icon: Smartphone, title: 'Stay in Chrome', body: 'Open QuestDaily in Chrome on Android. If Chrome offers a native install prompt, use the blue “Install app” button below — it is the quickest method.' },
+      { icon: Download, title: '1. Open Chrome’s menu', body: 'Tap the three-dot ⋮ menu in the top-right corner of Chrome while QuestDaily is open.' },
+      { icon: ListChecks, title: '2. Choose the install option', body: 'Tap “Install app” when Chrome shows it. On some phones the option is named “Add to Home screen” instead. Both create a home-screen entry for QuestDaily.' },
+      { icon: Check, title: '3. Confirm', body: 'Review the QuestDaily name and icon, then tap “Install”, “Add”, or the confirmation button Chrome shows.' },
+      { icon: Sparkles, title: '4. Open it from Home', body: 'Return to your home screen and tap QuestDaily. It will open from its icon, like a normal app shortcut.' },
+    ];
+  }
+  return [
+    { icon: Smartphone, title: 'Use your browser’s install menu', body: 'Your browser did not expose a one-tap install prompt. Open the browser menu while QuestDaily is visible and look for “Install app”, “Add to Home screen”, or “Add shortcut”.' },
+    { icon: Download, title: '1. Open the browser menu', body: 'Use the browser’s main menu button. The exact icon and location depend on the browser and device.' },
+    { icon: ListChecks, title: '2. Choose the home-screen option', body: 'Select “Install app”, “Add to Home screen”, or the closest equivalent. The wording differs between browsers.' },
+    { icon: Check, title: '3. Confirm the shortcut', body: 'Accept the browser’s confirmation and keep the QuestDaily name and icon, or edit the name when the browser offers that option.' },
+    { icon: Sparkles, title: '4. Launch from Home', body: 'Find the new QuestDaily icon on your home screen and tap it for one-tap access.' },
+  ];
+}, [os, browser]);
+
 const doInstall = async () => {
   const promptEvent = deferredRef.current;
   if (!promptEvent) return;
   try {
     await promptEvent.prompt();
-    await promptEvent.userChoice;
+    const result = await promptEvent.userChoice;
+    if (result?.outcome === 'accepted') {
+      setInstalled(true);
+      setStep(0);
+    }
   } catch (err) {
     console.warn('Install prompt failed:', err);
   } finally {
@@ -2595,76 +2646,102 @@ const doInstall = async () => {
   }
 };
 
+const current = platformSteps[Math.min(step, platformSteps.length - 1)];
 const rowStyle = { width: '100%', padding: '16px 18px', borderRadius: 18, fontSize: 16, fontWeight: 500, textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: c.bgSecondary, color: c.label };
 
 return (
 <div className="fixed inset-0 z-[105] flex flex-col sq-anim-in" style={{ background: c.bg }}>
-<div className="flex-1 flex flex-col justify-center px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
+<div className="flex-1 flex flex-col justify-center px-6 overflow-y-auto" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
+<div style={{ width: '100%', maxWidth: 430, margin: '0 auto' }}>
 {installed ? (
-  <div className="text-center" style={{ maxWidth: 390, width: '100%', margin: '0 auto' }}>
-    <div className="sq-icon-fff" style={{ width: 84, height: 84, borderRadius: 32, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}><Check size={42} /></div>
+  <div className="text-center">
+    <div className="sq-icon-fff" style={{ width: 88, height: 88, borderRadius: 32, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px', boxShadow: `0 18px 45px ${c.green}2e` }}><Check size={44} /></div>
     <h3 className="sq-large-title" style={{ fontSize: 28, fontWeight: 800, color: c.label, marginBottom: 8 }}>QuestDaily is installed</h3>
-    <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.45 }}>You can open QuestDaily from your home screen like an app.</p>
+    <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.5, maxWidth: 350, margin: '0 auto' }}>The QuestDaily icon should now be on your home screen. Open it anytime for one-tap access.</p>
   </div>
 ) : step === 0 ? (
   <>
-    <div className="text-center mb-8">
-      <div className="sq-icon-fff" style={{ width: 84, height: 84, borderRadius: 32, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+    <div className="text-center" style={{ marginBottom: 24 }}>
+      <div className="sq-icon-fff" style={{ width: 84, height: 84, borderRadius: 32, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
         <Smartphone size={40} />
       </div>
-      <h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 8 }}>Install QuestDaily</h3>
-      <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.4 }}>Put QuestDaily on your home screen for one-tap access.</p>
+      <p style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase', color: c.blue, marginBottom: 7 }}>Save QuestDaily</p>
+      <h3 className="sq-large-title" style={{ fontSize: 27, fontWeight: 800, color: c.label, marginBottom: 8 }}>Add it to your home screen</h3>
+      <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.45, maxWidth: 365, margin: '0 auto' }}>Follow the exact steps for your phone. Once added, QuestDaily is one tap away and can open like an app.</p>
     </div>
-    {installable ? (
-      <button onClick={doInstall} style={{ ...rowStyle, justifyContent: 'center', background: c.blue, color: '#fff', fontWeight: 700, marginBottom: 12 }}>
-        <Download size={18} /> <span style={{ marginLeft: 8 }}>Install app</span>
+
+    {installable && (
+      <button type="button" onClick={doInstall} style={{ ...rowStyle, justifyContent: 'center', background: c.blue, color: '#fff', fontWeight: 800, marginBottom: 14 }}>
+        <Download size={19} /> <span style={{ marginLeft: 9 }}>Install QuestDaily automatically</span>
       </button>
-    ) : (
-      <div className="flex flex-col gap-3">
-        <button onClick={() => { setOs('ios'); setStep(1); }} style={rowStyle}>
-          <span>iPhone or iPad</span><ChevronRight size={18} color={c.labelTertiary} />
-        </button>
-        <button onClick={() => { setOs('android'); setStep(1); }} style={rowStyle}>
-          <span>Android</span><ChevronRight size={18} color={c.labelTertiary} />
-        </button>
-      </div>
     )}
+
+    <div style={{ ...glassStyle(c), borderRadius: 24, padding: 18, marginBottom: 14 }}>
+      <p style={{ fontSize: 12, fontWeight: 800, color: c.labelTertiary, textTransform: 'uppercase', letterSpacing: .8, marginBottom: 10 }}>Your device</p>
+      <p style={{ fontSize: 16, fontWeight: 700, color: c.label, marginBottom: 4 }}>
+        {os === 'ios' ? 'iPhone / iPad' : os === 'android' ? (browser === 'samsung' ? 'Android · Samsung Internet' : 'Android · Chrome') : 'Other browser'}
+      </p>
+      <p style={{ fontSize: 13, color: c.labelSecondary, lineHeight: 1.45 }}>
+        {installable ? 'A native install button is available, so that is the fastest route.' : 'Tap below to see the step-by-step instructions for this device.'}
+      </p>
+    </div>
+
+    <button type="button" onClick={() => { haptic(5); setStep(1); }} style={{ ...rowStyle, marginBottom: 10 }}>
+      <span>Show step-by-step instructions</span><ChevronRight size={19} color={c.labelTertiary} />
+    </button>
   </>
 ) : (
   <>
-    <div className="text-center mb-2">
-      <h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 6 }}>Save QuestDaily</h3>
-      <p style={{ fontSize: 14, color: c.labelSecondary, marginBottom: 28 }}>A browser cannot silently create bookmarks or home-screen icons, so use the built-in menu once.</p>
-    </div>
-    <div style={{ ...glassStyle(c), borderRadius: 28, padding: '36px 24px', marginBottom: 20, textAlign: 'center' }}>
-      <div className="sq-icon-fff" style={{ width: 72, height: 72, borderRadius: 999, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
-        {os === 'ios' ? <Download size={30} /> : <Download size={30} />}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
+      <button type="button" aria-label="Back to install choices" onClick={() => { haptic(4); setStep(0); }} style={{ width: 42, height: 42, borderRadius: 999, background: c.fill, color: c.label, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>‹</button>
+      <div style={{ flex: 1 }}>
+        <p style={{ fontSize: 11, fontWeight: 800, color: c.blue, letterSpacing: .8, textTransform: 'uppercase', marginBottom: 3 }}>{os === 'ios' ? 'iPhone / iPad' : os === 'android' ? (browser === 'samsung' ? 'Samsung Internet' : 'Chrome on Android') : 'Browser instructions'}</p>
+        <p style={{ fontSize: 14, color: c.labelSecondary }}>{step} of {platformSteps.length - 1}</p>
       </div>
-      <p style={{ fontSize: 18, fontWeight: 600, color: c.label, marginBottom: 6 }}>
-        {step === 1 ? (os === 'ios' ? 'Tap Share' : 'Open the browser menu') : 'Add QuestDaily'}
-      </p>
-      <p style={{ fontSize: 14, color: c.labelSecondary, lineHeight: 1.5 }}>
+    </div>
+
+    <div className="text-center" style={{ marginBottom: 18 }}>
+      <div className="sq-icon-fff" style={{ width: 72, height: 72, borderRadius: 24, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}>
+        <current.icon size={31} />
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 5, marginBottom: 13 }}>
+        {platformSteps.slice(1).map((_, i) => <span key={i} style={{ width: i + 1 === step ? 22 : 7, height: 7, borderRadius: 999, background: i + 1 === step ? c.blue : c.fillStrong, transition: 'all 180ms ease' }} />)}
+      </div>
+      <h3 className="sq-large-title" style={{ fontSize: 25, fontWeight: 800, color: c.label, marginBottom: 9 }}>{current.title}</h3>
+      <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.55, maxWidth: 385, margin: '0 auto' }}>{current.body}</p>
+    </div>
+
+    <div style={{ ...glassStyle(c), borderRadius: 24, padding: 18, marginBottom: 16 }}>
+      <p style={{ fontSize: 12, fontWeight: 800, color: c.label, marginBottom: 8 }}>Tip</p>
+      <p style={{ fontSize: 13, color: c.labelSecondary, lineHeight: 1.5 }}>
         {os === 'ios'
-          ? (step === 1 ? 'In Safari, tap Share, then choose “Add to Home Screen”.' : 'Confirm Add to Home Screen, then open QuestDaily from your home screen.')
-          : (step === 1 ? 'In Chrome, tap ⋮, then choose “Install app” or “Add to Home screen”.' : 'Confirm the install and launch QuestDaily from your home screen.')}
+          ? 'Use Safari for the most reliable iPhone/iPad home-screen flow. Other iOS browsers may offer a different or more limited install option.'
+          : os === 'android' && browser === 'samsung'
+            ? 'Samsung Internet uses “Add page to” for shortcuts. Look for “Home screen” inside that submenu.'
+            : os === 'android'
+              ? 'Chrome may call this “Install app” or “Add to Home screen” depending on the site and Chrome version.'
+              : 'The exact wording can vary by browser, but the home-screen or install option is normally inside the browser menu.'}
       </p>
     </div>
   </>
 )}
 </div>
+</div>
 <div className="px-6" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 24px)' }}>
-  {installed ? (
-    <button onClick={onDismiss} style={{ width: '100%', padding: 16, borderRadius: 999, fontSize: 16, fontWeight: 700, color: c.blue, background: c.fill }}>Done</button>
-  ) : installable && step === 0 ? (
-    <button onClick={onDismiss} style={{ width: '100%', padding: 16, borderRadius: 999, fontSize: 16, fontWeight: 700, color: c.blue, background: c.fill }}>Not now</button>
-  ) : step === 0 ? (
-    <button onClick={onDismiss} style={{ width: '100%', padding: 16, borderRadius: 999, fontSize: 16, fontWeight: 700, color: c.blue, background: c.fill }}>Not now</button>
-  ) : (
-    <div className="flex gap-3">
-      <button onClick={() => setStep(0)} style={{ flex: 1, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.fill, color: c.label }}>Back</button>
-      <button onClick={onDismiss} style={{ flex: 2, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.blue, color: '#fff' }}>Done</button>
-    </div>
-  )}
+<div style={{ width: '100%', maxWidth: 430, margin: '0 auto' }}>
+{installed ? (
+  <button type="button" onClick={onDismiss} style={{ width: '100%', padding: 16, borderRadius: 999, fontSize: 16, fontWeight: 700, color: c.blue, background: c.fill }}>Done</button>
+) : step === 0 ? (
+  <button type="button" onClick={onDismiss} style={{ width: '100%', padding: 16, borderRadius: 999, fontSize: 16, fontWeight: 700, color: c.blue, background: c.fill }}>Not now</button>
+) : (
+  <div className="flex gap-3">
+    <button type="button" onClick={() => { haptic(4); setStep(v => Math.max(1, v - 1)); }} disabled={step <= 1} style={{ flex: 1, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.fill, color: step <= 1 ? c.labelTertiary : c.label, opacity: step <= 1 ? .55 : 1 }}>Back</button>
+    <button type="button" onClick={() => { haptic(6); if (step >= platformSteps.length - 1) onDismiss(); else setStep(v => v + 1); }} style={{ flex: 2, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.blue, color: '#fff' }}>
+      {step >= platformSteps.length - 1 ? 'Done' : 'Next step'}
+    </button>
+  </div>
+)}
+</div>
 </div>
 </div>
 );
