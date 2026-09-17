@@ -1124,7 +1124,34 @@ transform: 'translateZ(0)',
 
 // system font stack, no google fonts import — applied to every descendant so
 // nothing inside the app can accidentally fall back to a non-system typeface
-const SystemType = () => (
+const SystemType = ({ c }) => {
+useEffect(() => {
+  if (typeof document === 'undefined') return;
+  const bg = c?.bg || '#000000';
+  const root = document.documentElement;
+  const body = document.body;
+  const appRoot = document.getElementById('root');
+  root.style.backgroundColor = bg;
+  root.style.colorScheme = bg === '#000000' ? 'dark' : 'light';
+  body.style.backgroundColor = bg;
+  body.style.backgroundImage = 'none';
+  body.style.color = c?.label || '#000';
+  if (appRoot) appRoot.style.backgroundColor = bg;
+
+  let themeMeta = document.querySelector('meta[name="theme-color"]');
+  if (!themeMeta) {
+    themeMeta = document.createElement('meta');
+    themeMeta.name = 'theme-color';
+    document.head.appendChild(themeMeta);
+  }
+  themeMeta.setAttribute('content', bg);
+  themeMeta.setAttribute('media', '(prefers-color-scheme: light)');
+  return () => {
+    themeMeta?.removeAttribute('media');
+  };
+}, [c?.bg, c?.label]);
+
+return (
 <style>{`
 .sq-root, .sq-root * { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; }
 .sq-mono, .sq-mono * { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
@@ -1221,6 +1248,7 @@ button:active .sq-icon-tap { transform: scale(1.2) rotate(-6deg); }
 }
 `}</style>
 );
+};
 
 // background blobs
 // 3 slow-drifting blurred color fields, fixed behind everything. this is what
@@ -3080,13 +3108,13 @@ let usingWorker = false;
 let fallbackLandmarker = null;
 let lastPaintAt = 0;
 let lastFallbackDetectAt = 0;
-let detectIntervalMs = BASE_INTERVAL;
 let lastSampleWallTime = 0;
 let lastPoseInferenceMs = 0;
 const lowEnd = (typeof navigator !== 'undefined' && ((navigator.hardwareConcurrency || 4) <= 4 || ((navigator.deviceMemory || 0) > 0 && navigator.deviceMemory <= 4)));
 const BASE_INTERVAL = lowEnd ? 125 : 90;
 const MIN_INTERVAL = lowEnd ? 100 : 75;
 const MAX_INTERVAL = lowEnd ? 220 : 180;
+let detectIntervalMs = BASE_INTERVAL;
 const PAINT_INTERVAL_MS = 1000 / 30;
 const PREDICTION_MS_MAX = lowEnd ? 85 : 110;
 const SMOOTH_ALPHA = lowEnd ? 0.72 : 0.78;
@@ -4333,7 +4361,7 @@ const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
 return (
 <div className={`sq-root${LOW_END_DEVICE ? ' sq-low-end' : ''}`} style={{ background: c.bg, minHeight: '100vh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
-<SystemType />
+<SystemType c={c} />
 <div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg, zIndex: 2 }}>
 <AmbientBackground c={c} disabled={Boolean(proofModal)} />
 
