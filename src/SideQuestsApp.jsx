@@ -2707,7 +2707,7 @@ const session = ++cameraSessionRef.current;
 stopCamera();
 setCamError(null); setNotice(null); setUploadedProof(null); setPhase('starting');
 const attempts = [
-{ video: { facingMode: { ideal: mode }, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 30, max: 30 } }, audio: false },
+{ video: { facingMode: { ideal: mode }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } }, audio: false },
 { video: { facingMode: { ideal: mode } }, audio: false },
 { video: true, audio: false },
 ];
@@ -2761,12 +2761,8 @@ if (!cancelled) { setModelError('The AI model could not be loaded. Check your co
 return () => { cancelled = true; };
 }, [modelVersion, quest.reps]);
 
-useEffect(() => {
-if (quest.reps || !modelReady) return undefined;
-let cancelled = false;
-getStaticClassifier().catch(() => { /* falls back gracefully in runFinalVerification */ });
-return () => { cancelled = true; };
-}, [modelReady, quest.reps]);
+// Keep the heavyweight final verifier completely cold until it is actually needed.
+// Loading two vision models at camera start is a major mobile memory/CPU spike.
 
 const resetRepTracking = useCallback(() => {
 const baseline = quest.reps ? (quest.progress || 0) : 0;
@@ -2864,7 +2860,7 @@ consecutiveErrors += 1;
 if (consecutiveErrors >= 3 && isCurrentRun()) setModelError('AI analysis is temporarily unavailable. Try closing and reopening the camera.');
 } finally {
 isScanningRef.current = false;
-if (isCurrentRun()) { setScanning(false); scheduleNext(consecutiveErrors ? 1000 : 1200); }
+if (isCurrentRun()) { setScanning(false); scheduleNext(consecutiveErrors ? 1200 : 1800); }
 }
 };
 
@@ -2930,8 +2926,15 @@ let cancelled = false;
 // part; the skeleton is still painted every animation frame from the latest
 // smoothed landmarks, so motion remains visually fluid without running the model
 // at the camera's full frame rate.
-const DETECT_INTERVAL_MS = 1000 / 15;
-const SMOOTH = 0.32;
+// MediaPipe detectForVideo() is synchronous and runs on the main thread.
+    // Keep inference conservative on phones while still painting the latest pose
+    // smoothly between detections. Higher-end devices get a little more headroom.
+    const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
+    const DETECT_FPS = cores <= 4 ? 10 : 12;
+    const DETECT_INTERVAL_MS = 1000 / DETECT_FPS;
+    const PAINT_INTERVAL_MS = 1000 / 24;
+    let lastPaintAt = 0;
+    const SMOOTH = 0.32;
 const MIN_VIS = 0.28;
 const MAJOR_JOINTS = new Set([11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]);
 
@@ -2975,7 +2978,7 @@ const getCanvasContext = (canvas) => {
       if (cancelled) return;
       const video = videoRef.current;
       const canvas = skeletonCanvasRef.current;
-      if (!video || !canvas || video.readyState < 2) {
+      if (!video || !canvas || video.readyState < 2 || document.visibilityState === 'hidden') {
         poseRafRef.current = requestAnimationFrame(loop);
         return;
       }
@@ -3028,8 +3031,16 @@ const getCanvasContext = (canvas) => {
         }
       }
 
-      // Paint the latest smoothed pose at display rate. Avoid shadowBlur and
-      // repeated getContext() calls: both are disproportionately expensive on mobile GPUs.
+      // Paint at a bounded rate. requestAnimationFrame is still used to keep the
+      // overlay synchronized with the browser, but we don't burn CPU/GPU drawing
+      // the same pose 60+ times per second on a phone.
+      const paintNow = performance.now();
+      if (paintNow - lastPaintAt < PAINT_INTERVAL_MS) {
+        poseRafRef.current = requestAnimationFrame(loop);
+        return;
+      }
+      lastPaintAt = paintNow;
+
       const landmarks = smoothedLandmarksRef.current;
       const ctx = getCanvasContext(canvas);
       if (ctx && video.videoWidth && video.videoHeight) {
@@ -3161,9 +3172,9 @@ setNotice(null);
 }
 }
 } catch { /* transient — try again next tick */ }
-finally { if (!cancelled) timer = window.setTimeout(check, 2500); }
+finally { if (!cancelled) timer = window.setTimeout(check, 6000); }
 };
-timer = window.setTimeout(check, 1500);
+timer = window.setTimeout(check, 3000);
 return () => { cancelled = true; clearTimeout(timer); };
 }, [quest.reps, phase, confirmed]);
 
@@ -3275,9 +3286,9 @@ return (
 </div>
 
 <div className="relative flex-1 mx-4 rounded-3xl overflow-hidden sq-cam-shell" style={{ background: '#000' }}>
-<video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ opacity: phase === 'live' && !uploadedProof ? 1 : 0, transition: 'opacity 0.3s' }} />
+<video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ opacity: phase === 'live' && !uploadedProof ? 1 : 0, contain: 'strict' }} />
 <canvas ref={skeletonCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none object-cover z-10"
-style={{ opacity: phase === 'live' && !uploadedProof && hasSkeletonTracking ? 1 : 0, transition: 'opacity 0.3s ease' }} />
+style={{ opacity: phase === 'live' && !uploadedProof && hasSkeletonTracking ? 1 : 0, contain: 'strict' }} />
 
 {phase === 'live' && !uploadedProof && labels?.bodyParts && (
 <div className="absolute top-3 left-3 z-10" style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(10px)', borderRadius: 12, padding: '9px 11px' }}>
