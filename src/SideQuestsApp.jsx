@@ -1011,25 +1011,25 @@ return [...base, 'phone or computer screen'];
 const QUEST_POOL = [
 { id: 'q1', textTemplate: 'Do {n} pushups', xp: 50, reps: 20 },
 { id: 'q2', textTemplate: 'Do {n} squats', xp: 45, reps: 30 },
-{ id: 'q3', textTemplate: 'Go for a {n}-minute run', xp: 75, duration: 180 },
+{ id: 'q3', textTemplate: 'Go for a {n}-second run', xp: 75, duration: 180 },
 { id: 'q4', textTemplate: 'Do {n} pullups', xp: 60, reps: 10 },
-{ id: 'q16', textTemplate: 'Do {n} minutes of cycling', xp: 55, duration: 180 },
+{ id: 'q16', textTemplate: 'Do {n} seconds of cycling', xp: 55, duration: 180 },
 { id: 'q17', textTemplate: 'Do {n} jumping rope reps', xp: 40, reps: 50 },
-{ id: 'q21', textTemplate: 'Do {n} minutes of deep breathing', xp: 30, duration: 180 },
+{ id: 'q21', textTemplate: 'Do {n} seconds of deep breathing', xp: 30, duration: 180 },
 { id: 'q23', textTemplate: 'Do {n} lunges', xp: 40, reps: 30 },
-{ id: 'q25', textTemplate: 'Do a {n}-minute ice bath or cold plunge', xp: 80, duration: 180 },
-{ id: 'q5', textTemplate: 'Walk outside for {n} minutes', xp: 35, duration: 180 },
-{ id: 'q7', textTemplate: 'Meditate for {n} minutes', xp: 45, duration: 180 },
-{ id: 'q8', textTemplate: 'Stretch for {n} minutes', xp: 35, duration: 180 },
-{ id: 'q11', textTemplate: 'Do {n} minutes of jumping jacks', xp: 30, duration: 180 },
+{ id: 'q25', textTemplate: 'Do a {n}-second ice bath or cold plunge', xp: 80, duration: 180 },
+{ id: 'q5', textTemplate: 'Walk outside for {n} seconds', xp: 35, duration: 180 },
+{ id: 'q7', textTemplate: 'Meditate for {n} seconds', xp: 45, duration: 180 },
+{ id: 'q8', textTemplate: 'Stretch for {n} seconds', xp: 35, duration: 180 },
+{ id: 'q11', textTemplate: 'Do {n} seconds of jumping jacks', xp: 30, duration: 180 },
 { id: 'q12', textTemplate: 'Do {n} situps', xp: 40, reps: 20 },
-{ id: 'q15', textTemplate: 'Hold a plank for {n} minutes', xp: 50, duration: 180 },
-{ id: 'q26', textTemplate: 'Hold a wall sit for {n} minutes', xp: 40, duration: 180 },
-{ id: 'q27', textTemplate: 'Hold a glute bridge for {n} minutes', xp: 35, duration: 180 },
-{ id: 'q28', textTemplate: 'Do {n} minutes of high knees', xp: 35, duration: 180 },
-{ id: 'q29', textTemplate: 'Do {n} minutes of mountain climbers', xp: 40, duration: 180 },
-{ id: 'q30', textTemplate: 'Hold a superman pose for {n} minutes', xp: 35, duration: 180 },
-{ id: 'q31', textTemplate: 'Do {n} minutes of burpees', xp: 45, duration: 180 },
+{ id: 'q15', textTemplate: 'Hold a plank for {n} seconds', xp: 50, duration: 180 },
+{ id: 'q26', textTemplate: 'Hold a wall sit for {n} seconds', xp: 40, duration: 180 },
+{ id: 'q27', textTemplate: 'Hold a glute bridge for {n} seconds', xp: 35, duration: 180 },
+{ id: 'q28', textTemplate: 'Do {n} seconds of high knees', xp: 35, duration: 180 },
+{ id: 'q29', textTemplate: 'Do {n} seconds of mountain climbers', xp: 40, duration: 180 },
+{ id: 'q30', textTemplate: 'Hold a superman pose for {n} seconds', xp: 35, duration: 180 },
+{ id: 'q31', textTemplate: 'Do {n} seconds of burpees', xp: 45, duration: 180 },
 ];
 
 function randomizeQuest(pool) {
@@ -1038,11 +1038,22 @@ const n = Math.floor(Math.random() * 55) + 1; // 1-55 reps
 return { ...pool, reps: n, text: pool.textTemplate.replace('{n}', n), completed: false, progress: 0 };
 }
 if (pool.duration) {
-const minutes = Math.floor(Math.random() * 5) + 1; // 1-5 minutes
-return { ...pool, duration: minutes * 60, text: pool.textTemplate.replace('{n}', minutes), completed: false, progress: 0 };
+const seconds = Math.floor(Math.random() * 26) + 5; // 5-30 seconds
+return { ...pool, duration: seconds, text: pool.textTemplate.replace('{n}', seconds), completed: false, progress: 0 };
 }
 return { ...pool, text: pool.textTemplate, completed: false, progress: 0 };
 }
+
+const normalizeTimedQuest = (quest) => {
+if (!quest?.duration) return quest;
+const clampedDuration = Math.min(30, Math.max(5, Number.isFinite(quest.duration) ? quest.duration : 5));
+const progress = Number.isFinite(quest.progress) ? Math.min(clampedDuration, Math.max(0, quest.progress)) : 0;
+const text = typeof quest.text === 'string' ? quest.text
+  .replace(/\b\d+-(?:minute|minutes|second|seconds)\b/g, `${clampedDuration}-second`)
+  .replace(/\b\d+ (?:minute|minutes|second|seconds)\b/g, `${clampedDuration} seconds`)
+  : quest.text;
+return { ...quest, duration: clampedDuration, progress };
+};
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_PASSES = 4;
@@ -2951,8 +2962,11 @@ const [verifying, setVerifying] = useState(false);
 const [lastLabel, setLastLabel] = useState('');
 const [uploadedProof, setUploadedProof] = useState(null);
 
+const timerDurationSeconds = quest.duration
+  ? Math.min(30, Math.max(5, Number.isFinite(quest.duration) ? quest.duration : 5))
+  : 0;
 const initialTimerSeconds = quest.duration
-  ? ((Number.isFinite(quest.progress) && quest.progress > 0) ? quest.progress : quest.duration)
+  ? ((Number.isFinite(quest.progress) && quest.progress > 0) ? Math.min(timerDurationSeconds, quest.progress) : timerDurationSeconds)
   : 0;
 const [secondsLeft, setSecondsLeft] = useState(initialTimerSeconds);
 const [timerRunning, setTimerRunning] = useState(false);
@@ -3793,7 +3807,7 @@ timerEndAtRef.current = null;
 timerRunningRef.current = false;
 timerAutoStartedRef.current = false;
 secondsLeftRef.current = quest.duration
-  ? ((Number.isFinite(quest.progress) && quest.progress > 0) ? quest.progress : quest.duration)
+  ? ((Number.isFinite(quest.progress) && quest.progress > 0) ? Math.min(timerDurationSeconds, quest.progress) : timerDurationSeconds)
   : 0;
 setSecondsLeft(secondsLeftRef.current);
 setTimerRunning(false);
@@ -3804,7 +3818,7 @@ timerEndAtRef.current = null;
 timerRunningRef.current = false;
 timerAutoStartedRef.current = false;
 secondsLeftRef.current = quest.duration
-  ? ((Number.isFinite(quest.progress) && quest.progress > 0) ? quest.progress : quest.duration)
+  ? ((Number.isFinite(quest.progress) && quest.progress > 0) ? Math.min(timerDurationSeconds, quest.progress) : timerDurationSeconds)
   : 0;
 setSecondsLeft(secondsLeftRef.current);
 setTimerRunning(false);
@@ -3928,15 +3942,17 @@ return (
 <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{
   opacity: phase === 'live' && !uploadedProof ? 1 : 0,
   contain: 'strict',
-  transform: 'translateZ(0)',
+  transform: 'rotateY(180deg) translateZ(0)',
   transformOrigin: 'center center',
+  backfaceVisibility: 'hidden',
 }} />
 <canvas ref={skeletonCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none object-cover z-10"
 style={{
   opacity: phase === 'live' && !uploadedProof && hasSkeletonTracking ? 1 : 0,
   contain: 'strict',
-  transform: 'translateZ(0)',
+  transform: 'rotateY(180deg) translateZ(0)',
   transformOrigin: 'center center',
+  backfaceVisibility: 'hidden',
 }} />
 
 {phase === 'live' && !uploadedProof && labels?.bodyParts && (
@@ -4059,7 +4075,7 @@ Tracking
 <div className="mx-4 mt-4" style={{ padding: '13px 16px', borderRadius: 20, background: c.bgElevated, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
 <div>
 <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary }}>Duration</span>
-<p className="sq-mono" style={{ fontSize: 20, fontWeight: 700, color: c.label, marginTop: 2 }}>{formatTimerString(secondsLeft)}</p>
+<p className="sq-mono" style={{ fontSize: 20, fontWeight: 700, color: c.label, marginTop: 2 }}>{formatTimerString(Math.min(30, Math.max(0, secondsLeft)))}</p>
 </div>
 <button onClick={toggleTimer} disabled={secondsLeft === 0}
 style={{ padding: '10px 20px', borderRadius: 12, fontSize: 13, fontWeight: 600, color: '#fff', background: secondsLeft === 0 ? c.gray : timerRunning ? c.red : c.green, opacity: secondsLeft === 0 ? 0.5 : 1 }}>
@@ -4183,10 +4199,11 @@ const anyDone = savedQuests.some(q => q.completed);
 const lastResetTs = parseInt(localStorage.getItem('sq_lastReset')) || 0;
 const expired = Date.now() - lastResetTs >= ONE_DAY_MS;
 
-if (!expired && savedQuests.length >= 5) {
-setQuests(savedQuests);
+const normalizedSavedQuests = savedQuests.map(normalizeTimedQuest);
+if (!expired && normalizedSavedQuests.length >= 5) {
+setQuests(normalizedSavedQuests);
 } else if (!expired && anyDone) {
-setQuests(savedQuests);
+setQuests(normalizedSavedQuests);
 } else {
 const now = Date.now();
 const n = Math.floor(Math.random() * 3) + 5;
