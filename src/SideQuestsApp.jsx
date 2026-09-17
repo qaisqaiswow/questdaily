@@ -1218,7 +1218,8 @@ button:active .sq-icon-tap { transform: scale(1.2) rotate(-6deg); }
 // 3 slow-drifting blurred color fields, fixed behind everything. this is what
 // the glass cards are actually blurring/tinting — without it the "glass" is
 // just a translucent gray box, which looks flat
-const AmbientBackground = React.memo(function AmbientBackground({ c }) {
+const AmbientBackground = React.memo(function AmbientBackground({ c, disabled = false }) {
+if (disabled) return null;
 return (
 <div className="fixed inset-0 pointer-events-none z-0" aria-hidden="true" style={{ overflow: 'hidden' }}>
 <div className="sq-orb-a" style={{ position: 'absolute', top: '-13%', left: '-18%', width: '78%', height: '48%', borderRadius: '50%', background: c.blue, opacity: 0.18, filter: 'blur(82px)' }} />
@@ -2622,7 +2623,11 @@ const poseStateRef = useRef(createPoseRepState(quest.reps ? (quest.progress || 0
 const poseRafRef = useRef(null);
 const poseLastVideoTimeRef = useRef(-1);
 const poseLastDetectAtRef = useRef(0);
+const poseWakeTimerRef = useRef(null);
 const skeletonCtxRef = useRef(null);
+const aiCtxRef = useRef(null);
+const mappedLandmarksRef = useRef(null);
+const visionBusyRef = useRef(false);
 const poseUiPhaseRef = useRef('up');
 const poseUiCueRef = useRef('Get in frame');
 const smoothedLandmarksRef = useRef(null);
@@ -2755,7 +2760,13 @@ if (session === cameraSessionRef.current) { setCamError('unavailable'); setPhase
 useEffect(() => {
 if (!navigator.mediaDevices?.getUserMedia) { setCamError('unsupported'); setPhase('error'); return undefined; }
 startCamera(facingMode);
-return () => { cameraSessionRef.current += 1; stopCamera(); };
+return () => {
+cameraSessionRef.current += 1;
+visionBusyRef.current = false;
+aiCtxRef.current = null;
+if (poseWakeTimerRef.current) clearTimeout(poseWakeTimerRef.current);
+stopCamera();
+};
 }, [facingMode, cameraVersion, startCamera, stopCamera]);
 
 useEffect(() => {
@@ -2814,15 +2825,19 @@ const video = videoRef.current, canvas = aiCanvasRef.current;
 if (!isCurrentRun()) return;
 if (document.visibilityState === 'hidden') { scheduleNext(1000); return; }
 if (!video || !canvas || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) { scheduleNext(250); return; }
-if (video.currentTime === lastVideoTimeRef.current || isScanningRef.current) { scheduleNext(80); return; }
+if (video.currentTime === lastVideoTimeRef.current || isScanningRef.current || visionBusyRef.current) { scheduleNext(120); return; }
 lastVideoTimeRef.current = video.currentTime;
 isScanningRef.current = true;
+visionBusyRef.current = true;
 setScanning(true);
 
 try {
 if (canvas.width !== 224 || canvas.height !== 224) { canvas.width = 224; canvas.height = 224; }
-const context = canvas.getContext('2d');
+const context = aiCtxRef.current?.canvas === canvas
+  ? aiCtxRef.current
+  : canvas.getContext('2d', { alpha: false, desynchronized: true, willReadFrequently: true });
 if (!context) throw new Error('Canvas 2D context unavailable');
+aiCtxRef.current = context;
 
 const scale = Math.min(224 / video.videoWidth, 224 / video.videoHeight);
 const width = video.videoWidth * scale;
@@ -2864,9 +2879,10 @@ spoofNoticeActiveRef.current = false;
 setNotice(null);
 }
 if (passStreakRef.current >= REQUIRED_PASSES && !verifyingRef.current && !confirmedRef.current) {
+visionBusyRef.current = false; // release live-scan slot; final verifier acquires it synchronously
 verifyingRef.current = true;
 setVerifying(true);
-runFinalVerification();
+await runFinalVerification();
 } else if (passed) {
 haptic(8);
 }
@@ -2874,12 +2890,15 @@ haptic(8);
 consecutiveErrors += 1;
 if (consecutiveErrors >= 3 && isCurrentRun()) setModelError('AI analysis is temporarily unavailable. Try closing and reopening the camera.');
 } finally {
+visionBusyRef.current = false;
 isScanningRef.current = false;
 if (isCurrentRun()) { setScanning(false); scheduleNext(consecutiveErrors ? 1200 : 1800); }
 }
 };
 
 const runFinalVerification = async () => {
+if (visionBusyRef.current) return;
+visionBusyRef.current = true;
 try {
 const video = videoRef.current;
 if (!video || !video.videoWidth) throw new Error('no live frame available');
@@ -2924,6 +2943,7 @@ passStreakRef.current = Math.max(0, REQUIRED_PASSES - 2);
 setPassStreak(passStreakRef.current);
 }
 } finally {
+visionBusyRef.current = false;
 verifyingRef.current = false;
 setVerifying(false);
 if (isCurrentRun()) scheduleNext(400);
@@ -2937,49 +2957,72 @@ useEffect(() => {
 if (!hasSkeletonTracking || phase !== 'live' || confirmed) return undefined;
 let cancelled = false;
 
-// Pose inference is intentionally throttled. MediaPipe inference is the expensive
-// part; the skeleton is still painted every animation frame from the latest
-// smoothed landmarks, so motion remains visually fluid without running the model
-// at the camera's full frame rate.
-// MediaPipe detectForVideo() is synchronous and runs on the main thread.
-    // Keep inference conservative on phones while still painting the latest pose
-    // smoothly between detections. Higher-end devices get a little more headroom.
-    const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
-    const DETECT_FPS = cores <= 4 ? 10 : 12;
-    const DETECT_INTERVAL_MS = 1000 / DETECT_FPS;
-    const PAINT_INTERVAL_MS = 1000 / 24;
-    let lastPaintAt = 0;
-    const SMOOTH = 0.32;
+// Keep pose inference bounded, but adapt to the actual runtime cost instead of
+// trusting hardwareConcurrency alone. Paint stays smooth between detections.
+// A shared vision lock prevents pose inference from overlapping SigLIP work.
+const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
+const BASE_DETECT_INTERVAL_MS = cores <= 4 ? 100 : 83.33; // 10–12 FPS target
+let detectIntervalMs = BASE_DETECT_INTERVAL_MS;
+const MIN_DETECT_INTERVAL_MS = BASE_DETECT_INTERVAL_MS;
+const MAX_DETECT_INTERVAL_MS = 166.67;
+const PAINT_INTERVAL_MS = 1000 / 24;
+let lastPaintAt = 0;
+const SMOOTH = 0.32;
 const MIN_VIS = 0.28;
 const MAJOR_JOINTS = new Set([11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]);
 
 const smoothLandmarks = (landmarks) => {
   if (!landmarks) return null;
-  if (!smoothedLandmarksRef.current || smoothedLandmarksRef.current.length !== landmarks.length) {
-    smoothedLandmarksRef.current = landmarks.map(p => ({ ...p }));
-    return smoothedLandmarksRef.current;
+  let prev = smoothedLandmarksRef.current;
+
+  if (!prev || prev.length !== landmarks.length) {
+    prev = landmarks.map(p => ({
+      x: p.x,
+      y: p.y,
+      z: p.z,
+      visibility: p.visibility ?? 1,
+    }));
+    smoothedLandmarksRef.current = prev;
+    return prev;
   }
-  const prev = smoothedLandmarksRef.current;
-  const next = landmarks.map((p, i) => {
-    const q = prev[i] || p;
+
+  // Reuse the same landmark objects instead of allocating 33 new objects every
+  // detection. This keeps garbage collection from interrupting camera rendering.
+  for (let i = 0; i < landmarks.length; i += 1) {
+    const p = landmarks[i];
+    const q = prev[i] || (prev[i] = { x: p.x, y: p.y, z: p.z, visibility: 1 });
     const alpha = (p.visibility ?? 1) < 0.45 ? SMOOTH * 0.75 : SMOOTH;
-    return {
-      ...p,
-      x: q.x + (p.x - q.x) * alpha,
-      y: q.y + (p.y - q.y) * alpha,
-      z: q.z !== undefined && p.z !== undefined ? q.z + (p.z - q.z) * alpha : p.z,
-      visibility: Math.max(0, Math.min(1, (q.visibility ?? 1) + ((p.visibility ?? 1) - (q.visibility ?? 1)) * alpha)),
-    };
-  });
-  smoothedLandmarksRef.current = next;
-  return next;
+    q.x += (p.x - q.x) * alpha;
+    q.y += (p.y - q.y) * alpha;
+    q.z = q.z !== undefined && p.z !== undefined ? q.z + (p.z - q.z) * alpha : p.z;
+    const pv = q.visibility ?? 1;
+    const v = p.visibility ?? 1;
+    q.visibility = Math.max(0, Math.min(1, pv + (v - pv) * alpha));
+  }
+  return prev;
 };
 
-const getCanvasContext = (canvas) => {
+const getSkeletonContext = (canvas) => {
   if (skeletonCtxRef.current?.canvas === canvas) return skeletonCtxRef.current;
-  const ctx = canvas.getContext('2d', { alpha: true });
+  const ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
   if (ctx) skeletonCtxRef.current = ctx;
   return ctx;
+};
+
+const getMappedPoints = (landmarks, Ox, Oy, Wr, Hr) => {
+  let mapped = mappedLandmarksRef.current;
+  if (!mapped || mapped.length !== landmarks.length) {
+    mapped = Array.from({ length: landmarks.length }, () => ({ x: 0, y: 0, vis: 0 }));
+    mappedLandmarksRef.current = mapped;
+  }
+  for (let i = 0; i < landmarks.length; i += 1) {
+    const pt = landmarks[i];
+    const out = mapped[i];
+    out.x = Ox + pt.x * Wr;
+    out.y = Oy + pt.y * Hr;
+    out.vis = pt.visibility ?? 1;
+  }
+  return mapped;
 };
 
 (async () => {
@@ -2993,17 +3036,30 @@ const getCanvasContext = (canvas) => {
       if (cancelled) return;
       const video = videoRef.current;
       const canvas = skeletonCanvasRef.current;
+
       if (!video || !canvas || video.readyState < 2 || document.visibilityState === 'hidden') {
-        poseRafRef.current = requestAnimationFrame(loop);
+        // No RAF spin while the camera is stalled/backgrounded; wake occasionally.
+        poseRafRef.current = null;
+        poseWakeTimerRef.current = window.setTimeout(() => {
+          poseWakeTimerRef.current = null;
+          if (!cancelled) loop();
+        }, 250);
         return;
       }
 
       const now = performance.now();
-      if (video.currentTime !== poseLastVideoTimeRef.current && now - poseLastDetectAtRef.current >= DETECT_INTERVAL_MS) {
+
+      if (
+        !visionBusyRef.current &&
+        video.currentTime !== poseLastVideoTimeRef.current &&
+        now - poseLastDetectAtRef.current >= detectIntervalMs
+      ) {
+        const detectStartedAt = now;
         poseLastVideoTimeRef.current = video.currentTime;
-        poseLastDetectAtRef.current = now;
+        visionBusyRef.current = true;
+
         try {
-          const result = landmarker.detectForVideo(video, now);
+          const result = landmarker.detectForVideo(video, detectStartedAt);
           const rawLandmarks = result?.landmarks?.[0] ?? null;
           const landmarks = smoothLandmarks(rawLandmarks);
           poseStableFramesRef.current = rawLandmarks
@@ -3011,7 +3067,7 @@ const getCanvasContext = (canvas) => {
             : Math.max(0, poseStableFramesRef.current - 1);
 
           if (landmarks && quest.reps) {
-            const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, now);
+            const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, detectStartedAt);
             if (update.phase !== poseUiPhaseRef.current) {
               poseUiPhaseRef.current = update.phase;
               setRepPhase(update.phase);
@@ -3043,80 +3099,93 @@ const getCanvasContext = (canvas) => {
           }
         } catch (err) {
           console.debug('Pose inference skipped:', err);
+        } finally {
+          visionBusyRef.current = false;
+          const detectDuration = performance.now() - detectStartedAt;
+          // Adapt to real inference cost. Slow frames back off; fast frames recover.
+          if (detectDuration > 70) {
+            detectIntervalMs = Math.min(MAX_DETECT_INTERVAL_MS, detectIntervalMs + 16.67);
+          } else if (detectDuration < 42) {
+            detectIntervalMs = Math.max(MIN_DETECT_INTERVAL_MS, detectIntervalMs - 8.33);
+          }
+          poseLastDetectAtRef.current = performance.now();
         }
       }
 
-      // Paint at a bounded rate. requestAnimationFrame is still used to keep the
-      // overlay synchronized with the browser, but we don't burn CPU/GPU drawing
-      // the same pose 60+ times per second on a phone.
       const paintNow = performance.now();
-      if (paintNow - lastPaintAt < PAINT_INTERVAL_MS) {
-        poseRafRef.current = requestAnimationFrame(loop);
-        return;
-      }
-      lastPaintAt = paintNow;
+      if (paintNow - lastPaintAt >= PAINT_INTERVAL_MS) {
+        lastPaintAt = paintNow;
+        const landmarks = smoothedLandmarksRef.current;
+        let drawCtx = getSkeletonContext(canvas);
 
-      const landmarks = smoothedLandmarksRef.current;
-      const ctx = getCanvasContext(canvas);
-      if (ctx && video.videoWidth && video.videoHeight) {
-        const clientW = canvas.clientWidth || 300;
-        const clientH = canvas.clientHeight || 300;
-        if (canvas.width !== clientW || canvas.height !== clientH) {
-          canvas.width = clientW;
-          canvas.height = clientH;
-          skeletonCtxRef.current = canvas.getContext('2d', { alpha: true });
-        }
-        const drawCtx = skeletonCtxRef.current || ctx;
-        drawCtx.clearRect(0, 0, canvas.width, canvas.height);
-        if (landmarks) {
-          const Wc = canvas.width, Hc = canvas.height;
-          const Wv = video.videoWidth, Hv = video.videoHeight;
-          const scale = Math.max(Wc / Wv, Hc / Hv);
-          const Wr = Wv * scale, Hr = Hv * scale;
-          const Ox = (Wc - Wr) / 2, Oy = (Hc - Hr) / 2;
-          const mapped = landmarks.map(pt => ({ x: Ox + pt.x * Wr, y: Oy + pt.y * Hr, vis: pt.visibility ?? 1 }));
-          const poseReadyNow = poseStableFramesRef.current >= 3;
-          const repActive = Boolean(quest.reps);
-          const currentPhase = poseStateRef.current.phase;
-          const lineColor = repActive
-            ? (currentPhase === 'down' ? '#30D158' : '#0A84FF')
-            : (poseReadyNow ? '#0A84FF' : 'rgba(255,255,255,.72)');
+        if (drawCtx && video.videoWidth && video.videoHeight) {
+          const clientW = canvas.clientWidth || 300;
+          const clientH = canvas.clientHeight || 300;
 
-          drawCtx.save();
-          drawCtx.globalAlpha = poseReadyNow ? 0.95 : 0.65;
-          drawCtx.lineWidth = 3.2;
-          drawCtx.lineCap = 'round';
-          drawCtx.lineJoin = 'round';
-          drawCtx.strokeStyle = lineColor;
-          POSE_CONNECTIONS.forEach(([i, j]) => {
-            const p1 = mapped[i], p2 = mapped[j];
-            if (p1 && p2 && p1.vis > MIN_VIS && p2.vis > MIN_VIS) {
-              drawCtx.beginPath();
-              drawCtx.moveTo(p1.x, p1.y);
-              drawCtx.lineTo(p2.x, p2.y);
-              drawCtx.stroke();
-            }
-          });
-          drawCtx.restore();
+          // Resize only when the displayed canvas actually changes size. Resizing
+          // resets the drawing buffer, so the context is reacquired only here.
+          if (canvas.width !== clientW || canvas.height !== clientH) {
+            canvas.width = clientW;
+            canvas.height = clientH;
+            drawCtx = canvas.getContext('2d', { alpha: true, desynchronized: true });
+            skeletonCtxRef.current = drawCtx;
+          }
 
-          drawCtx.save();
-          drawCtx.globalAlpha = poseReadyNow ? 1 : 0.72;
-          mapped.forEach((pt, idx) => {
-            if (pt.vis <= MIN_VIS) return;
-            const isMajorJoint = MAJOR_JOINTS.has(idx);
-            drawCtx.beginPath();
-            drawCtx.arc(pt.x, pt.y, isMajorJoint ? 6.5 : 4, 0, Math.PI * 2);
-            drawCtx.fillStyle = 'rgba(0,0,0,.72)';
-            drawCtx.fill();
-            drawCtx.lineWidth = isMajorJoint ? 2.1 : 1.5;
+          drawCtx.clearRect(0, 0, canvas.width, canvas.height);
+
+          if (landmarks) {
+            const Wc = canvas.width, Hc = canvas.height;
+            const Wv = video.videoWidth, Hv = video.videoHeight;
+            const scale = Math.max(Wc / Wv, Hc / Hv);
+            const Wr = Wv * scale, Hr = Hv * scale;
+            const Ox = (Wc - Wr) / 2, Oy = (Hc - Hr) / 2;
+            const mapped = getMappedPoints(landmarks, Ox, Oy, Wr, Hr);
+            const poseReadyNow = poseStableFramesRef.current >= 3;
+            const repActive = Boolean(quest.reps);
+            const currentPhase = poseStateRef.current.phase;
+            const lineColor = repActive
+              ? (currentPhase === 'down' ? '#30D158' : '#0A84FF')
+              : (poseReadyNow ? '#0A84FF' : 'rgba(255,255,255,.72)');
+
+            drawCtx.save();
+            drawCtx.globalAlpha = poseReadyNow ? 0.95 : 0.65;
+            drawCtx.lineWidth = 3.2;
+            drawCtx.lineCap = 'round';
+            drawCtx.lineJoin = 'round';
             drawCtx.strokeStyle = lineColor;
-            drawCtx.stroke();
-            drawCtx.beginPath();
-            drawCtx.arc(pt.x, pt.y, isMajorJoint ? 2.7 : 1.65, 0, Math.PI * 2);
-            drawCtx.fillStyle = '#fff';
-            drawCtx.fill();
-          });
-          drawCtx.restore();
+
+            for (let k = 0; k < POSE_CONNECTIONS.length; k += 1) {
+              const [i, j] = POSE_CONNECTIONS[k];
+              const p1 = mapped[i], p2 = mapped[j];
+              if (p1 && p2 && p1.vis > MIN_VIS && p2.vis > MIN_VIS) {
+                drawCtx.beginPath();
+                drawCtx.moveTo(p1.x, p1.y);
+                drawCtx.lineTo(p2.x, p2.y);
+                drawCtx.stroke();
+              }
+            }
+            drawCtx.restore();
+
+            drawCtx.save();
+            drawCtx.globalAlpha = poseReadyNow ? 1 : 0.72;
+            for (let idx = 0; idx < mapped.length; idx += 1) {
+              const pt = mapped[idx];
+              if (pt.vis <= MIN_VIS) continue;
+              const isMajorJoint = MAJOR_JOINTS.has(idx);
+              drawCtx.beginPath();
+              drawCtx.arc(pt.x, pt.y, isMajorJoint ? 6.5 : 4, 0, Math.PI * 2);
+              drawCtx.fillStyle = 'rgba(0,0,0,.72)';
+              drawCtx.fill();
+              drawCtx.lineWidth = isMajorJoint ? 2.1 : 1.5;
+              drawCtx.strokeStyle = lineColor;
+              drawCtx.stroke();
+              drawCtx.beginPath();
+              drawCtx.arc(pt.x, pt.y, isMajorJoint ? 2.7 : 1.65, 0, Math.PI * 2);
+              drawCtx.fillStyle = '#fff';
+              drawCtx.fill();
+            }
+            drawCtx.restore();
+          }
         }
       }
 
@@ -3132,13 +3201,16 @@ const getCanvasContext = (canvas) => {
 return () => {
   cancelled = true;
   if (poseRafRef.current) cancelAnimationFrame(poseRafRef.current);
+  if (poseWakeTimerRef.current) clearTimeout(poseWakeTimerRef.current);
   poseRafRef.current = null;
+  poseWakeTimerRef.current = null;
   poseLastDetectAtRef.current = 0;
   skeletonCtxRef.current = null;
+  mappedLandmarksRef.current = null;
   smoothedLandmarksRef.current = null;
   poseStableFramesRef.current = 0;
   if (skeletonCanvasRef.current) {
-    const ctx = skeletonCanvasRef.current.getContext('2d');
+    const ctx = skeletonCanvasRef.current.getContext('2d', { alpha: true, desynchronized: true });
     ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
   }
 };
@@ -3158,12 +3230,28 @@ let cancelled = false;
 let timer = null;
 
 const check = async () => {
+if (cancelled) return;
+if (document.visibilityState === 'hidden') {
+  timer = window.setTimeout(check, 1000);
+  return;
+}
+if (visionBusyRef.current) {
+  timer = window.setTimeout(check, 300);
+  return;
+}
+
+visionBusyRef.current = true;
 try {
 const video = videoRef.current;
 const canvas = aiCanvasRef.current;
 if (video && canvas && video.videoWidth) {
 if (canvas.width !== 224 || canvas.height !== 224) { canvas.width = 224; canvas.height = 224; }
-const ctx = canvas.getContext('2d');
+const ctx = aiCtxRef.current?.canvas === canvas
+  ? aiCtxRef.current
+  : canvas.getContext('2d', { alpha: false, desynchronized: true, willReadFrequently: true });
+if (!ctx) throw new Error('Canvas 2D context unavailable');
+aiCtxRef.current = ctx;
+
 const scale = Math.min(224 / video.videoWidth, 224 / video.videoHeight);
 const w = video.videoWidth * scale, h = video.videoHeight * scale;
 ctx.fillStyle = '#000';
@@ -3187,7 +3275,10 @@ setNotice(null);
 }
 }
 } catch { /* transient — try again next tick */ }
-finally { if (!cancelled) timer = window.setTimeout(check, 6000); }
+finally {
+visionBusyRef.current = false;
+if (!cancelled) timer = window.setTimeout(check, 6000);
+}
 };
 timer = window.setTimeout(check, 3000);
 return () => { cancelled = true; clearTimeout(timer); };
@@ -3252,6 +3343,7 @@ clearTimeout(scanTimerRef.current);
 if (poseRafRef.current) cancelAnimationFrame(poseRafRef.current);
 poseRafRef.current = null;
 isScanningRef.current = false;
+visionBusyRef.current = false;
 verifyingRef.current = false;
 confirmedRef.current = false;
 setTimerRunning(false);
@@ -3277,7 +3369,12 @@ if (uploadedProof) { onConfirm(uploadedProof); return; }
 const video = videoRef.current, canvas = aiCanvasRef.current;
 if (!video || !canvas) { confirmingRef.current = false; return; }
 canvas.width = video.videoWidth || 640; canvas.height = video.videoHeight || 480;
-canvas.getContext('2d').drawImage(video, 0, 0);
+const ctx = aiCtxRef.current?.canvas === canvas
+  ? aiCtxRef.current
+  : canvas.getContext('2d', { alpha: false, desynchronized: true, willReadFrequently: true });
+if (!ctx) { confirmingRef.current = false; return; }
+aiCtxRef.current = ctx;
+ctx.drawImage(video, 0, 0);
 onConfirm(canvas.toDataURL('image/jpeg', 0.82));
 };
 
@@ -3983,9 +4080,9 @@ return (
 <div className="sq-root" style={{ background: c.bg, minHeight: '100vh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
 <SystemType />
 <div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg, zIndex: 2 }}>
-<AmbientBackground c={c} />
+<AmbientBackground c={c} disabled={Boolean(proofModal)} />
 
-{isSaqoom && (
+{isSaqoom && !proofModal && (
   <div aria-hidden="true" className="sq-heart-rain">
     {Array.from({ length: 32 }, (_, i) => (
       <span
