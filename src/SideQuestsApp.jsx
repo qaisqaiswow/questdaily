@@ -1079,6 +1079,11 @@ return { hasCameraMetadata, cameraScore, downloadedScore, suspicious, confidence
 // colors
 // just the standard ios system colors, light + dark. using plain objects instead
 // of tailwind's dark: classes since we're already passing `dark` around as state
+const LOW_END_DEVICE = typeof navigator !== 'undefined' && (
+  (navigator.hardwareConcurrency || 4) <= 4 ||
+  ((navigator.deviceMemory || 0) > 0 && navigator.deviceMemory <= 4)
+);
+
 const C = {
 light: {
 bg: '#F2F2F7', bgElevated: '#FFFFFF', bgSecondary: '#F2F2F7', bgTertiary: '#E5E5EA',
@@ -1110,8 +1115,8 @@ const glassStyle = (c, strong = false) => ({
 position: 'relative',
 overflow: 'hidden',
 background: `linear-gradient(155deg, ${c.glassHighlight} 0%, ${strong ? c.glassStrong : c.glass} 28%, ${strong ? c.glassStrong : c.glass} 66%, rgba(255,255,255,0.035) 100%)`,
-backdropFilter: 'blur(34px) saturate(185%) contrast(108%)',
-WebkitBackdropFilter: 'blur(34px) saturate(185%) contrast(108%)',
+backdropFilter: LOW_END_DEVICE ? 'blur(16px) saturate(150%) contrast(105%)' : 'blur(34px) saturate(185%) contrast(108%)',
+WebkitBackdropFilter: LOW_END_DEVICE ? 'blur(16px) saturate(150%) contrast(105%)' : 'blur(34px) saturate(185%) contrast(108%)',
 border: `1px solid ${c.glassBorder}`,
 boxShadow: `inset 0 1px 0 ${c.glassHighlight}, inset 0 0 0 0.5px rgba(255,255,255,0.07), inset 0 -18px 45px -40px rgba(255,255,255,0.18), 0 20px 60px -34px rgba(0,0,0,${c === C.dark ? '0.70' : '0.24'})`,
 transform: 'translateZ(0)',
@@ -1208,6 +1213,9 @@ button:active .sq-icon-tap { transform: scale(1.2) rotate(-6deg); }
 .sq-control:active { transform: translateY(1px) scale(.985); }
 @keyframes sq-pulse-soft { 0%,100% { transform: scale(1); opacity: .52; } 50% { transform: scale(1.18); opacity: 1; } }
 .sq-cam-shell { box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 22px 55px -32px rgba(0,0,0,.85); }
+.sq-camera-modal .sq-glass::after, .sq-camera-modal .sq-thinking-orb { animation: none !important; }
+.sq-camera-modal .sq-glass::after { display: none !important; }
+.sq-low-end .sq-glass::after, .sq-low-end .sq-thinking-orb { animation: none !important; display: none; }
 @media (prefers-reduced-motion: reduce) {
 .sq-orb-a, .sq-orb-b, .sq-orb-c, .sq-thinking-orb { animation: none; }
 }
@@ -1220,12 +1228,15 @@ button:active .sq-icon-tap { transform: scale(1.2) rotate(-6deg); }
 // just a translucent gray box, which looks flat
 const AmbientBackground = React.memo(function AmbientBackground({ c, disabled = false }) {
 if (disabled) return null;
+const blur = LOW_END_DEVICE ? 42 : 82;
+const blurB = LOW_END_DEVICE ? 46 : 90;
+const blurC = LOW_END_DEVICE ? 44 : 86;
 return (
 <div className="fixed inset-0 pointer-events-none z-0" aria-hidden="true" style={{ overflow: 'hidden' }}>
-<div className="sq-orb-a" style={{ position: 'absolute', top: '-13%', left: '-18%', width: '78%', height: '48%', borderRadius: '50%', background: c.blue, opacity: 0.18, filter: 'blur(82px)' }} />
-<div className="sq-orb-b" style={{ position: 'absolute', top: '22%', right: '-22%', width: '76%', height: '50%', borderRadius: '50%', background: c.purple, opacity: 0.15, filter: 'blur(90px)' }} />
-<div className="sq-orb-c" style={{ position: 'absolute', bottom: '-18%', left: '0%', width: '72%', height: '44%', borderRadius: '50%', background: c.teal, opacity: 0.15, filter: 'blur(86px)' }} />
-<div className="sq-orb-a" style={{ position: 'absolute', top: '14%', left: '42%', width: '28%', height: '22%', borderRadius: '50%', background: c.indigo, opacity: 0.07, filter: 'blur(58px)', animationDuration: '19s' }} />
+<div className="sq-orb-a" style={{ position: 'absolute', top: '-13%', left: '-18%', width: '78%', height: '48%', borderRadius: '50%', background: c.blue, opacity: 0.18, filter: `blur(${blur}px)`, animation: LOW_END_DEVICE ? 'none' : undefined }} />
+<div className="sq-orb-b" style={{ position: 'absolute', top: '22%', right: '-22%', width: '76%', height: '50%', borderRadius: '50%', background: c.purple, opacity: 0.15, filter: `blur(${blurB}px)`, animation: LOW_END_DEVICE ? 'none' : undefined }} />
+<div className="sq-orb-c" style={{ position: 'absolute', bottom: '-18%', left: '0%', width: '72%', height: '44%', borderRadius: '50%', background: c.teal, opacity: 0.15, filter: `blur(${blurC}px)`, animation: LOW_END_DEVICE ? 'none' : undefined }} />
+{!LOW_END_DEVICE && <div className="sq-orb-a" style={{ position: 'absolute', top: '14%', left: '42%', width: '28%', height: '22%', borderRadius: '50%', background: c.indigo, opacity: 0.07, filter: 'blur(58px)', animationDuration: '19s' }} />}
 </div>
 );
 });
@@ -2607,6 +2618,104 @@ Back to Quests
 }
 
 // camera modal (the big one)
+
+// Pose inference runs in a dedicated worker so MediaPipe never blocks the camera
+// compositor / React main thread. Google’s current web sample uses the same
+// ImageBitmap -> worker -> detectForVideo pattern.
+const POSE_WORKER_MODULE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+const POSE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+
+function createPoseInferenceWorker() {
+  if (typeof Worker === 'undefined') return null;
+  const source = `
+    let landmarker = null;
+    let initializing = null;
+
+    async function createLandmarker() {
+      if (landmarker) return landmarker;
+      if (initializing) return initializing;
+      initializing = (async () => {
+        const vision = await import(${JSON.stringify(POSE_WORKER_MODULE_URL)});
+        const fileset = await vision.FilesetResolver.forVisionTasks(${JSON.stringify(POSE_WASM_URL)});
+        const options = {
+          baseOptions: {
+            modelAssetPath: ${JSON.stringify(POSE_MODEL_URL)},
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numPoses: 1,
+          minPoseDetectionConfidence: 0.45,
+          minPosePresenceConfidence: 0.45,
+          minTrackingConfidence: 0.45,
+          outputSegmentationMasks: false,
+        };
+        try {
+          landmarker = await vision.PoseLandmarker.createFromOptions(fileset, options);
+        } catch (gpuError) {
+          // Some Safari / lower-end worker environments cannot create a GPU
+          // delegate in a worker. Keep the UI smooth by falling back to CPU.
+          landmarker = await vision.PoseLandmarker.createFromOptions(fileset, {
+            ...options,
+            baseOptions: {
+              ...options.baseOptions,
+              delegate: 'CPU',
+            },
+          });
+        }
+        return landmarker;
+      })();
+      try {
+        return await initializing;
+      } finally {
+        initializing = null;
+      }
+    }
+
+    self.onmessage = async (event) => {
+      const data = event.data || {};
+      if (data.type === 'INIT') {
+        try {
+          await createLandmarker();
+          self.postMessage({ type: 'READY' });
+        } catch (error) {
+          self.postMessage({ type: 'INIT_ERROR', error: error?.message || 'Pose worker failed to initialize' });
+        }
+        return;
+      }
+      if (data.type !== 'DETECT') return;
+
+      const bitmap = data.bitmap;
+      if (!bitmap) return;
+      try {
+        const model = await createLandmarker();
+        const startedAt = performance.now();
+        const result = model.detectForVideo(bitmap, data.timestampMs);
+        const inferenceTime = performance.now() - startedAt;
+        bitmap.close();
+        self.postMessage({
+          type: 'RESULT',
+          landmarks: result?.landmarks?.[0] ?? null,
+          inferenceTime,
+          captureWallTime: data.captureWallTime,
+        });
+      } catch (error) {
+        bitmap.close();
+        self.postMessage({ type: 'DETECT_ERROR', error: error?.message || 'Pose detection failed' });
+      }
+    };
+  `;
+  const blob = new Blob([source], { type: 'text/javascript' });
+  const url = URL.createObjectURL(blob);
+  let worker = null;
+  try {
+    worker = new Worker(url, { type: 'module', name: 'questdaily-pose' });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+  return worker;
+}
+
 function CameraModal({ quest, onConfirm, onCancel, c }) {
 const videoRef = useRef(null);
 const aiCanvasRef = useRef(null);
@@ -2624,6 +2733,8 @@ const poseRafRef = useRef(null);
 const poseLastVideoTimeRef = useRef(-1);
 const poseLastDetectAtRef = useRef(0);
 const poseWakeTimerRef = useRef(null);
+const poseWorkerRef = useRef(null);
+const poseWorkerBusyRef = useRef(false);
 const skeletonCtxRef = useRef(null);
 const aiCtxRef = useRef(null);
 const mappedLandmarksRef = useRef(null);
@@ -2726,8 +2837,13 @@ const startCamera = useCallback(async (mode) => {
 const session = ++cameraSessionRef.current;
 stopCamera();
 setCamError(null); setNotice(null); setUploadedProof(null); setPhase('starting');
+const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
+const deviceMemory = typeof navigator !== 'undefined' ? (navigator.deviceMemory || 0) : 0;
+const lowEnd = cores <= 4 || (deviceMemory > 0 && deviceMemory <= 4);
+const cameraWidth = lowEnd ? 480 : 640;
+const cameraHeight = lowEnd ? 360 : 480;
 const attempts = [
-{ video: { facingMode: { ideal: mode }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } }, audio: false },
+{ video: { facingMode: { ideal: mode }, width: { ideal: cameraWidth }, height: { ideal: cameraHeight }, frameRate: { ideal: 24, max: 24 } }, audio: false },
 { video: { facingMode: { ideal: mode } }, audio: false },
 { video: true, audio: false },
 ];
@@ -2956,263 +3072,397 @@ return () => { disposed = true; scanRunRef.current += 1; clearTimeout(scanTimerR
 useEffect(() => {
 if (!hasSkeletonTracking || phase !== 'live' || confirmed) return undefined;
 let cancelled = false;
-
-// Keep pose inference bounded, but adapt to the actual runtime cost instead of
-// trusting hardwareConcurrency alone. Paint stays smooth between detections.
-// A shared vision lock prevents pose inference from overlapping SigLIP work.
-const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
-const BASE_DETECT_INTERVAL_MS = cores <= 4 ? 100 : 83.33; // 10–12 FPS target
-let detectIntervalMs = BASE_DETECT_INTERVAL_MS;
-const MIN_DETECT_INTERVAL_MS = BASE_DETECT_INTERVAL_MS;
-const MAX_DETECT_INTERVAL_MS = 166.67;
-const PAINT_INTERVAL_MS = 1000 / 24;
+let paintHandle = null;
+let poseWorker = null;
+let workerReady = false;
+let workerBusy = false;
+let usingWorker = false;
+let fallbackLandmarker = null;
 let lastPaintAt = 0;
-const SMOOTH = 0.32;
+let lastFallbackDetectAt = 0;
+let detectIntervalMs = BASE_INTERVAL;
+let lastSampleWallTime = 0;
+let lastPoseInferenceMs = 0;
+const lowEnd = (typeof navigator !== 'undefined' && ((navigator.hardwareConcurrency || 4) <= 4 || ((navigator.deviceMemory || 0) > 0 && navigator.deviceMemory <= 4)));
+const BASE_INTERVAL = lowEnd ? 125 : 90;
+const MIN_INTERVAL = lowEnd ? 100 : 75;
+const MAX_INTERVAL = lowEnd ? 220 : 180;
+const PAINT_INTERVAL_MS = 1000 / 30;
+const PREDICTION_MS_MAX = lowEnd ? 85 : 110;
+const SMOOTH_ALPHA = lowEnd ? 0.72 : 0.78;
+const VELOCITY_ALPHA = 0.65;
 const MIN_VIS = 0.28;
-const MAJOR_JOINTS = new Set([11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]);
+const MAJOR_JOINTS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+const BODY_CONNECTIONS = [
+[11, 12], [11, 23], [12, 24], [23, 24],
+[11, 13], [13, 15], [12, 14], [14, 16],
+[23, 25], [25, 27], [27, 29], [27, 31],
+[24, 26], [26, 28], [28, 30], [28, 32],
+];
+let filtered = null;
+let velocityX = null;
+let velocityY = null;
+let renderPoints = null;
 
-const smoothLandmarks = (landmarks) => {
-  if (!landmarks) return null;
-  let prev = smoothedLandmarksRef.current;
+const filterLandmarks = (landmarks, captureWallTime) => {
+if (!landmarks) return null;
+if (!filtered || filtered.length !== landmarks.length) {
+filtered = landmarks.map(p => ({ x: p.x, y: p.y, z: p.z, visibility: p.visibility ?? 1 }));
+velocityX = new Float32Array(landmarks.length);
+velocityY = new Float32Array(landmarks.length);
+renderPoints = Array.from({ length: landmarks.length }, () => ({ x: 0, y: 0, vis: 0 }));
+lastSampleWallTime = captureWallTime || performance.now();
+return filtered;
+}
+const dt = Math.max(0.033, Math.min(0.35, ((captureWallTime || performance.now()) - lastSampleWallTime) / 1000));
+for (let i = 0; i < landmarks.length; i += 1) {
+const p = landmarks[i];
+const q = filtered[i] || (filtered[i] = { x: p.x, y: p.y, z: p.z, visibility: p.visibility ?? 1 });
+const dx = p.x - q.x;
+const dy = p.y - q.y;
+const instantVx = dx / dt;
+const instantVy = dy / dt;
+velocityX[i] = velocityX[i] * (1 - VELOCITY_ALPHA) + instantVx * VELOCITY_ALPHA;
+velocityY[i] = velocityY[i] * (1 - VELOCITY_ALPHA) + instantVy * VELOCITY_ALPHA;
+const alpha = (p.visibility ?? 1) < 0.45 ? SMOOTH_ALPHA * 0.9 : SMOOTH_ALPHA;
+q.x += dx * alpha;
+q.y += dy * alpha;
+q.z = q.z !== undefined && p.z !== undefined ? q.z + (p.z - q.z) * alpha : p.z;
+const pv = q.visibility ?? 1;
+const v = p.visibility ?? 1;
+q.visibility = Math.max(0, Math.min(1, pv + (v - pv) * alpha));
+}
+lastSampleWallTime = captureWallTime || performance.now();
+return filtered;
+};
 
-  if (!prev || prev.length !== landmarks.length) {
-    prev = landmarks.map(p => ({
-      x: p.x,
-      y: p.y,
-      z: p.z,
-      visibility: p.visibility ?? 1,
-    }));
-    smoothedLandmarksRef.current = prev;
-    return prev;
-  }
-
-  // Reuse the same landmark objects instead of allocating 33 new objects every
-  // detection. This keeps garbage collection from interrupting camera rendering.
-  for (let i = 0; i < landmarks.length; i += 1) {
-    const p = landmarks[i];
-    const q = prev[i] || (prev[i] = { x: p.x, y: p.y, z: p.z, visibility: 1 });
-    const alpha = (p.visibility ?? 1) < 0.45 ? SMOOTH * 0.75 : SMOOTH;
-    q.x += (p.x - q.x) * alpha;
-    q.y += (p.y - q.y) * alpha;
-    q.z = q.z !== undefined && p.z !== undefined ? q.z + (p.z - q.z) * alpha : p.z;
-    const pv = q.visibility ?? 1;
-    const v = p.visibility ?? 1;
-    q.visibility = Math.max(0, Math.min(1, pv + (v - pv) * alpha));
-  }
-  return prev;
+const getRenderLandmarks = (now) => {
+if (!filtered || !renderPoints) return null;
+const rawAge = Math.max(0, now - lastSampleWallTime);
+const lead = Math.min(PREDICTION_MS_MAX, rawAge + (lowEnd ? 8 : 12)) / 1000;
+for (let i = 0; i < filtered.length; i += 1) {
+const p = filtered[i];
+const out = renderPoints[i];
+out.x = Math.max(0, Math.min(1, p.x + velocityX[i] * lead));
+out.y = Math.max(0, Math.min(1, p.y + velocityY[i] * lead));
+out.vis = p.visibility ?? 1;
+}
+return renderPoints;
 };
 
 const getSkeletonContext = (canvas) => {
-  if (skeletonCtxRef.current?.canvas === canvas) return skeletonCtxRef.current;
-  const ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
-  if (ctx) skeletonCtxRef.current = ctx;
-  return ctx;
+if (skeletonCtxRef.current?.canvas === canvas) return skeletonCtxRef.current;
+const ctx = canvas.getContext('2d', { alpha: true, desynchronized: true });
+if (ctx) skeletonCtxRef.current = ctx;
+return ctx;
 };
 
-const getMappedPoints = (landmarks, Ox, Oy, Wr, Hr) => {
-  let mapped = mappedLandmarksRef.current;
-  if (!mapped || mapped.length !== landmarks.length) {
-    mapped = Array.from({ length: landmarks.length }, () => ({ x: 0, y: 0, vis: 0 }));
-    mappedLandmarksRef.current = mapped;
-  }
-  for (let i = 0; i < landmarks.length; i += 1) {
-    const pt = landmarks[i];
-    const out = mapped[i];
-    out.x = Ox + pt.x * Wr;
-    out.y = Oy + pt.y * Hr;
-    out.vis = pt.visibility ?? 1;
-  }
-  return mapped;
+const applyPoseResult = (rawLandmarks, captureWallTime) => {
+const landmarks = filterLandmarks(rawLandmarks, captureWallTime || performance.now());
+poseStableFramesRef.current = rawLandmarks
+? Math.min(30, poseStableFramesRef.current + 1)
+: Math.max(0, poseStableFramesRef.current - 1);
+
+if (landmarks && quest.reps) {
+const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, performance.now());
+if (update.phase !== poseUiPhaseRef.current) {
+poseUiPhaseRef.current = update.phase;
+setRepPhase(update.phase);
+}
+if (update.cue !== poseUiCueRef.current) {
+poseUiCueRef.current = update.cue;
+setRepCue(update.cue);
+}
+if (update.counted) {
+setRepsDone(update.reps);
+if (update.reps >= quest.reps) {
+if (repSpoofSuspectedRef.current) {
+poseStateRef.current.reps = quest.reps - 1;
+setRepsDone(quest.reps - 1);
+haptic(10);
+} else {
+confirmedRef.current = true;
+setConfirmed(true);
+haptic([15, 30, 15]);
+}
+} else {
+haptic(10);
+}
+}
+} else if (!landmarks && quest.reps && poseUiCueRef.current !== 'Step back so your full body is visible') {
+poseUiCueRef.current = 'Step back so your full body is visible';
+setRepCue(poseUiCueRef.current);
+}
+};
+
+const dispatchPose = async (video, timestampMs, captureWallTime) => {
+if (cancelled || !usingWorker || !workerReady || workerBusy || visionBusyRef.current) return;
+workerBusy = true;
+poseWorkerBusyRef.current = true;
+visionBusyRef.current = true;
+try {
+let bitmap = null;
+try {
+bitmap = await createImageBitmap(video, { resizeWidth: lowEnd ? 256 : 320, resizeHeight: lowEnd ? 192 : 240, resizeQuality: 'medium' });
+} catch {
+bitmap = await createImageBitmap(video);
+}
+if (cancelled) { bitmap.close(); return; }
+poseWorker.postMessage({ type: 'DETECT', bitmap, timestampMs, captureWallTime }, [bitmap]);
+} catch {
+try { bitmap?.close?.(); } catch {}
+workerBusy = false;
+poseWorkerBusyRef.current = false;
+visionBusyRef.current = false;
+}
+};
+
+const paint = () => {
+if (cancelled) return;
+const video = videoRef.current;
+const canvas = skeletonCanvasRef.current;
+if (!video || !canvas || video.readyState < 2 || document.visibilityState === 'hidden') {
+return;
+}
+const now = performance.now();
+if (now - lastPaintAt < PAINT_INTERVAL_MS) return;
+lastPaintAt = now;
+const drawCtx = getSkeletonContext(canvas);
+if (!drawCtx || !video.videoWidth || !video.videoHeight) return;
+
+const clientW = canvas.clientWidth || 300;
+const clientH = canvas.clientHeight || 300;
+if (canvas.width !== clientW || canvas.height !== clientH) {
+canvas.width = clientW;
+canvas.height = clientH;
+}
+drawCtx.clearRect(0, 0, canvas.width, canvas.height);
+const points = getRenderLandmarks(now);
+if (!points) return;
+const Wc = canvas.width, Hc = canvas.height;
+const Wv = video.videoWidth, Hv = video.videoHeight;
+const scale = Math.max(Wc / Wv, Hc / Hv);
+const Wr = Wv * scale, Hr = Hv * scale;
+const Ox = (Wc - Wr) / 2, Oy = (Hc - Hr) / 2;
+
+// Map only the body landmarks we actually draw. Face/toe detail adds a lot of
+// Canvas2D calls for little visual value on a phone.
+for (let i = 0; i < points.length; i += 1) {
+const pt = points[i];
+pt.x = Ox + pt.x * Wr;
+pt.y = Oy + pt.y * Hr;
+}
+
+const repActive = Boolean(quest.reps);
+const currentPhase = poseStateRef.current.phase;
+const poseReadyNow = poseStableFramesRef.current >= 2;
+const lineColor = repActive
+? (currentPhase === 'down' ? '#30D158' : '#0A84FF')
+: (poseReadyNow ? '#0A84FF' : 'rgba(255,255,255,.72)');
+
+drawCtx.globalAlpha = poseReadyNow ? 0.94 : 0.66;
+drawCtx.lineWidth = 3;
+drawCtx.lineCap = 'round';
+drawCtx.lineJoin = 'round';
+drawCtx.strokeStyle = lineColor;
+for (let k = 0; k < BODY_CONNECTIONS.length; k += 1) {
+const pair = BODY_CONNECTIONS[k];
+const p1 = points[pair[0]], p2 = points[pair[1]];
+if (!p1 || !p2 || p1.vis <= MIN_VIS || p2.vis <= MIN_VIS) continue;
+drawCtx.beginPath();
+drawCtx.moveTo(p1.x, p1.y); drawCtx.lineTo(p2.x, p2.y); drawCtx.stroke();
+}
+
+drawCtx.globalAlpha = poseReadyNow ? 1 : 0.72;
+drawCtx.fillStyle = 'rgba(0,0,0,.68)';
+drawCtx.strokeStyle = lineColor;
+for (let j = 0; j < MAJOR_JOINTS.length; j += 1) {
+const idx = MAJOR_JOINTS[j];
+const pt = points[idx];
+if (!pt || pt.vis <= MIN_VIS) continue;
+const radius = 6;
+drawCtx.beginPath(); drawCtx.arc(pt.x, pt.y, radius, 0, Math.PI * 2); drawCtx.fill();
+drawCtx.lineWidth = 2; drawCtx.stroke();
+drawCtx.fillStyle = '#fff';
+drawCtx.beginPath(); drawCtx.arc(pt.x, pt.y, 2.6, 0, Math.PI * 2); drawCtx.fill();
+drawCtx.fillStyle = 'rgba(0,0,0,.68)';
+}
+drawCtx.globalAlpha = 1;
+};
+
+const scheduleNextPaint = () => {
+if (cancelled) return;
+const video = videoRef.current;
+if (video?.requestVideoFrameCallback) {
+paintHandle = video.requestVideoFrameCallback(() => {
+paint();
+const v = videoRef.current;
+if (v?.requestVideoFrameCallback) scheduleNextPaint();
+});
+} else {
+paintHandle = requestAnimationFrame(() => {
+paint();
+scheduleNextPaint();
+});
+}
+};
+
+const startFallback = async () => {
+try {
+setPoseError(null);
+fallbackLandmarker = await getPoseLandmarker();
+if (cancelled) return;
+setPoseReady(true);
+const fallbackLoop = () => {
+if (cancelled) return;
+const video = videoRef.current;
+if (!video || video.readyState < 2 || document.visibilityState === 'hidden') {
+paintHandle = requestAnimationFrame(fallbackLoop);
+return;
+}
+const now = performance.now();
+if (!workerBusy && !visionBusyRef.current && video.currentTime !== poseLastVideoTimeRef.current && now - lastFallbackDetectAt >= detectIntervalMs) {
+poseLastVideoTimeRef.current = video.currentTime;
+lastFallbackDetectAt = now;
+const started = performance.now();
+visionBusyRef.current = true;
+try {
+const result = fallbackLandmarker.detectForVideo(video, now);
+applyPoseResult(result?.landmarks?.[0] ?? null, now);
+} catch {}
+finally {
+visionBusyRef.current = false;
+poseWorkerBusyRef.current = false;
+const elapsed = performance.now() - started;
+lastPoseInferenceMs = elapsed;
+detectIntervalMs = elapsed > 75
+? Math.min(MAX_INTERVAL, detectIntervalMs + 20)
+: elapsed < 38
+? Math.max(MIN_INTERVAL, detectIntervalMs - 8)
+: detectIntervalMs;
+}
+}
+paint();
+paintHandle = requestAnimationFrame(fallbackLoop);
+};
+fallbackLoop();
+} catch {
+if (!cancelled) setPoseError('Could not load the pose tracking model. Check your connection and try again.');
+}
 };
 
 (async () => {
-  try {
-    setPoseError(null);
-    const landmarker = await getPoseLandmarker();
-    if (cancelled) return;
-    setPoseReady(true);
+try {
+const canWorker = typeof Worker !== 'undefined' && typeof createImageBitmap === 'function';
+if (!canWorker) {
+await startFallback();
+return;
+}
+poseWorker = createPoseInferenceWorker();
+if (!poseWorker) {
+await startFallback();
+return;
+}
+usingWorker = true;
+poseWorkerRef.current = poseWorker;
+poseWorker.onmessage = (event) => {
+if (cancelled) return;
+const data = event.data || {};
+if (data.type === 'READY') {
+workerReady = true;
+setPoseReady(true);
+return;
+}
+if (data.type === 'INIT_ERROR') {
+usingWorker = false;
+workerBusy = false;
+poseWorkerBusyRef.current = false;
+visionBusyRef.current = false;
+try { poseWorker.terminate(); } catch {}
+poseWorker = null;
+poseWorkerRef.current = null;
+startFallback();
+return;
+}
+if (data.type === 'RESULT') {
+workerBusy = false;
+poseWorkerBusyRef.current = false;
+visionBusyRef.current = false;
+lastPoseInferenceMs = data.inferenceTime || 0;
+const threshold = lowEnd ? 85 : 65;
+if (lastPoseInferenceMs > threshold) {
+detectIntervalMs = Math.min(MAX_INTERVAL, Math.max(detectIntervalMs + 12, lastPoseInferenceMs + 25));
+} else if (lastPoseInferenceMs < 42) {
+detectIntervalMs = Math.max(MIN_INTERVAL, detectIntervalMs - 6);
+}
+applyPoseResult(data.landmarks, data.captureWallTime || performance.now());
+return;
+}
+if (data.type === 'DETECT_ERROR') {
+workerBusy = false;
+poseWorkerBusyRef.current = false;
+visionBusyRef.current = false;
+}
+};
+poseWorker.postMessage({ type: 'INIT' });
+scheduleNextPaint();
 
-    const loop = () => {
-      if (cancelled) return;
-      const video = videoRef.current;
-      const canvas = skeletonCanvasRef.current;
-
-      if (!video || !canvas || video.readyState < 2 || document.visibilityState === 'hidden') {
-        // No RAF spin while the camera is stalled/backgrounded; wake occasionally.
-        poseRafRef.current = null;
-        poseWakeTimerRef.current = window.setTimeout(() => {
-          poseWakeTimerRef.current = null;
-          if (!cancelled) loop();
-        }, 250);
-        return;
-      }
-
-      const now = performance.now();
-
-      if (
-        !visionBusyRef.current &&
-        video.currentTime !== poseLastVideoTimeRef.current &&
-        now - poseLastDetectAtRef.current >= detectIntervalMs
-      ) {
-        const detectStartedAt = now;
-        poseLastVideoTimeRef.current = video.currentTime;
-        visionBusyRef.current = true;
-
-        try {
-          const result = landmarker.detectForVideo(video, detectStartedAt);
-          const rawLandmarks = result?.landmarks?.[0] ?? null;
-          const landmarks = smoothLandmarks(rawLandmarks);
-          poseStableFramesRef.current = rawLandmarks
-            ? Math.min(30, poseStableFramesRef.current + 1)
-            : Math.max(0, poseStableFramesRef.current - 1);
-
-          if (landmarks && quest.reps) {
-            const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, detectStartedAt);
-            if (update.phase !== poseUiPhaseRef.current) {
-              poseUiPhaseRef.current = update.phase;
-              setRepPhase(update.phase);
-            }
-            if (update.cue !== poseUiCueRef.current) {
-              poseUiCueRef.current = update.cue;
-              setRepCue(update.cue);
-            }
-
-            if (update.counted) {
-              setRepsDone(update.reps);
-              if (update.reps >= quest.reps) {
-                if (repSpoofSuspectedRef.current) {
-                  poseStateRef.current.reps = quest.reps - 1;
-                  setRepsDone(quest.reps - 1);
-                  haptic(10);
-                } else {
-                  confirmedRef.current = true;
-                  setConfirmed(true);
-                  haptic([15, 30, 15]);
-                }
-              } else {
-                haptic(10);
-              }
-            }
-          } else if (!landmarks && quest.reps && poseUiCueRef.current !== 'Step back so your full body is visible') {
-            poseUiCueRef.current = 'Step back so your full body is visible';
-            setRepCue(poseUiCueRef.current);
-          }
-        } catch (err) {
-          console.debug('Pose inference skipped:', err);
-        } finally {
-          visionBusyRef.current = false;
-          const detectDuration = performance.now() - detectStartedAt;
-          // Adapt to real inference cost. Slow frames back off; fast frames recover.
-          if (detectDuration > 70) {
-            detectIntervalMs = Math.min(MAX_DETECT_INTERVAL_MS, detectIntervalMs + 16.67);
-          } else if (detectDuration < 42) {
-            detectIntervalMs = Math.max(MIN_DETECT_INTERVAL_MS, detectIntervalMs - 8.33);
-          }
-          poseLastDetectAtRef.current = performance.now();
-        }
-      }
-
-      const paintNow = performance.now();
-      if (paintNow - lastPaintAt >= PAINT_INTERVAL_MS) {
-        lastPaintAt = paintNow;
-        const landmarks = smoothedLandmarksRef.current;
-        let drawCtx = getSkeletonContext(canvas);
-
-        if (drawCtx && video.videoWidth && video.videoHeight) {
-          const clientW = canvas.clientWidth || 300;
-          const clientH = canvas.clientHeight || 300;
-
-          // Resize only when the displayed canvas actually changes size. Resizing
-          // resets the drawing buffer, so the context is reacquired only here.
-          if (canvas.width !== clientW || canvas.height !== clientH) {
-            canvas.width = clientW;
-            canvas.height = clientH;
-            drawCtx = canvas.getContext('2d', { alpha: true, desynchronized: true });
-            skeletonCtxRef.current = drawCtx;
-          }
-
-          drawCtx.clearRect(0, 0, canvas.width, canvas.height);
-
-          if (landmarks) {
-            const Wc = canvas.width, Hc = canvas.height;
-            const Wv = video.videoWidth, Hv = video.videoHeight;
-            const scale = Math.max(Wc / Wv, Hc / Hv);
-            const Wr = Wv * scale, Hr = Hv * scale;
-            const Ox = (Wc - Wr) / 2, Oy = (Hc - Hr) / 2;
-            const mapped = getMappedPoints(landmarks, Ox, Oy, Wr, Hr);
-            const poseReadyNow = poseStableFramesRef.current >= 3;
-            const repActive = Boolean(quest.reps);
-            const currentPhase = poseStateRef.current.phase;
-            const lineColor = repActive
-              ? (currentPhase === 'down' ? '#30D158' : '#0A84FF')
-              : (poseReadyNow ? '#0A84FF' : 'rgba(255,255,255,.72)');
-
-            drawCtx.save();
-            drawCtx.globalAlpha = poseReadyNow ? 0.95 : 0.65;
-            drawCtx.lineWidth = 3.2;
-            drawCtx.lineCap = 'round';
-            drawCtx.lineJoin = 'round';
-            drawCtx.strokeStyle = lineColor;
-
-            for (let k = 0; k < POSE_CONNECTIONS.length; k += 1) {
-              const [i, j] = POSE_CONNECTIONS[k];
-              const p1 = mapped[i], p2 = mapped[j];
-              if (p1 && p2 && p1.vis > MIN_VIS && p2.vis > MIN_VIS) {
-                drawCtx.beginPath();
-                drawCtx.moveTo(p1.x, p1.y);
-                drawCtx.lineTo(p2.x, p2.y);
-                drawCtx.stroke();
-              }
-            }
-            drawCtx.restore();
-
-            drawCtx.save();
-            drawCtx.globalAlpha = poseReadyNow ? 1 : 0.72;
-            for (let idx = 0; idx < mapped.length; idx += 1) {
-              const pt = mapped[idx];
-              if (pt.vis <= MIN_VIS) continue;
-              const isMajorJoint = MAJOR_JOINTS.has(idx);
-              drawCtx.beginPath();
-              drawCtx.arc(pt.x, pt.y, isMajorJoint ? 6.5 : 4, 0, Math.PI * 2);
-              drawCtx.fillStyle = 'rgba(0,0,0,.72)';
-              drawCtx.fill();
-              drawCtx.lineWidth = isMajorJoint ? 2.1 : 1.5;
-              drawCtx.strokeStyle = lineColor;
-              drawCtx.stroke();
-              drawCtx.beginPath();
-              drawCtx.arc(pt.x, pt.y, isMajorJoint ? 2.7 : 1.65, 0, Math.PI * 2);
-              drawCtx.fillStyle = '#fff';
-              drawCtx.fill();
-            }
-            drawCtx.restore();
-          }
-        }
-      }
-
-      poseRafRef.current = requestAnimationFrame(loop);
-    };
-
-    poseRafRef.current = requestAnimationFrame(loop);
-  } catch (err) {
-    if (!cancelled) setPoseError('Could not load the pose tracking model. Check your connection and try again.');
-  }
+// Drive detection from the camera's own frame clock. This avoids a hot RAF loop
+// and keeps detection tied to fresh frames without copying frames unnecessarily.
+const detectionLoop = (video) => {
+if (cancelled) return;
+const now = performance.now();
+if (
+workerReady &&
+!workerBusy &&
+!visionBusyRef.current &&
+video.readyState >= 2 &&
+video.videoWidth &&
+video.currentTime !== poseLastVideoTimeRef.current &&
+now - poseLastDetectAtRef.current >= detectIntervalMs
+) {
+poseLastVideoTimeRef.current = video.currentTime;
+poseLastDetectAtRef.current = now;
+dispatchPose(video, now, now);
+}
+if (video.requestVideoFrameCallback) {
+video.requestVideoFrameCallback(() => detectionLoop(video));
+}
+};
+const video = videoRef.current;
+if (video) {
+video.addEventListener('loadeddata', () => detectionLoop(video), { once: true });
+if (video.readyState >= 2) detectionLoop(video);
+}
+} catch {
+if (!cancelled) startFallback();
+}
 })();
 
 return () => {
-  cancelled = true;
-  if (poseRafRef.current) cancelAnimationFrame(poseRafRef.current);
-  if (poseWakeTimerRef.current) clearTimeout(poseWakeTimerRef.current);
-  poseRafRef.current = null;
-  poseWakeTimerRef.current = null;
-  poseLastDetectAtRef.current = 0;
-  skeletonCtxRef.current = null;
-  mappedLandmarksRef.current = null;
-  smoothedLandmarksRef.current = null;
-  poseStableFramesRef.current = 0;
-  if (skeletonCanvasRef.current) {
-    const ctx = skeletonCanvasRef.current.getContext('2d', { alpha: true, desynchronized: true });
-    ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
-  }
+cancelled = true;
+if (paintHandle) {
+if (videoRef.current?.cancelVideoFrameCallback && typeof paintHandle === 'number') {
+try { videoRef.current.cancelVideoFrameCallback(paintHandle); } catch {}
+}
+try { cancelAnimationFrame(paintHandle); } catch {}
+}
+if (poseWorker) { try { poseWorker.terminate(); } catch {} }
+if (poseWorkerRef.current === poseWorker) poseWorkerRef.current = null;
+workerBusy = false;
+poseWorkerBusyRef.current = false;
+visionBusyRef.current = false;
+filtered = null;
+velocityX = null;
+velocityY = null;
+renderPoints = null;
+skeletonCtxRef.current = null;
+smoothedLandmarksRef.current = null;
+poseStableFramesRef.current = 0;
+if (skeletonCanvasRef.current) {
+const ctx = skeletonCanvasRef.current.getContext('2d', { alpha: true, desynchronized: true });
+ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
+}
 };
 }, [hasSkeletonTracking, quest.reps, quest.id, phase, confirmed]);
 
@@ -3235,8 +3485,12 @@ if (document.visibilityState === 'hidden') {
   timer = window.setTimeout(check, 1000);
   return;
 }
-if (visionBusyRef.current) {
-  timer = window.setTimeout(check, 300);
+if (visionBusyRef.current || poseWorkerBusyRef.current) {
+  timer = window.setTimeout(check, 900);
+  return;
+}
+if (poseStateRef.current.movementStarted || poseStateRef.current.validFrames < FORM_STABLE_FRAMES) {
+  timer = window.setTimeout(check, 1800);
   return;
 }
 
@@ -3277,16 +3531,16 @@ setNotice(null);
 } catch { /* transient — try again next tick */ }
 finally {
 visionBusyRef.current = false;
-if (!cancelled) timer = window.setTimeout(check, 6000);
+if (!cancelled) timer = window.setTimeout(check, 12000);
 }
 };
-timer = window.setTimeout(check, 3000);
+timer = window.setTimeout(check, 6000);
 return () => { cancelled = true; clearTimeout(timer); };
 }, [quest.reps, phase, confirmed]);
 
 const retryCamera = () => { scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); setSourceWarning(null); };
 const flipCamera = () => {
-clearTimeout(scanTimerRef.current); scanRunRef.current += 1; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; smoothedActRef.current = null; smoothedNegRef.current = null; smoothedSpoofRef.current = null; spoofNoticeActiveRef.current = false; repSpoofSuspectedRef.current = false; smoothedRepSpoofRef.current = null; repSpoofNoticeActiveRef.current = false; verifyingRef.current = false; setVerifying(false); resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
+clearTimeout(scanTimerRef.current); scanRunRef.current += 1; if (poseWorkerRef.current) { try { poseWorkerRef.current.terminate(); } catch {} poseWorkerRef.current = null; } poseWorkerBusyRef.current = false; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; smoothedActRef.current = null; smoothedNegRef.current = null; smoothedSpoofRef.current = null; spoofNoticeActiveRef.current = false; repSpoofSuspectedRef.current = false; smoothedRepSpoofRef.current = null; repSpoofNoticeActiveRef.current = false; verifyingRef.current = false; setVerifying(false); resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
 if (skeletonCanvasRef.current) {
 const ctx = skeletonCanvasRef.current.getContext('2d');
 ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
@@ -3342,6 +3596,7 @@ clearTimeout(scanTimerRef.current);
 
 if (poseRafRef.current) cancelAnimationFrame(poseRafRef.current);
 poseRafRef.current = null;
+if (poseWorkerRef.current) { try { poseWorkerRef.current.terminate(); } catch {} poseWorkerRef.current = null; }
 isScanningRef.current = false;
 visionBusyRef.current = false;
 verifyingRef.current = false;
@@ -3381,8 +3636,8 @@ onConfirm(canvas.toDataURL('image/jpeg', 0.82));
 const meterColor = liveScore >= PASS_THRESHOLD * 100 ? c.green : liveScore >= 15 ? c.orange : c.red;
 
 return (
-<div className="fixed inset-0 z-[60] flex items-end justify-center sq-modal-in" style={{ background: 'rgba(0,0,0,0.52)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }}>
-<div className="sq-glass" style={{ ...glassStyle(c, true), background: c.bg, width: '100%', height: '95vh', borderTopLeftRadius: 26, borderTopRightRadius: 26, overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: 'max(env(safe-area-inset-bottom), 14px)' }}>
+<div className="fixed inset-0 z-[60] flex items-end justify-center sq-modal-in sq-camera-modal" style={{ background: 'rgba(0,0,0,0.52)' }}>
+<div className="sq-glass" style={{ ...glassStyle(c, true), backdropFilter: 'none', WebkitBackdropFilter: 'none', background: c.bg, width: '100%', height: '95vh', borderTopLeftRadius: 26, borderTopRightRadius: 26, overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: 'max(env(safe-area-inset-bottom), 14px)' }}>
 <div className="flex justify-center pt-3 pb-2">
 <div style={{ width: 36, height: 5, borderRadius: 999, background: c.fill }} />
 </div>
@@ -4077,14 +4332,14 @@ const completedCount = quests.filter(q => q.completed).length;
 const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
 return (
-<div className="sq-root" style={{ background: c.bg, minHeight: '100vh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
+<div className={`sq-root${LOW_END_DEVICE ? ' sq-low-end' : ''}`} style={{ background: c.bg, minHeight: '100vh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
 <SystemType />
 <div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg, zIndex: 2 }}>
 <AmbientBackground c={c} disabled={Boolean(proofModal)} />
 
 {isSaqoom && !proofModal && (
   <div aria-hidden="true" className="sq-heart-rain">
-    {Array.from({ length: 32 }, (_, i) => (
+    {Array.from({ length: LOW_END_DEVICE ? 14 : 32 }, (_, i) => (
       <span
         key={i}
         style={{
