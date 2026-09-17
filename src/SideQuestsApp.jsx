@@ -1153,6 +1153,21 @@ transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease
 svg { transition: stroke 0.2s ease, fill 0.2s ease; }
 .sq-scroll { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .sq-root button, .sq-root a { contain: layout style; }
+.sq-root { overflow-x: clip; }
+.sq-heart-rain {
+ position: fixed; inset: 0; width: 100%; height: 100dvh; overflow: hidden;
+ pointer-events: none; z-index: 1; contain: strict;
+}
+.sq-heart-rain span {
+ position: absolute; top: -48px; display: block; line-height: 1;
+ color: rgba(255,65,112,.72); text-shadow: 0 2px 10px rgba(255,45,104,.16);
+ animation: sq-heart-fall linear infinite; will-change: transform, opacity;
+}
+@keyframes sq-heart-fall {
+ 0% { transform: translate3d(0,-8vh,0) rotate(-10deg); opacity: 0; }
+ 8% { opacity: .72; } 92% { opacity: .72; }
+ 100% { transform: translate3d(var(--sq-heart-drift,0px),115vh,0) rotate(18deg); opacity: 0; }
+}
 .sq-cam-shell video, .sq-cam-shell canvas { transform: translateZ(0); backface-visibility: hidden; }
 .sq-icon-fff svg { color: #fff; }
 @keyframes sq-fade-up { from { opacity: 0; transform: translate3d(0,7px,0); } to { opacity: 1; transform: translate3d(0,0,0); } }
@@ -3965,7 +3980,7 @@ const completedCount = quests.filter(q => q.completed).length;
 const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
 return (
-<div className="sq-root" style={{ background: c.bg, minHeight: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: 'background-color 0.3s ease' }}>
+<div className="sq-root" style={{ background: c.bg, minHeight: '100vh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
 <SystemType />
 <div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg, zIndex: 2 }}>
 <AmbientBackground c={c} />
@@ -3979,7 +3994,8 @@ return (
           left: `${(i * 37) % 100}%`,
           animationDelay: `${-((i * 0.47) % 9)}s`,
           animationDuration: `${7 + (i % 5)}s`,
-          fontSize: `${14 + (i % 5) * 4}px`
+          fontSize: `${14 + (i % 5) * 4}px`,
+          ['--sq-heart-drift']: `${((i % 7) - 3) * 18}px`
         }}
       >
         ♡
