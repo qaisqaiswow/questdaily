@@ -966,7 +966,7 @@ q19: { type: 'food', activity: ['clean healthy meal on plate', 'plate of vegetab
 q20: { type: 'food', activity: ['cooked food on a plate', 'homemade meal in a bowl or plate'], label: 'cooked meal' },
 q14: { type: 'food', activity: ['glass of green smoothie', 'blended green juice drink'], label: 'green smoothie' },
 q6: { type: 'food', activity: ['glass of water', 'reusable water bottle filled'], label: 'water bottle' },
-q7: { type: 'action', activity: ['person meditating cross-legged', 'mindfulness exercise'], label: 'meditating' },
+q7: { type: 'action', activity: ['person sitting cross-legged meditating with eyes closed', 'person practicing seated mindfulness meditation', 'person meditating peacefully on the floor'], label: 'meditating' },
 q8: { type: 'action', activity: ['person stretching muscles', 'yoga stretch pose'], label: 'stretching', bodyParts: ['Full Body', 'Flexibility'] },
 q10: { type: 'action', activity: ['person sleeping in bed', 'person resting in bed eyes closed'], label: 'getting good sleep' },
 q11: { type: 'action', activity: ['person doing jumping jacks or burpees'], label: 'doing cardio', bodyParts: ['Cardio', 'Full Body'] },
@@ -1047,6 +1047,12 @@ return { ...pool, text: pool.textTemplate, completed: false, progress: 0 };
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_PASSES = 4;
 const PASS_THRESHOLD = 0.42;
+// SigLIP scores are not calibrated percentages. A real match can be well below
+// the strict verification threshold, especially for static actions like meditation.
+// Timed quests use a lighter start gate, but still require the correct activity label
+// to be the model's top match for multiple consecutive scans.
+const TIMED_START_THRESHOLD = 0.08;
+const TIMED_START_MARGIN = 0.00;
 const SCORE_SMOOTHING = 0.38; // weight given to each new frame when smoothing confidence — lower = slower to react, harder to fool with a quick flash
 
 function getMaxLabelScore(results, candidates) {
@@ -2715,20 +2721,47 @@ function createPoseInferenceWorker() {
 
       const bitmap = data.bitmap;
       if (!bitmap) return;
+      let inputBitmap = bitmap;
       try {
         const model = await createLandmarker();
+        const targetWidth = data.lowEnd ? 256 : 320;
+        const targetHeight = data.lowEnd ? 192 : 240;
+        try {
+          if (bitmap.width > targetWidth || bitmap.height > targetHeight) {
+            inputBitmap = await createImageBitmap(bitmap, {
+              resizeWidth: targetWidth,
+              resizeHeight: targetHeight,
+              resizeQuality: 'low',
+            });
+          }
+        } catch {}
+        if (inputBitmap !== bitmap) bitmap.close();
         const startedAt = performance.now();
-        const result = model.detectForVideo(bitmap, data.timestampMs);
+        const result = model.detectForVideo(inputBitmap, data.timestampMs);
         const inferenceTime = performance.now() - startedAt;
-        bitmap.close();
+        inputBitmap.close();
+        const raw = result?.landmarks?.[0] ?? null;
+        let packed = null;
+        if (raw) {
+          packed = new Float32Array(raw.length * 4);
+          for (let i = 0; i < raw.length; i += 1) {
+            const p = raw[i];
+            const o = i * 4;
+            packed[o] = p.x || 0;
+            packed[o + 1] = p.y || 0;
+            packed[o + 2] = p.z || 0;
+            packed[o + 3] = p.visibility ?? 1;
+          }
+        }
         self.postMessage({
           type: 'RESULT',
-          landmarks: result?.landmarks?.[0] ?? null,
+          landmarks: packed,
           inferenceTime,
           captureWallTime: data.captureWallTime,
-        });
+        }, packed ? [packed.buffer] : []);
       } catch (error) {
-        bitmap.close();
+        try { inputBitmap.close(); } catch {}
+        if (inputBitmap !== bitmap) { try { bitmap.close(); } catch {} }
         self.postMessage({ type: 'DETECT_ERROR', error: error?.message || 'Pose detection failed' });
       }
     };
@@ -2738,6 +2771,107 @@ function createPoseInferenceWorker() {
   let worker = null;
   try {
     worker = new Worker(url, { type: 'module', name: 'questdaily-pose' });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+  return worker;
+}
+
+const LIVE_CLASSIFIER_MODULE_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2/+esm';
+
+function createLiveClassifierWorker() {
+  if (typeof Worker === 'undefined') return null;
+  const source = `
+    let classifier = null;
+    let initializing = null;
+    let cropCanvas = null;
+    let cropCtx = null;
+
+    async function getModel() {
+      if (classifier) return classifier;
+      if (initializing) return initializing;
+      initializing = (async () => {
+        const mod = await import(${JSON.stringify(LIVE_CLASSIFIER_MODULE_URL)});
+        const pipe = mod.pipeline;
+        if (!pipe) throw new Error('Live classifier pipeline unavailable');
+        classifier = await pipe(
+          'zero-shot-image-classification',
+          'Xenova/siglip-base-patch16-224',
+          {
+            dtype: 'q8',
+            progress_callback: (info) => {
+              if (info?.status === 'progress' && info?.total) {
+                self.postMessage({ type: 'PROGRESS', progress: (info.loaded / info.total) * 100 });
+              }
+            },
+          }
+        );
+        return classifier;
+      })();
+      try {
+        return await initializing;
+      } finally {
+        initializing = null;
+      }
+    }
+
+    function ensureCanvas() {
+      if (!cropCanvas) {
+        cropCanvas = new OffscreenCanvas(224, 224);
+        cropCtx = cropCanvas.getContext('2d', { alpha: false, desynchronized: true });
+      }
+      return cropCtx;
+    }
+
+    async function bitmapToBlob(bitmap) {
+      const ctx = ensureCanvas();
+      if (!ctx) throw new Error('OffscreenCanvas unavailable');
+      const srcW = bitmap.width || 224;
+      const srcH = bitmap.height || 168;
+      const scale = Math.min(224 / srcW, 224 / srcH);
+      const width = srcW * scale;
+      const height = srcH * scale;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, 224, 224);
+      ctx.drawImage(bitmap, (224 - width) / 2, (224 - height) / 2, width, height);
+      return cropCanvas.convertToBlob({ type: 'image/jpeg', quality: 0.55 });
+    }
+
+    self.onmessage = async (event) => {
+      const data = event.data || {};
+      if (data.type === 'INIT') {
+        try {
+          await getModel();
+          self.postMessage({ type: 'READY' });
+        } catch (error) {
+          self.postMessage({ type: 'INIT_ERROR', error: error?.message || 'Live classifier failed to initialize' });
+        }
+        return;
+      }
+      if (data.type !== 'CLASSIFY') return;
+      const bitmap = data.bitmap;
+      if (!bitmap) return;
+      try {
+        const model = await getModel();
+        const blob = await bitmapToBlob(bitmap);
+        bitmap.close();
+        const results = await model(blob, data.labels || []);
+        self.postMessage({
+          type: 'RESULT',
+          results: Array.isArray(results) ? results.map(item => ({ label: item?.label || '', score: Number(item?.score) || 0 })) : [],
+          runId: data.runId,
+        });
+      } catch (error) {
+        try { bitmap.close(); } catch {}
+        self.postMessage({ type: 'CLASSIFY_ERROR', error: error?.message || 'Live classification failed', runId: data.runId });
+      }
+    };
+  `;
+  const blob = new Blob([source], { type: 'text/javascript' });
+  const url = URL.createObjectURL(blob);
+  let worker = null;
+  try {
+    worker = new Worker(url, { type: 'module', name: 'questdaily-live-ai' });
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -2756,6 +2890,7 @@ const cameraSessionRef = useRef(0);
 const lastVideoTimeRef = useRef(-1);
 const confirmedRef = useRef(false);
 const passStreakRef = useRef(0);
+const timedPassStreakRef = useRef(0);
 const poseStateRef = useRef(createPoseRepState(quest.reps ? (quest.progress || 0) : 0));
 const poseRafRef = useRef(null);
 const poseLastVideoTimeRef = useRef(-1);
@@ -2766,7 +2901,12 @@ const poseWorkerBusyRef = useRef(false);
 const skeletonCtxRef = useRef(null);
 const aiCtxRef = useRef(null);
 const mappedLandmarksRef = useRef(null);
+const rawPoseLandmarksRef = useRef(null);
 const visionBusyRef = useRef(false);
+const liveClassifierWorkerRef = useRef(null);
+const liveClassifierReadyRef = useRef(false);
+const liveClassifierBusyRef = useRef(false);
+const liveClassifierPendingRef = useRef(null);
 const poseUiPhaseRef = useRef('up');
 const poseUiCueRef = useRef('Get in frame');
 const smoothedLandmarksRef = useRef(null);
@@ -2794,7 +2934,7 @@ const [poseError, setPoseError] = useState(null);
 const [repCue, setRepCue] = useState('Get in frame');
 const [notice, setNotice] = useState(() => {
 if (quest.reps && quest.progress > 0) return `Resuming — you already logged ${quest.progress} of ${quest.reps} reps.`;
-if (quest.duration && quest.progress != null && quest.progress < quest.duration) {
+if (quest.duration && Number.isFinite(quest.progress) && quest.progress > 0 && quest.progress < quest.duration) {
 const m = Math.floor(quest.progress / 60), s = quest.progress % 60;
 return `Resuming — ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')} left on the clock.`;
 }
@@ -2811,11 +2951,14 @@ const [verifying, setVerifying] = useState(false);
 const [lastLabel, setLastLabel] = useState('');
 const [uploadedProof, setUploadedProof] = useState(null);
 
-const [secondsLeft, setSecondsLeft] = useState(quest.duration ? (quest.progress ?? quest.duration) : 0);
+const initialTimerSeconds = quest.duration
+  ? ((Number.isFinite(quest.progress) && quest.progress > 0) ? quest.progress : quest.duration)
+  : 0;
+const [secondsLeft, setSecondsLeft] = useState(initialTimerSeconds);
 const [timerRunning, setTimerRunning] = useState(false);
 const timerEndAtRef = useRef(null);
 const timerRunningRef = useRef(false);
-const secondsLeftRef = useRef(quest.duration ? (quest.progress ?? quest.duration) : 0);
+const secondsLeftRef = useRef(initialTimerSeconds);
 const timerAutoStartedRef = useRef(false);
 const TIMED_START_PASSES = 2; // start quickly once the AI sees the activity twice in a row
 
@@ -2955,22 +3098,73 @@ stopCamera();
 }, [facingMode, cameraVersion, startCamera, stopCamera]);
 
 useEffect(() => {
-if (quest.reps) { setModelReady(true); return undefined; }
+if (quest.reps || phase !== 'live') return undefined;
 let cancelled = false;
-(async () => {
-try {
+let worker = null;
+setModelReady(false);
 setModelError(null);
-await getClassifier(evt => {
+setModelProgress(8);
+liveClassifierReadyRef.current = false;
+liveClassifierBusyRef.current = false;
+try {
+worker = createLiveClassifierWorker();
+if (!worker) throw new Error('Web Worker is not available');
+liveClassifierWorkerRef.current = worker;
+worker.onmessage = (event) => {
 if (cancelled) return;
-if (evt.status === 'progress' && evt.total) setModelProgress(Math.round((evt.loaded / evt.total) * 100));
-});
-if (!cancelled) { setModelReady(true); setModelProgress(null); }
-} catch (err) {
-if (!cancelled) { setModelError('The AI model could not be loaded. Check your connection and try again.'); setModelProgress(null); }
+const data = event.data || {};
+if (data.type === 'READY') {
+  liveClassifierReadyRef.current = true;
+  setModelReady(true);
+  setModelProgress(null);
+  return;
 }
-})();
-return () => { cancelled = true; };
-}, [modelVersion, quest.reps]);
+if (data.type === 'PROGRESS') {
+  if (Number.isFinite(data.progress)) setModelProgress(Math.max(8, Math.min(99, Math.round(data.progress))));
+  return;
+}
+if (data.type === 'RESULT' || data.type === 'CLASSIFY_ERROR') {
+  liveClassifierBusyRef.current = false;
+  const pending = liveClassifierPendingRef.current;
+  if (pending && pending.runId === data.runId) {
+    liveClassifierPendingRef.current = null;
+    clearTimeout(pending.timeoutId);
+    if (data.type === 'RESULT') pending.resolve(data.results || []);
+    else pending.reject(new Error(data.error || 'Live classification failed'));
+  }
+  return;
+}
+if (data.type === 'INIT_ERROR') {
+  liveClassifierReadyRef.current = false;
+  setModelError('The live AI worker could not start. Close and reopen the camera to retry.');
+  setModelProgress(null);
+  return;
+}
+};
+worker.onerror = () => {
+if (cancelled) return;
+setModelError('The live AI worker stopped unexpectedly. Close and reopen the camera to retry.');
+setModelProgress(null);
+};
+worker.postMessage({ type: 'INIT' });
+} catch (err) {
+setModelError('The live AI worker could not start. This browser does not support the smooth camera AI path.');
+setModelProgress(null);
+}
+return () => {
+  cancelled = true;
+  liveClassifierReadyRef.current = false;
+  liveClassifierBusyRef.current = false;
+  const pending = liveClassifierPendingRef.current;
+  if (pending) {
+    liveClassifierPendingRef.current = null;
+    clearTimeout(pending.timeoutId);
+    try { pending.reject(new Error('Live classifier stopped')); } catch {}
+  }
+  if (liveClassifierWorkerRef.current === worker) liveClassifierWorkerRef.current = null;
+  try { worker?.terminate(); } catch {}
+};
+}, [modelVersion, quest.reps, phase]);
 
 // Keep the heavyweight final verifier completely cold until it is actually needed.
 // Loading two vision models at camera start is a major mobile memory/CPU spike.
@@ -2998,57 +3192,120 @@ setRepCue('Get in frame');
 // "photo/video of someone else" case for this quest type.
 useEffect(() => {
 if (quest.reps) return undefined;
-if (phase !== 'live' || !modelReady || confirmed || uploading || !labels || !classifierLabels.length) return undefined;
+if (phase !== 'live' || confirmed || uploading || !labels || !classifierLabels.length) return undefined;
 const runId = ++scanRunRef.current;
 let disposed = false;
 let consecutiveErrors = 0;
+let classifySeq = 0;
 const isCurrentRun = () => !disposed && runId === scanRunRef.current && !confirmedRef.current;
-const scheduleNext = (delay) => { if (!isCurrentRun()) return; clearTimeout(scanTimerRef.current); scanTimerRef.current = window.setTimeout(scanLoop, delay); };
+const scheduleNext = (delay) => {
+  if (!isCurrentRun()) return;
+  clearTimeout(scanTimerRef.current);
+  scanTimerRef.current = window.setTimeout(scanLoop, delay);
+};
+
+const classifyFrame = (video) => new Promise((resolve, reject) => {
+  const worker = liveClassifierWorkerRef.current;
+  if (!worker || !liveClassifierReadyRef.current || liveClassifierBusyRef.current) {
+    reject(new Error('Live classifier is not ready'));
+    return;
+  }
+  const requestId = `${runId}:${++classifySeq}`;
+  const timeoutId = window.setTimeout(() => {
+    if (liveClassifierPendingRef.current?.runId === requestId) liveClassifierPendingRef.current = null;
+    liveClassifierBusyRef.current = false;
+    reject(new Error('Live classifier timed out'));
+  }, 7000);
+  liveClassifierPendingRef.current = { runId: requestId, resolve, reject, timeoutId };
+  liveClassifierBusyRef.current = true;
+  createImageBitmap(video).then(bitmap => {
+    if (!isCurrentRun()) {
+      bitmap.close();
+      clearTimeout(timeoutId);
+      if (liveClassifierPendingRef.current?.runId === requestId) liveClassifierPendingRef.current = null;
+      liveClassifierBusyRef.current = false;
+      reject(new Error('Scan cancelled'));
+      return;
+    }
+    worker.postMessage({ type: 'CLASSIFY', bitmap, labels: classifierLabels, runId: requestId }, [bitmap]);
+  }).catch(error => {
+    clearTimeout(timeoutId);
+    if (liveClassifierPendingRef.current?.runId === requestId) liveClassifierPendingRef.current = null;
+    liveClassifierBusyRef.current = false;
+    reject(error);
+  });
+});
+
+const runFinalVerification = async () => {
+if (verifyingRef.current === false) verifyingRef.current = true;
+try {
+const video = videoRef.current;
+if (!video || !video.videoWidth) throw new Error('no live frame available');
+const size = 256;
+const canvas = document.createElement('canvas');
+canvas.width = size; canvas.height = size;
+const ctx = canvas.getContext('2d', { alpha: false });
+if (!ctx) throw new Error('verification canvas unavailable');
+const scale = Math.min(size / video.videoWidth, size / video.videoHeight);
+const w = video.videoWidth * scale, h = video.videoHeight * scale;
+ctx.fillStyle = '#000';
+ctx.fillRect(0, 0, size, size);
+ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, (size - w) / 2, (size - h) / 2, w, h);
+const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+const staticClassifier = await getStaticClassifier();
+const results = await staticClassifier(dataUrl, classifierLabels);
+const actScore = getMaxLabelScore(results, labels.activity);
+const negScore = getMaxLabelScore(results, activeNegatives);
+const spoofScore = getMaxLabelScore(results, ANTI_SPOOF_LABELS);
+const finalPass = spoofScore < SPOOF_BLOCK_THRESHOLD && (actScore - negScore) >= PASS_MARGIN && actScore >= PASS_THRESHOLD;
+if (!isCurrentRun()) return;
+if (finalPass) {
+confirmedRef.current = true;
+setConfirmed(true);
+haptic([15, 30, 15]);
+} else {
+if (spoofScore >= SPOOF_BLOCK_THRESHOLD) {
+spoofNoticeActiveRef.current = true;
+setNotice('This looks like it\'s coming from a screen or printed photo rather than you, live. Point the camera at yourself doing it in person.');
+}
+passStreakRef.current = Math.max(0, REQUIRED_PASSES - 2);
+setPassStreak(passStreakRef.current);
+}
+} catch {
+if (isCurrentRun()) {
+passStreakRef.current = Math.max(0, REQUIRED_PASSES - 2);
+setPassStreak(passStreakRef.current);
+}
+} finally {
+verifyingRef.current = false;
+setVerifying(false);
+if (isCurrentRun()) scheduleNext(400);
+}
+};
 
 const scanLoop = async () => {
-const video = videoRef.current, canvas = aiCanvasRef.current;
 if (!isCurrentRun()) return;
 if (document.visibilityState === 'hidden') { scheduleNext(1000); return; }
-if (!video || !canvas || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) { scheduleNext(250); return; }
-if (video.currentTime === lastVideoTimeRef.current || isScanningRef.current || visionBusyRef.current) { scheduleNext(120); return; }
-lastVideoTimeRef.current = video.currentTime;
+if (timerRunningRef.current) { scheduleNext(1000); return; }
+const video = videoRef.current;
+if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth) { scheduleNext(400); return; }
+if (!liveClassifierReadyRef.current || liveClassifierBusyRef.current || isScanningRef.current) { scheduleNext(300); return; }
 isScanningRef.current = true;
-visionBusyRef.current = true;
 setScanning(true);
-
 try {
-if (canvas.width !== 224 || canvas.height !== 224) { canvas.width = 224; canvas.height = 224; }
-const context = aiCtxRef.current?.canvas === canvas
-  ? aiCtxRef.current
-  : canvas.getContext('2d', { alpha: false, desynchronized: true, willReadFrequently: true });
-if (!context) throw new Error('Canvas 2D context unavailable');
-aiCtxRef.current = context;
-
-const scale = Math.min(224 / video.videoWidth, 224 / video.videoHeight);
-const width = video.videoWidth * scale;
-const height = video.videoHeight * scale;
-context.fillStyle = '#000';
-context.fillRect(0, 0, 224, 224);
-context.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, (224 - width) / 2, (224 - height) / 2, width, height);
-
-const dataUrl = canvas.toDataURL('image/jpeg', 0.55);
-const classifier = await getClassifier();
-const results = await classifier(dataUrl, classifierLabels);
+const results = await classifyFrame(video);
 if (!isCurrentRun()) return;
 consecutiveErrors = 0;
-
 const actScore = getMaxLabelScore(results, labels.activity);
 const negScore = getMaxLabelScore(results, activeNegatives);
 const spoofScore = getMaxLabelScore(results, ANTI_SPOOF_LABELS);
 setLastLabel(results[0]?.label ?? '');
-
 smoothedActRef.current = smoothedActRef.current === null ? actScore : smoothedActRef.current * (1 - SCORE_SMOOTHING) + actScore * SCORE_SMOOTHING;
 smoothedNegRef.current = smoothedNegRef.current === null ? negScore : smoothedNegRef.current * (1 - SCORE_SMOOTHING) + negScore * SCORE_SMOOTHING;
 smoothedSpoofRef.current = smoothedSpoofRef.current === null ? spoofScore : smoothedSpoofRef.current * (1 - SCORE_SMOOTHING) + spoofScore * SCORE_SMOOTHING;
 const smoothedAct = smoothedActRef.current;
 const smoothedNeg = smoothedNegRef.current;
 const smoothedSpoof = smoothedSpoofRef.current;
-
 setLiveScore(Math.round(smoothedAct * 100));
 const spoofSuspected = smoothedSpoof >= SPOOF_BLOCK_THRESHOLD;
 const passed = !spoofSuspected && (smoothedAct - smoothedNeg) >= PASS_MARGIN && smoothedAct >= PASS_THRESHOLD;
@@ -3063,12 +3320,25 @@ setNotice('This looks like it\'s coming from a screen or printed photo rather th
 spoofNoticeActiveRef.current = false;
 setNotice(null);
 }
-const timedStartReady = quest.duration && questType === 'action' && passStreakRef.current >= TIMED_START_PASSES;
+const topLabel = results[0]?.label ?? '';
+const topActivityMatch = Array.isArray(labels?.activity) && labels.activity.includes(topLabel);
+const timedCandidate = Boolean(
+  quest.duration &&
+  questType === 'action' &&
+  !timerRunningRef.current &&
+  !spoofSuspected &&
+  topActivityMatch &&
+  actScore >= TIMED_START_THRESHOLD &&
+  (actScore - negScore) >= TIMED_START_MARGIN
+);
+timedPassStreakRef.current = timedCandidate
+  ? Math.min(TIMED_START_PASSES, timedPassStreakRef.current + 1)
+  : 0;
+const timedStartReady = quest.duration && questType === 'action' && timedPassStreakRef.current >= TIMED_START_PASSES;
 if ((passStreakRef.current >= REQUIRED_PASSES || timedStartReady) && !confirmedRef.current) {
 if (quest.duration && questType === 'action') {
   if (!timerRunningRef.current && !timerAutoStartedRef.current) startTimer(true);
 } else if (!verifyingRef.current) {
-  visionBusyRef.current = false; // release live-scan slot; final verifier acquires it synchronously
   verifyingRef.current = true;
   setVerifying(true);
   await runFinalVerification();
@@ -3080,68 +3350,25 @@ haptic(8);
 consecutiveErrors += 1;
 if (consecutiveErrors >= 3 && isCurrentRun()) setModelError('AI analysis is temporarily unavailable. Try closing and reopening the camera.');
 } finally {
-visionBusyRef.current = false;
 isScanningRef.current = false;
-if (isCurrentRun()) { setScanning(false); scheduleNext(consecutiveErrors ? 1200 : 1800); }
-}
-};
-
-const runFinalVerification = async () => {
-if (visionBusyRef.current) return;
-visionBusyRef.current = true;
-try {
-const video = videoRef.current;
-if (!video || !video.videoWidth) throw new Error('no live frame available');
-const size = 256;
-const canvas = document.createElement('canvas');
-canvas.width = size; canvas.height = size;
-const ctx = canvas.getContext('2d');
-const scale = Math.min(size / video.videoWidth, size / video.videoHeight);
-const w = video.videoWidth * scale, h = video.videoHeight * scale;
-ctx.fillStyle = '#000';
-ctx.fillRect(0, 0, size, size);
-ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, (size - w) / 2, (size - h) / 2, w, h);
-const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-
-const staticClassifier = await getStaticClassifier();
-const results = await staticClassifier(dataUrl, classifierLabels);
-const actScore = getMaxLabelScore(results, labels.activity);
-const negScore = getMaxLabelScore(results, activeNegatives);
-const spoofScore = getMaxLabelScore(results, ANTI_SPOOF_LABELS);
-const finalPass = spoofScore < SPOOF_BLOCK_THRESHOLD && (actScore - negScore) >= PASS_MARGIN && actScore >= PASS_THRESHOLD;
-
-if (!isCurrentRun()) return;
-if (finalPass) {
-confirmedRef.current = true;
-setConfirmed(true);
-haptic([15, 30, 15]);
-} else {
-// fail closed: a second, higher-resolution model disagreed with the
-// live estimate, so drop most of the streak instead of confirming
-if (spoofScore >= SPOOF_BLOCK_THRESHOLD) {
-spoofNoticeActiveRef.current = true;
-setNotice('This looks like it\'s coming from a screen or printed photo rather than you, live. Point the camera at yourself doing it in person.');
-}
-passStreakRef.current = Math.max(0, REQUIRED_PASSES - 2);
-setPassStreak(passStreakRef.current);
-}
-} catch {
-// model call failed — fail closed rather than auto-confirming, so a
-// dropped network request or model hiccup can't be used as a free pass
-if (isCurrentRun()) {
-passStreakRef.current = Math.max(0, REQUIRED_PASSES - 2);
-setPassStreak(passStreakRef.current);
-}
-} finally {
-visionBusyRef.current = false;
-verifyingRef.current = false;
-setVerifying(false);
-if (isCurrentRun()) scheduleNext(400);
+if (isCurrentRun()) { setScanning(false); scheduleNext(timerRunningRef.current ? 1000 : (consecutiveErrors ? 1800 : 2200)); }
 }
 };
 scanLoop();
-return () => { disposed = true; scanRunRef.current += 1; clearTimeout(scanTimerRef.current); };
-}, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, activeNegatives, startTimer]);
+return () => {
+  disposed = true;
+  scanRunRef.current += 1;
+  clearTimeout(scanTimerRef.current);
+  isScanningRef.current = false;
+  const pending = liveClassifierPendingRef.current;
+  if (pending?.runId?.startsWith?.(`${runId}:`)) {
+    liveClassifierPendingRef.current = null;
+    clearTimeout(pending.timeoutId);
+    liveClassifierBusyRef.current = false;
+    try { pending.reject(new Error('Scan disposed')); } catch {}
+  }
+};
+}, [phase, confirmed, uploading, labels, classifierLabels, quest.duration, questType, quest.reps, activeNegatives, startTimer]);
 
 useEffect(() => {
 if (!hasSkeletonTracking || phase !== 'live' || confirmed) return undefined;
@@ -3162,7 +3389,7 @@ const MIN_INTERVAL = lowEnd ? 100 : 75;
 const MAX_INTERVAL = lowEnd ? 220 : 180;
 let detectIntervalMs = BASE_INTERVAL;
 const PAINT_INTERVAL_MS = 1000 / 30;
-const PREDICTION_MS_MAX = lowEnd ? 85 : 110;
+const PREDICTION_MS_MAX = lowEnd ? 180 : 240;
 const SMOOTH_ALPHA = lowEnd ? 0.72 : 0.78;
 const VELOCITY_ALPHA = 0.65;
 const MIN_VIS = 0.28;
@@ -3213,12 +3440,14 @@ return filtered;
 const getRenderLandmarks = (now) => {
 if (!filtered || !renderPoints) return null;
 const rawAge = Math.max(0, now - lastSampleWallTime);
-const lead = Math.min(PREDICTION_MS_MAX, rawAge + (lowEnd ? 8 : 12)) / 1000;
+const leadMs = Math.min(PREDICTION_MS_MAX, rawAge + (lowEnd ? 10 : 14));
+const lead = leadMs / 1000;
+const staleDamp = rawAge <= 90 ? 1 : Math.max(0.2, 1 - ((rawAge - 90) / 420));
 for (let i = 0; i < filtered.length; i += 1) {
 const p = filtered[i];
 const out = renderPoints[i];
-out.x = Math.max(0, Math.min(1, p.x + velocityX[i] * lead));
-out.y = Math.max(0, Math.min(1, p.y + velocityY[i] * lead));
+out.x = Math.max(0, Math.min(1, p.x + velocityX[i] * lead * staleDamp));
+out.y = Math.max(0, Math.min(1, p.y + velocityY[i] * lead * staleDamp));
 out.vis = p.visibility ?? 1;
 }
 return renderPoints;
@@ -3231,8 +3460,28 @@ if (ctx) skeletonCtxRef.current = ctx;
 return ctx;
 };
 
+const decodePoseLandmarks = (packed) => {
+if (!packed) return null;
+if (ArrayBuffer.isView(packed)) {
+  const count = Math.floor(packed.length / 4);
+  let out = rawPoseLandmarksRef.current;
+  if (!out || out.length !== count) {
+    out = Array.from({ length: count }, () => ({ x: 0, y: 0, z: 0, visibility: 1 }));
+    rawPoseLandmarksRef.current = out;
+  }
+  for (let i = 0; i < count; i += 1) {
+    const o = i * 4;
+    const p = out[i];
+    p.x = packed[o]; p.y = packed[o + 1]; p.z = packed[o + 2]; p.visibility = packed[o + 3];
+  }
+  return out;
+}
+return packed;
+};
+
 const applyPoseResult = (rawLandmarks, captureWallTime) => {
-const landmarks = filterLandmarks(rawLandmarks, captureWallTime || performance.now());
+const decoded = decodePoseLandmarks(rawLandmarks);
+const landmarks = filterLandmarks(decoded, captureWallTime || performance.now());
 poseStableFramesRef.current = rawLandmarks
 ? Math.min(30, poseStableFramesRef.current + 1)
 : Math.max(0, poseStableFramesRef.current - 1);
@@ -3275,13 +3524,9 @@ workerBusy = true;
 poseWorkerBusyRef.current = true;
 try {
 let bitmap = null;
-try {
-bitmap = await createImageBitmap(video, { resizeWidth: lowEnd ? 256 : 320, resizeHeight: lowEnd ? 192 : 240, resizeQuality: 'medium' });
-} catch {
 bitmap = await createImageBitmap(video);
-}
 if (cancelled) { bitmap.close(); return; }
-poseWorker.postMessage({ type: 'DETECT', bitmap, timestampMs, captureWallTime }, [bitmap]);
+poseWorker.postMessage({ type: 'DETECT', bitmap, timestampMs, captureWallTime, lowEnd }, [bitmap]);
 } catch {
 try { bitmap?.close?.(); } catch {}
 workerBusy = false;
@@ -3318,14 +3563,6 @@ const scale = Math.max(Wc / Wv, Hc / Hv);
 const Wr = Wv * scale, Hr = Hv * scale;
 const Ox = (Wc - Wr) / 2, Oy = (Hc - Hr) / 2;
 
-// Map only the body landmarks we actually draw. Face/toe detail adds a lot of
-// Canvas2D calls for little visual value on a phone.
-for (let i = 0; i < points.length; i += 1) {
-const pt = points[i];
-pt.x = Ox + pt.x * Wr;
-pt.y = Oy + pt.y * Hr;
-}
-
 const repActive = Boolean(quest.reps);
 const currentPhase = poseStateRef.current.phase;
 const poseReadyNow = poseStableFramesRef.current >= 2;
@@ -3343,7 +3580,9 @@ const pair = BODY_CONNECTIONS[k];
 const p1 = points[pair[0]], p2 = points[pair[1]];
 if (!p1 || !p2 || p1.vis <= MIN_VIS || p2.vis <= MIN_VIS) continue;
 drawCtx.beginPath();
-drawCtx.moveTo(p1.x, p1.y); drawCtx.lineTo(p2.x, p2.y); drawCtx.stroke();
+drawCtx.moveTo(Ox + p1.x * Wr, Oy + p1.y * Hr);
+drawCtx.lineTo(Ox + p2.x * Wr, Oy + p2.y * Hr);
+drawCtx.stroke();
 }
 
 drawCtx.globalAlpha = poseReadyNow ? 1 : 0.72;
@@ -3354,10 +3593,11 @@ const idx = MAJOR_JOINTS[j];
 const pt = points[idx];
 if (!pt || pt.vis <= MIN_VIS) continue;
 const radius = 6;
-drawCtx.beginPath(); drawCtx.arc(pt.x, pt.y, radius, 0, Math.PI * 2); drawCtx.fill();
+const px = Ox + pt.x * Wr, py = Oy + pt.y * Hr;
+drawCtx.beginPath(); drawCtx.arc(px, py, radius, 0, Math.PI * 2); drawCtx.fill();
 drawCtx.lineWidth = 2; drawCtx.stroke();
 drawCtx.fillStyle = '#fff';
-drawCtx.beginPath(); drawCtx.arc(pt.x, pt.y, 2.6, 0, Math.PI * 2); drawCtx.fill();
+drawCtx.beginPath(); drawCtx.arc(px, py, 2.6, 0, Math.PI * 2); drawCtx.fill();
 drawCtx.fillStyle = 'rgba(0,0,0,.68)';
 }
 drawCtx.globalAlpha = 1;
@@ -3527,6 +3767,7 @@ velocityY = null;
 renderPoints = null;
 skeletonCtxRef.current = null;
 smoothedLandmarksRef.current = null;
+rawPoseLandmarksRef.current = null;
 poseStableFramesRef.current = 0;
 if (skeletonCanvasRef.current) {
 const ctx = skeletonCanvasRef.current.getContext('2d', { alpha: true, desynchronized: true });
@@ -3551,17 +3792,23 @@ const retryCamera = () => {
 timerEndAtRef.current = null;
 timerRunningRef.current = false;
 timerAutoStartedRef.current = false;
-secondsLeftRef.current = quest.duration ? (quest.progress || quest.duration) : 0;
+secondsLeftRef.current = quest.duration
+  ? ((Number.isFinite(quest.progress) && quest.progress > 0) ? quest.progress : quest.duration)
+  : 0;
+setSecondsLeft(secondsLeftRef.current);
 setTimerRunning(false);
-scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); setSourceWarning(null);
+scanRunRef.current += 1; lastVideoTimeRef.current = -1; timedPassStreakRef.current = 0; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); setSourceWarning(null);
 };
 const flipCamera = () => {
 timerEndAtRef.current = null;
 timerRunningRef.current = false;
 timerAutoStartedRef.current = false;
-secondsLeftRef.current = quest.duration ? (quest.progress || quest.duration) : 0;
+secondsLeftRef.current = quest.duration
+  ? ((Number.isFinite(quest.progress) && quest.progress > 0) ? quest.progress : quest.duration)
+  : 0;
+setSecondsLeft(secondsLeftRef.current);
 setTimerRunning(false);
-clearTimeout(scanTimerRef.current); scanRunRef.current += 1; if (poseWorkerRef.current) { try { poseWorkerRef.current.terminate(); } catch {} poseWorkerRef.current = null; } poseWorkerBusyRef.current = false; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; smoothedActRef.current = null; smoothedNegRef.current = null; smoothedSpoofRef.current = null; spoofNoticeActiveRef.current = false; repSpoofSuspectedRef.current = false; smoothedRepSpoofRef.current = null; repSpoofNoticeActiveRef.current = false; verifyingRef.current = false; setVerifying(false); resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
+clearTimeout(scanTimerRef.current); scanRunRef.current += 1; timedPassStreakRef.current = 0; if (poseWorkerRef.current) { try { poseWorkerRef.current.terminate(); } catch {} poseWorkerRef.current = null; } poseWorkerBusyRef.current = false; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; smoothedActRef.current = null; smoothedNegRef.current = null; smoothedSpoofRef.current = null; spoofNoticeActiveRef.current = false; repSpoofSuspectedRef.current = false; smoothedRepSpoofRef.current = null; repSpoofNoticeActiveRef.current = false; verifyingRef.current = false; setVerifying(false); resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
 if (skeletonCanvasRef.current) {
 const ctx = skeletonCanvasRef.current.getContext('2d');
 ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.height);
@@ -3613,6 +3860,7 @@ cancelHandledRef.current = true;
 
 cameraSessionRef.current += 1;
 scanRunRef.current += 1;
+timedPassStreakRef.current = 0;
 clearTimeout(scanTimerRef.current);
 
 if (poseRafRef.current) cancelAnimationFrame(poseRafRef.current);
@@ -3680,14 +3928,14 @@ return (
 <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{
   opacity: phase === 'live' && !uploadedProof ? 1 : 0,
   contain: 'strict',
-  transform: facingMode === 'user' ? 'scaleX(-1) translateZ(0)' : 'translateZ(0)',
+  transform: 'translateZ(0)',
   transformOrigin: 'center center',
 }} />
 <canvas ref={skeletonCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none object-cover z-10"
 style={{
   opacity: phase === 'live' && !uploadedProof && hasSkeletonTracking ? 1 : 0,
   contain: 'strict',
-  transform: facingMode === 'user' ? 'scaleX(-1) translateZ(0)' : 'translateZ(0)',
+  transform: 'translateZ(0)',
   transformOrigin: 'center center',
 }} />
 
