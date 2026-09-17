@@ -2517,39 +2517,161 @@ style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center'
 );
 });
 
-// First-run app tutorial. It is versioned so an existing install sees the
-// refreshed onboarding once, while later visits stay out of the way. Settings
-// can replay it at any time without changing the first-run flag.
+// First-run app tutorial. The home-screen/install walkthrough is part of this
+// same one-time startup sequence, so new users see it once along with the
+// welcome + app tutorial. Settings can replay the full walkthrough anytime.
 function AppTutorial({ onDone, c }) {
 const [step, setStep] = useState(0);
-const steps = [
+const [installable, setInstallable] = useState(false);
+const [installed, setInstalled] = useState(false);
+const [os, setOs] = useState('other');
+const [browser, setBrowser] = useState('other');
+const deferredRef = useRef(null);
+
+useEffect(() => {
+  const ua = navigator.userAgent || '';
+  const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const android = /Android/i.test(ua);
+  const isChrome = /Chrome\\//i.test(ua) && !/Edg\\//i.test(ua) && !/OPR\\//i.test(ua);
+  const isSafari = /Safari\\//i.test(ua) && !/Chrome\\//i.test(ua) && !/CriOS\\//i.test(ua);
+  const isSamsung = /SamsungBrowser\\//i.test(ua);
+  setInstalled(Boolean(standalone));
+  setOs(ios ? 'ios' : android ? 'android' : 'other');
+  setBrowser(isSamsung ? 'samsung' : isChrome ? 'chrome' : isSafari ? 'safari' : 'other');
+  const handler = e => {
+    e.preventDefault();
+    deferredRef.current = e;
+    setInstallable(true);
+  };
+  window.addEventListener('beforeinstallprompt', handler);
+  return () => window.removeEventListener('beforeinstallprompt', handler);
+}, []);
+
+const steps = useMemo(() => [
   { Icon: ListChecks, title: 'Pick a quest', body: 'Open any quest to see exactly what you need to do, the target, XP, and the verification method.' },
   { Icon: Camera, title: 'Let the camera see you', body: 'For camera quests, allow camera access and keep your whole body in frame. The pose skeleton shows what the app is tracking.' },
   { Icon: Activity, title: 'Do the movement', body: 'Rep quests count completed movements. Timed quests run for their displayed duration and finish automatically at zero.' },
   { Icon: Timer, title: 'Timer quests run themselves', body: 'Once the app recognizes a timed activity, the timer starts automatically. You can pause or resume it from the camera screen.' },
-  { Icon: Sparkles, title: 'Finish and earn XP', body: 'Complete the quest to add XP and keep your daily streak moving. Your history keeps completed quests on your account.' },
-];
+  { Icon: Smartphone, title: 'Add QuestDaily to your home screen', body: 'Save QuestDaily once so it opens like an app from your home screen. The exact steps below match your phone and browser.' },
+  { Icon: Sparkles, title: 'Finish and start questing', body: 'Complete the walkthrough, sign in or create your account, and start your first daily quest.' },
+], []);
+
+const installSteps = useMemo(() => {
+  if (os === 'ios') return [
+    ['1', 'Open QuestDaily in Safari', 'Stay in Safari on your iPhone or iPad. The home-screen option is available from Safari’s Share menu.'],
+    ['2', 'Tap Share', 'Tap the Share button (the square with an upward arrow). It is usually in Safari’s bottom toolbar, though its position can vary.'],
+    ['3', 'Tap “Add to Home Screen”', 'Scroll through the Share sheet until you see “Add to Home Screen”. If it is missing, use Edit Actions and add it to the Share menu.'],
+    ['4', 'Confirm “Add”', 'Check the QuestDaily name and icon, then tap Add. Safari places the QuestDaily icon on your home screen.'],
+    ['5', 'Open QuestDaily from Home', 'Return to your home screen and tap the QuestDaily icon. Use that icon next time to launch it like an app.'],
+  ];
+  if (os === 'android' && browser === 'samsung') return [
+    ['1', 'Open QuestDaily in Samsung Internet', 'Keep QuestDaily open in Samsung Internet while you create the shortcut.'],
+    ['2', 'Open the menu', 'Tap Samsung Internet’s three-line menu, then choose “Add page to”.'],
+    ['3', 'Choose “Home screen”', 'Select Home screen from the “Add page to” options. Review the QuestDaily name and icon.'],
+    ['4', 'Tap “Add”', 'Confirm the shortcut. Your phone may ask for one additional confirmation before placing the icon.'],
+    ['5', 'Open QuestDaily from Home', 'Return to your home screen and tap the QuestDaily icon for one-tap access.'],
+  ];
+  if (os === 'android') return [
+    ['1', 'Open QuestDaily in Chrome', 'Keep QuestDaily open in Chrome on Android. A native install prompt is the quickest option when available.'],
+    ['2', 'Open Chrome’s menu', 'Tap the three-dot ⋮ menu in the top-right corner while QuestDaily is open.'],
+    ['3', 'Choose “Install app”', 'Tap Install app. On some phones Chrome calls it “Add to Home screen” instead.'],
+    ['4', 'Confirm the install', 'Review the QuestDaily name and icon, then tap Install, Add, or the confirmation button Chrome shows.'],
+    ['5', 'Open QuestDaily from Home', 'Return to your home screen and tap QuestDaily. It will launch from its icon like an installed app.'],
+  ];
+  return [
+    ['1', 'Open your browser menu', 'While QuestDaily is open, use your browser’s main menu button. The exact icon and location depend on the browser.'],
+    ['2', 'Find the install option', 'Look for “Install app”, “Add to Home screen”, “Add shortcut”, or a similar option.'],
+    ['3', 'Choose the home-screen option', 'Select the option and review the QuestDaily name and icon.'],
+    ['4', 'Confirm', 'Accept the browser’s confirmation to create the home-screen entry.'],
+    ['5', 'Open QuestDaily from Home', 'Find the QuestDaily icon on your home screen and tap it for one-tap access.'],
+  ];
+}, [os, browser]);
+
+const doInstall = async () => {
+  const promptEvent = deferredRef.current;
+  if (!promptEvent) return;
+  try {
+    await promptEvent.prompt();
+    const result = await promptEvent.userChoice;
+    if (result?.outcome === 'accepted') setInstalled(true);
+  } catch (err) {
+    console.warn('Install prompt failed:', err);
+  } finally {
+    deferredRef.current = null;
+    setInstallable(false);
+  }
+};
+
 const current = steps[step];
+const isHomeStep = step === 4;
+const isLast = step === steps.length - 1;
+const platformName = os === 'ios' ? 'iPhone / iPad' : os === 'android' ? (browser === 'samsung' ? 'Samsung Internet' : 'Chrome on Android') : 'Your browser';
+
 return (
 <div className="fixed inset-0 z-[110] flex flex-col sq-anim-in" style={{ background: c.bg }}>
-  <div className="flex-1 flex flex-col justify-center px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
-    <div className="text-center" style={{ maxWidth: 390, width: '100%', margin: '0 auto' }}>
-      <div style={{ width: 88, height: 88, borderRadius: 30, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 22px', boxShadow: `0 18px 45px ${c.blue}2e` }}>
-        <current.Icon size={38} strokeWidth={1.9} />
+  <div className="flex-1 flex flex-col justify-center px-6 overflow-y-auto" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
+    <div style={{ maxWidth: 430, width: '100%', margin: '0 auto' }}>
+      <div className="text-center" style={{ marginBottom: isHomeStep ? 18 : 24 }}>
+        <div style={{ width: 82, height: 82, borderRadius: 28, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px', boxShadow: `0 18px 45px ${c.blue}2e` }}>
+          <current.Icon size={36} strokeWidth={1.9} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 5, marginBottom: 14 }}>
+          {steps.map((_, i) => <span key={i} style={{ width: i === step ? 22 : 7, height: 7, borderRadius: 999, background: i === step ? c.blue : c.fillStrong, transition: 'all 180ms ease' }} />)}
+        </div>
+        <p style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: .9, textTransform: 'uppercase', color: c.blue, marginBottom: 7 }}>How QuestDaily works · {step + 1} of {steps.length}</p>
+        <h2 className="sq-large-title" style={{ fontSize: 27, fontWeight: 800, color: c.label, marginBottom: 9 }}>{current.title}</h2>
+        <p style={{ fontSize: 14.5, color: c.labelSecondary, lineHeight: 1.5, maxWidth: 370, margin: '0 auto' }}>{current.body}</p>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginBottom: 18 }}>
-        {steps.map((_, i) => <span key={i} style={{ width: i === step ? 24 : 7, height: 7, borderRadius: 999, background: i === step ? c.blue : c.fillStrong, transition: 'all 220ms ease' }} />)}
-      </div>
-      <p style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase', color: c.blue, marginBottom: 8 }}>How QuestDaily works</p>
-      <h2 className="sq-large-title" style={{ fontSize: 28, fontWeight: 800, color: c.label, marginBottom: 10 }}>{current.title}</h2>
-      <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.5, maxWidth: 345, margin: '0 auto' }}>{current.body}</p>
+
+      {isHomeStep && (
+        <div style={{ ...glassStyle(c), borderRadius: 24, padding: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 12 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 11, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Smartphone size={17} /></div>
+            <div>
+              <p style={{ fontSize: 12, fontWeight: 800, color: c.label, textTransform: 'uppercase', letterSpacing: .7 }}>Your device</p>
+              <p style={{ fontSize: 12, color: c.labelSecondary, marginTop: 2 }}>{platformName}</p>
+            </div>
+          </div>
+
+          {installed ? (
+            <div style={{ borderRadius: 18, padding: 14, background: c.green ? `${c.green}18` : c.fill, marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}><Check size={18} color={c.green || c.blue} /><span style={{ fontSize: 13, fontWeight: 750, color: c.label }}>QuestDaily is already installed.</span></div>
+              <p style={{ fontSize: 11.5, color: c.labelSecondary, lineHeight: 1.45, marginTop: 5 }}>You can use the home-screen icon anytime to launch the app.</p>
+            </div>
+          ) : installable ? (
+            <button type="button" onClick={doInstall} style={{ width: '100%', padding: 14, borderRadius: 16, background: c.blue, color: '#fff', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontWeight: 800, marginBottom: 12 }}>
+              <Download size={18} /> Install QuestDaily automatically
+            </button>
+          ) : null}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {installSteps.map(([num, title, body], i) => (
+              <div key={num} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 0', borderBottom: i === installSteps.length - 1 ? 'none' : `1px solid ${c.separator || c.fillStrong}` }}>
+                <div style={{ width: 28, height: 28, borderRadius: 10, flexShrink: 0, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800 }}>{num}</div>
+                <div style={{ minWidth: 0 }}>
+                  <p style={{ fontSize: 12.5, fontWeight: 800, color: c.label, lineHeight: 1.3 }}>{title}</p>
+                  <p style={{ fontSize: 11.5, color: c.labelSecondary, lineHeight: 1.45, marginTop: 3 }}>{body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!isHomeStep && step === 0 && (
+        <div style={{ ...glassStyle(c), borderRadius: 20, padding: 14, marginTop: 16 }}>
+          <p style={{ fontSize: 12, fontWeight: 800, color: c.label, marginBottom: 4 }}>You only see this walkthrough once.</p>
+          <p style={{ fontSize: 11.5, color: c.labelSecondary, lineHeight: 1.45 }}>Afterward, Settings → Replay app tutorial opens it again anytime.</p>
+        </div>
+      )}
     </div>
   </div>
   <div className="px-6" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 24px)' }}>
-    <div className="flex gap-3" style={{ maxWidth: 390, margin: '0 auto' }}>
+    <div className="flex gap-3" style={{ maxWidth: 430, margin: '0 auto' }}>
       {step > 0 && <button type="button" onClick={() => { haptic(4); setStep(v => v - 1); }} style={{ flex: 1, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.fill, color: c.label }}>Back</button>}
-      <button type="button" onClick={() => { haptic(6); if (step === steps.length - 1) onDone(); else setStep(v => v + 1); }} style={{ flex: 2, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.blue, color: '#fff' }}>
-        {step === steps.length - 1 ? 'Start questing' : 'Next'}
+      <button type="button" onClick={() => { haptic(6); if (isLast) onDone(); else setStep(v => v + 1); }} style={{ flex: 2, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.blue, color: '#fff' }}>
+        {isLast ? 'Start questing' : isHomeStep ? 'Continue' : 'Next'}
       </button>
     </div>
   </div>
@@ -4360,8 +4482,8 @@ useEffect(() => {
 setIsMounted(true);
 const savedDark = localStorage.getItem('sq_dark');
 setDark(savedDark !== null ? savedDark === 'true' : window.matchMedia('(prefers-color-scheme: dark)').matches);
-const welcomeSeen = localStorage.getItem('sq_has_seen_welcome_v2') === 'true';
-const tutorialSeen = localStorage.getItem('sq_has_seen_tutorial_v1') === 'true';
+const welcomeSeen = localStorage.getItem('sq_has_seen_welcome_v3') === 'true';
+const tutorialSeen = localStorage.getItem('sq_has_seen_tutorial_v2') === 'true';
 setHasSeenWelcome(welcomeSeen);
 setHasSeenTutorial(tutorialSeen);
 if (welcomeSeen && !tutorialSeen) setShowTutorial(true);
@@ -4481,7 +4603,7 @@ const openTutorial = useCallback(() => {
 }, []);
 
 const finishTutorial = useCallback(() => {
-  localStorage.setItem('sq_has_seen_tutorial_v1', 'true');
+  localStorage.setItem('sq_has_seen_tutorial_v2', 'true');
   setHasSeenTutorial(true);
   setShowTutorial(false);
 }, []);
@@ -4496,9 +4618,9 @@ const installFromSettings = useCallback(() => {
 
 const handleWelcomeContinue = () => {
   haptic(10);
-  localStorage.setItem('sq_has_seen_welcome_v2', 'true');
+  localStorage.setItem('sq_has_seen_welcome_v3', 'true');
   setHasSeenWelcome(true);
-  if (!localStorage.getItem('sq_has_seen_tutorial_v1')) setShowTutorial(true);
+  if (!localStorage.getItem('sq_has_seen_tutorial_v2')) setShowTutorial(true);
 };
 
 // A brand-new account starts from a clean slate — no remote data to fetch,
@@ -4508,7 +4630,7 @@ const handleSignedUp = (finalUsername) => {
 hydratedUidRef.current = auth.currentUser?.uid ?? hydratedUidRef.current;
 setUsername(finalUsername);
 setLevel(1); setXp(0); setTotalXpEarned(0); setStreak(0); setHistory([]); setProofImages({}); setPhotoURL(null);
-setActiveTab('quests'); setHasSeenWelcome(true); if (!localStorage.getItem('sq_has_seen_tutorial_v1')) setShowTutorial(true);
+setActiveTab('quests'); setHasSeenWelcome(true); if (!localStorage.getItem('sq_has_seen_tutorial_v2')) setShowTutorial(true);
 };
 
 const handleLoggedIn = async (finalUsername) => {
@@ -4518,7 +4640,7 @@ hydratedUidRef.current = auth.currentUser.uid;
 setProofImages({}); // proof photos are device-local and never synced
 await hydrateAccount(auth.currentUser.uid, auth.currentUser.email, auth.currentUser);
 }
-setActiveTab('quests'); setHasSeenWelcome(true); if (!localStorage.getItem('sq_has_seen_tutorial_v1')) setShowTutorial(true);
+setActiveTab('quests'); setHasSeenWelcome(true); if (!localStorage.getItem('sq_has_seen_tutorial_v2')) setShowTutorial(true);
 };
 
 const resetLocalAccountState = () => {
@@ -4875,7 +4997,6 @@ return (
 <WelcomeScreen c={c} onContinue={handleWelcomeContinue} />
 )}
 {hasSeenWelcome && showTutorial && <AppTutorial c={c} onDone={finishTutorial} />}
-{hasSeenWelcome && !showTutorial && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} onInstallReady={() => {}} c={c} />}
 {hasSeenWelcome && !showTutorial && !showInstallPrompt && !authUser && <AuthModal onSignedUp={handleSignedUp} onLoggedIn={handleLoggedIn} c={c} initialError={authError} />}
 {authUser && !username && (
 <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{ background: c.bg }}>
