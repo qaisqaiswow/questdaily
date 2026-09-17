@@ -3942,17 +3942,17 @@ return (
 <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{
   opacity: phase === 'live' && !uploadedProof ? 1 : 0,
   contain: 'strict',
-  transform: 'rotateY(180deg) translateZ(0)',
+  transform: 'scaleX(-1) translateZ(0)',
   transformOrigin: 'center center',
-  backfaceVisibility: 'hidden',
+  backfaceVisibility: 'visible',
 }} />
 <canvas ref={skeletonCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none object-cover z-10"
 style={{
   opacity: phase === 'live' && !uploadedProof && hasSkeletonTracking ? 1 : 0,
   contain: 'strict',
-  transform: 'rotateY(180deg) translateZ(0)',
+  transform: 'scaleX(-1) translateZ(0)',
   transformOrigin: 'center center',
-  backfaceVisibility: 'hidden',
+  backfaceVisibility: 'visible',
 }} />
 
 {phase === 'live' && !uploadedProof && labels?.bodyParts && (
