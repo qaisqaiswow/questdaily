@@ -2533,9 +2533,9 @@ useEffect(() => {
   const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
   const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const android = /Android/i.test(ua);
-  const isChrome = /Chrome\\//i.test(ua) && !/Edg\\//i.test(ua) && !/OPR\\//i.test(ua);
-  const isSafari = /Safari\\//i.test(ua) && !/Chrome\\//i.test(ua) && !/CriOS\\//i.test(ua);
-  const isSamsung = /SamsungBrowser\\//i.test(ua);
+  const isChrome = /Chrome\//i.test(ua) && !/Edg\//i.test(ua) && !/OPR\//i.test(ua);
+  const isSafari = /Safari\//i.test(ua) && !/Chrome\//i.test(ua) && !/CriOS\//i.test(ua);
+  const isSamsung = /SamsungBrowser\//i.test(ua);
   setInstalled(Boolean(standalone));
   setOs(ios ? 'ios' : android ? 'android' : 'other');
   setBrowser(isSamsung ? 'samsung' : isChrome ? 'chrome' : isSafari ? 'safari' : 'other');
