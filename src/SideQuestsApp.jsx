@@ -17,7 +17,7 @@ Dumbbell, PersonStanding, Activity, Bike, Footprints, CircleDot, Timer, Chevrons
 Droplet, Leaf, Utensils, CookingPot, Flower2, Move, Zap, Flame,
 Pencil, Snowflake, Wind, Waves, Target, GlassWater, CupSoda,
 LogOut, Eye, EyeOff, Lock, AtSign, Camera, Trash2, ShieldCheck, Sparkles, ListChecks,
-Bell, Download, UserCog, KeyRound, ChevronRight, CircleUserRound,
+Bell, Download, UserCog, KeyRound, ChevronRight, CircleUserRound, BookOpen, Play, Smartphone, Check, RotateCcw,
 } from 'lucide-react';
 
 // firebase / leaderboard stuff
@@ -591,8 +591,8 @@ return pt && (pt.visibility === undefined || pt.visibility >= minVis);
 function pickSide(lms, leftKeys, rightKeys) {
 const left = leftKeys.map(k => lms[k]);
 const right = rightKeys.map(k => lms[k]);
-const leftOk = left.every(p => visiblePt(p));
-const rightOk = right.every(p => visiblePt(p));
+const leftOk = left.every(p => visiblePt(p, 0.32));
+const rightOk = right.every(p => visiblePt(p, 0.32));
 if (leftOk && rightOk) {
 return left.map((p, i) => ({
 x: (p.x + right[i].x) / 2,
@@ -634,16 +634,17 @@ q23: (lms) => {
 };
 
 const REP_CONFIG = {
-q1: { mode: 'angle', downThreshold: 100, upThreshold: 155, cueDown: 'Lower into the pushup', cueUp: 'Push back up to full extension' },
-q2: { mode: 'angle', downThreshold: 110, upThreshold: 160, cueDown: 'Squat down', cueUp: 'Stand back up' },
-q4: { mode: 'angle', downThreshold: 80, upThreshold: 150, cueDown: 'Pull your chin toward the bar', cueUp: 'Lower to a full hang' },
-q12: { mode: 'angle', downThreshold: 110, upThreshold: 150, cueDown: 'Sit up and bring your torso forward', cueUp: 'Lie completely back down' },
-q17: { mode: 'height', downThreshold: 0.025, upThreshold: 0.008, cueDown: 'Jump', cueUp: 'Land and jump again' },
-q23: { mode: 'angle', downThreshold: 110, upThreshold: 160, cueDown: 'Lower into the lunge', cueUp: 'Return to standing' },
+q1: { mode: 'angle', downThreshold: 112, upThreshold: 148, cueDown: 'Lower into the pushup', cueUp: 'Push back up to full extension' },
+q2: { mode: 'angle', downThreshold: 122, upThreshold: 154, cueDown: 'Squat down', cueUp: 'Stand back up' },
+q4: { mode: 'angle', downThreshold: 96, upThreshold: 142, cueDown: 'Pull your chin toward the bar', cueUp: 'Lower to a full hang' },
+q12: { mode: 'angle', downThreshold: 112, upThreshold: 146, cueDown: 'Sit up and bring your torso forward', cueUp: 'Lie completely back down' },
+q17: { mode: 'height', downThreshold: 0.015, upThreshold: 0.006, cueDown: 'Jump', cueUp: 'Land and jump again' },
+q23: { mode: 'angle', downThreshold: 122, upThreshold: 150, cueDown: 'Lower into the lunge', cueUp: 'Return to standing' },
 };
 
-const MIN_REP_MS = 500;
-const FORM_STABLE_FRAMES = 5;
+const MIN_REP_MS = 450;
+const FORM_STABLE_FRAMES = 3;
+const MAX_INVALID_REP_FRAMES = 8;
 
 function createPoseRepState(initialReps = 0) {
 return {
@@ -666,20 +667,20 @@ return Math.hypot(a.x - b.x, a.y - b.y);
 function getAveragePoint(lms, leftIndex, rightIndex) {
 const left = lms[leftIndex];
 const right = lms[rightIndex];
-if (visiblePt(left, 0.40) && visiblePt(right, 0.40)) {
+if (visiblePt(left, 0.32) && visiblePt(right, 0.32)) {
   return {
     x: (left.x + right.x) / 2,
     y: (left.y + right.y) / 2,
     visibility: Math.min(left.visibility ?? 1, right.visibility ?? 1),
   };
 }
-return visiblePt(left, 0.40) ? left : visiblePt(right, 0.40) ? right : null;
+return visiblePt(left, 0.32) ? left : visiblePt(right, 0.32) ? right : null;
 }
 
 function getBestExerciseSide(lms) {
 const left = [lms[LM.L_SHOULDER], lms[LM.L_HIP], lms[LM.L_KNEE], lms[LM.L_ANKLE]];
 const right = [lms[LM.R_SHOULDER], lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]];
-const score = points => points.reduce((n, p) => n + (visiblePt(p, 0.40) ? 1 : 0), 0);
+const score = points => points.reduce((n, p) => n + (visiblePt(p, 0.32) ? 1 : 0), 0);
 return score(right) >= score(left) ? 'right' : 'left';
 }
 
@@ -724,7 +725,7 @@ const ankles = getAveragePoint(lms, LM.L_ANKLE, LM.R_ANKLE);
 
 // PUSHUPS: require a long, plank-like body instead of only an elbow bend.
 if (questId === 'q1') {
-  if (![p.shoulder, p.hip, p.knee, p.ankle, p.elbow, p.wrist].every(x => visiblePt(x, 0.40))) {
+  if (![p.shoulder, p.hip, p.knee, p.ankle, p.elbow, p.wrist].every(x => visiblePt(x, 0.32))) {
     return { valid: false, cue: 'Keep your full body and arms visible' };
   }
 
@@ -733,10 +734,10 @@ if (questId === 'q1') {
   const shoulderHip = distance2D(p.shoulder, p.hip);
   const hipAnkle = distance2D(p.hip, p.ankle);
 
-  if (bodyAngle === null || bodyAngle < 145) {
-    return { valid: false, cue: 'Keep your body straight like a plank' };
+  if (bodyAngle === null || bodyAngle < 125) {
+    return { valid: false, cue: 'Keep your body mostly straight' };
   }
-  if (kneeAngle !== null && kneeAngle < 145) {
+  if (kneeAngle !== null && kneeAngle < 115) {
     return { valid: false, cue: 'Keep your legs extended' };
   }
   if ((shoulderHip ?? 0) < 0.10 || (hipAnkle ?? 0) < 0.20) {
@@ -748,7 +749,7 @@ if (questId === 'q1') {
 // SQUATS: require both feet/legs and a real hip/knee bend. This rejects
 // seated arm movements because the torso/leg geometry must also match.
 if (questId === 'q2') {
-  if (![p.hip, p.knee, p.ankle, p.shoulder].every(x => visiblePt(x, 0.40))) {
+  if (![p.hip, p.knee, p.ankle, p.shoulder].every(x => visiblePt(x, 0.32))) {
     return { valid: false, cue: 'Keep your legs and upper body visible' };
   }
 
@@ -758,7 +759,7 @@ if (questId === 'q2') {
   if (kneeAngle === null || torsoAngle === null) {
     return { valid: false, cue: 'Show your whole squat' };
   }
-  if (torsoAngle < 105) {
+  if (torsoAngle < 70) {
     return { valid: false, cue: 'Keep your chest up' };
   }
   return { valid: true, cue: 'Good squat form' };
@@ -767,7 +768,7 @@ if (questId === 'q2') {
 // PULLUPS: require a vertical hanging body and hands above the shoulders.
 // Sitting arm curls cannot satisfy this geometry.
 if (questId === 'q4') {
-  if (![p.shoulder, p.elbow, p.wrist, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.40))) {
+  if (![p.shoulder, p.elbow, p.wrist, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.32))) {
     return { valid: false, cue: 'Show your full body hanging from the bar' };
   }
 
@@ -775,14 +776,14 @@ if (questId === 'q4') {
   const legAngle = angleBetween(p.hip, p.knee, p.ankle);
   const wristShoulderDistance = Math.abs(p.wrist.y - p.shoulder.y);
 
-  if (torsoAngle === null || torsoAngle < 145) {
-    return { valid: false, cue: 'Hang vertically from the bar' };
+  if (torsoAngle === null || torsoAngle < 105) {
+    return { valid: false, cue: 'Keep your torso fairly vertical' };
   }
-  if (legAngle !== null && legAngle < 125) {
+  if (legAngle !== null && legAngle < 80) {
     return { valid: false, cue: 'Keep your legs mostly extended' };
   }
-  if (p.wrist.y > p.shoulder.y + 0.12 || wristShoulderDistance < 0.05) {
-    return { valid: false, cue: 'Keep your hands above the bar area' };
+  if (wristShoulderDistance < 0.035) {
+    return { valid: false, cue: 'Keep both hands clearly visible' };
   }
   return { valid: true, cue: 'Good pullup form' };
 }
@@ -790,7 +791,7 @@ if (questId === 'q4') {
 // SITUPS: require the hips and knees to stay anchored while the torso changes
 // angle. Arm-only movement while sitting/standing won't match this geometry.
 if (questId === 'q12') {
-  if (![p.shoulder, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.40))) {
+  if (![p.shoulder, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.32))) {
     return { valid: false, cue: 'Lie down with your full body visible' };
   }
 
@@ -798,11 +799,11 @@ if (questId === 'q12') {
   const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
 
   if (torsoAngle === null) return { valid: false, cue: 'Keep your torso visible' };
-  if (kneeAngle !== null && kneeAngle < 75) {
+  if (kneeAngle !== null && kneeAngle < 55) {
     return { valid: false, cue: 'Keep your knees reasonably stable' };
   }
-  if (torsoAngle < 45) {
-    return { valid: false, cue: 'Use a controlled situp, not a standing movement' };
+  if (torsoAngle < 30) {
+    return { valid: false, cue: 'Use a controlled situp motion' };
   }
   return { valid: true, cue: 'Good situp position' };
 }
@@ -810,7 +811,7 @@ if (questId === 'q12') {
 // JUMP ROPE: track the ankles rather than just hip movement, and require the
 // person to remain upright with both feet close together.
 if (questId === 'q17') {
-  if (![shoulders, hips, knees, ankles].every(x => visiblePt(x, 0.40))) {
+  if (![shoulders, hips, knees, ankles].every(x => visiblePt(x, 0.32))) {
     return { valid: false, cue: 'Keep your whole body and both feet visible' };
   }
 
@@ -819,13 +820,13 @@ if (questId === 'q17') {
   const kneeRight = angleBetween(lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]);
   const ankleGap = Math.abs(lms[LM.L_ANKLE].x - lms[LM.R_ANKLE].x);
 
-  if (torsoAngle !== null && torsoAngle < 145) {
-    return { valid: false, cue: 'Stay upright while jumping' };
+  if (torsoAngle !== null && torsoAngle < 120) {
+    return { valid: false, cue: 'Stay fairly upright while jumping' };
   }
-  if ((kneeLeft !== null && kneeLeft < 105) || (kneeRight !== null && kneeRight < 105)) {
+  if ((kneeLeft !== null && kneeLeft < 75) || (kneeRight !== null && kneeRight < 75)) {
     return { valid: false, cue: 'Use small rope jumps, not deep squats' };
   }
-  if (ankleGap > 0.35) {
+  if (ankleGap > 0.50) {
     return { valid: false, cue: 'Keep your feet closer together' };
   }
   return { valid: true, cue: 'Good jump-rope form' };
@@ -838,7 +839,7 @@ if (questId === 'q23') {
   const leftKnee = lms[LM.L_KNEE], rightKnee = lms[LM.R_KNEE];
   const leftAnkle = lms[LM.L_ANKLE], rightAnkle = lms[LM.R_ANKLE];
 
-  if (![leftHip, rightHip, leftKnee, rightKnee, leftAnkle, rightAnkle].every(x => visiblePt(x, 0.40))) {
+  if (![leftHip, rightHip, leftKnee, rightKnee, leftAnkle, rightAnkle].every(x => visiblePt(x, 0.32))) {
     return { valid: false, cue: 'Keep both legs completely visible' };
   }
 
@@ -847,13 +848,13 @@ if (questId === 'q23') {
   const stanceWidth = Math.abs(leftAnkle.x - rightAnkle.x);
   const hipWidth = Math.abs(leftHip.x - rightHip.x);
 
-  if (stanceWidth < Math.max(0.12, hipWidth * 1.15)) {
+  if (stanceWidth < Math.max(0.08, hipWidth * 1.05)) {
     return { valid: false, cue: 'Step one foot forward into a real lunge stance' };
   }
   if (leftKneeAngle === null || rightKneeAngle === null) {
     return { valid: false, cue: 'Keep both knees visible' };
   }
-  if (leftKneeAngle < 55 || rightKneeAngle < 55) {
+  if (leftKneeAngle < 45 || rightKneeAngle < 45) {
     return { valid: false, cue: 'Do not collapse your knees inward' };
   }
   return { valid: true, cue: 'Good lunge form' };
@@ -873,37 +874,53 @@ const form = validateExerciseForm(questId, landmarks);
 
 if (!form.valid) {
   state.invalidFrames = Math.min(30, state.invalidFrames + 1);
-  state.validFrames = Math.max(0, state.validFrames - 2);
-  state.movementStarted = false;
+  state.validFrames = 0;
+  // A few weak/occluded pose frames should not erase the current rep.
+  // Only fully resync after a sustained loss of valid form.
+  if (state.invalidFrames >= MAX_INVALID_REP_FRAMES) {
+    state.movementStarted = false;
+    state.smoothed = null;
+  }
+  const config = REP_CONFIG[questId];
   return {
     reps: state.reps,
     phase: state.phase,
-    cue: form.cue,
+    cue: form.cue || (state.phase === 'up' ? config?.cueDown : config?.cueUp) || 'Keep moving',
     counted: false,
     formValid: false,
   };
 }
 
-state.invalidFrames = Math.max(0, state.invalidFrames - 1);
+state.invalidFrames = 0;
 state.validFrames = Math.min(FORM_STABLE_FRAMES + 4, state.validFrames + 1);
-
-// Never let a one-frame pose glitch start or finish a rep.
-if (state.validFrames < FORM_STABLE_FRAMES) {
-  return {
-    reps: state.reps,
-    phase: state.phase,
-    cue: 'Hold the correct exercise position',
-    counted: false,
-    formValid: true,
-  };
-}
 
 const raw = metricFn(landmarks);
 if (raw === null) {
-return { reps: state.reps, phase: state.phase, cue: 'Move fully into frame', counted: false, formValid: false };
+  state.invalidFrames = Math.min(30, state.invalidFrames + 1);
+  return { reps: state.reps, phase: state.phase, cue: 'Move fully into frame', counted: false, formValid: false };
 }
 
-state.smoothed = state.smoothed === null ? raw : state.smoothed * 0.6 + raw * 0.4;
+// Start from the posture the camera actually sees. This fixes the common
+// case where a user opens the camera already at the bottom/top of a rep.
+if (state.smoothed === null) {
+  state.smoothed = raw;
+  if (questId === 'q17') {
+    state.baselineY = raw;
+    state.phase = 'up';
+    state.movementStarted = false;
+  } else {
+    const config = REP_CONFIG[questId];
+    const midpoint = (config.downThreshold + config.upThreshold) / 2;
+    state.phase = raw <= midpoint ? 'down' : 'up';
+    state.movementStarted = state.phase === 'down';
+  }
+  if (state.validFrames < FORM_STABLE_FRAMES) {
+    return { reps: state.reps, phase: state.phase, cue: state.phase === 'up' ? REP_CONFIG[questId].cueDown : REP_CONFIG[questId].cueUp, counted: false, formValid: true };
+  }
+} else {
+  state.smoothed = state.smoothed * 0.70 + raw * 0.30;
+}
+
 const value = state.smoothed;
 let counted = false;
 
@@ -913,7 +930,7 @@ if (config.mode === 'height') {
   if (state.baselineY === null) {
     state.baselineY = value;
   } else {
-    state.baselineY = state.baselineY * 0.985 + value * 0.015;
+    state.baselineY = state.baselineY * 0.992 + value * 0.008;
   }
 
   const jumpHeight = state.baselineY - value;
@@ -2023,7 +2040,7 @@ onPhotoFile, photoUploading, photoError, onDismissPhotoError,
 onUsernameChanged, onLogout, onDeleteAccount,
 hapticsOn, onToggleHaptics,
 dailyReminderOn, onToggleDailyReminder, notificationsSupported,
-onExportData, isSaqoom = false, c,
+onExportData, onReplayTutorial, onInstallApp, installSupported = false, isSaqoom = false, c,
 }) {
 // null | 'username' | 'password' | 'delete' — only one inline editor
 // open at a time, inside the Account card.
@@ -2395,6 +2412,31 @@ Downloads your level, XP, streak, and full quest history as a JSON file.
 </p>
 </div>
 
+{/* App tutorial + install */}
+<div>
+<p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>App</p>
+<div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+<button type="button" onClick={() => { haptic(6); onReplayTutorial?.(); }} style={rowStyle}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<BookOpen size={14} strokeWidth={1.9} />
+</div>
+<span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Replay app tutorial</span>
+<RotateCcw size={16} color={c.labelTertiary} />
+</button>
+<div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+<button type="button" onClick={() => { haptic(6); onInstallApp?.(); }} style={rowStyle}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<Download size={14} strokeWidth={1.9} />
+</div>
+<div style={{ flex: 1, minWidth: 0 }}>
+<p style={{ fontSize: 15, fontWeight: 500, color: c.label }}>{installSupported ? 'Install app' : 'Add to Home Screen'}</p>
+<p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>{installSupported ? 'Use your browser’s install prompt' : 'Open the browser menu to save it'}</p>
+</div>
+<ChevronRight size={17} color={c.labelTertiary} />
+</button>
+</div>
+</div>
+
 {/* Updates */}
 <div>
 <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Updates</p>
@@ -2475,92 +2517,154 @@ style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center'
 );
 });
 
-// add to home screen prompt
-function DeviceInstallPrompt({ onDismiss, c }) {
+// First-run app tutorial. It is versioned so an existing install sees the
+// refreshed onboarding once, while later visits stay out of the way. Settings
+// can replay it at any time without changing the first-run flag.
+function AppTutorial({ onDone, c }) {
+const [step, setStep] = useState(0);
+const steps = [
+  { Icon: ListChecks, title: 'Pick a quest', body: 'Open any quest to see exactly what you need to do, the target, XP, and the verification method.' },
+  { Icon: Camera, title: 'Let the camera see you', body: 'For camera quests, allow camera access and keep your whole body in frame. The pose skeleton shows what the app is tracking.' },
+  { Icon: Activity, title: 'Do the movement', body: 'Rep quests count completed movements. Timed quests run for their displayed duration and finish automatically at zero.' },
+  { Icon: Timer, title: 'Timer quests run themselves', body: 'Once the app recognizes a timed activity, the timer starts automatically. You can pause or resume it from the camera screen.' },
+  { Icon: Sparkles, title: 'Finish and earn XP', body: 'Complete the quest to add XP and keep your daily streak moving. Your history keeps completed quests on your account.' },
+];
+const current = steps[step];
+return (
+<div className="fixed inset-0 z-[110] flex flex-col sq-anim-in" style={{ background: c.bg }}>
+  <div className="flex-1 flex flex-col justify-center px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
+    <div className="text-center" style={{ maxWidth: 390, width: '100%', margin: '0 auto' }}>
+      <div style={{ width: 88, height: 88, borderRadius: 30, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 22px', boxShadow: `0 18px 45px ${c.blue}2e` }}>
+        <current.Icon size={38} strokeWidth={1.9} />
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginBottom: 18 }}>
+        {steps.map((_, i) => <span key={i} style={{ width: i === step ? 24 : 7, height: 7, borderRadius: 999, background: i === step ? c.blue : c.fillStrong, transition: 'all 220ms ease' }} />)}
+      </div>
+      <p style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase', color: c.blue, marginBottom: 8 }}>How QuestDaily works</p>
+      <h2 className="sq-large-title" style={{ fontSize: 28, fontWeight: 800, color: c.label, marginBottom: 10 }}>{current.title}</h2>
+      <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.5, maxWidth: 345, margin: '0 auto' }}>{current.body}</p>
+    </div>
+  </div>
+  <div className="px-6" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 24px)' }}>
+    <div className="flex gap-3" style={{ maxWidth: 390, margin: '0 auto' }}>
+      {step > 0 && <button type="button" onClick={() => { haptic(4); setStep(v => v - 1); }} style={{ flex: 1, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.fill, color: c.label }}>Back</button>}
+      <button type="button" onClick={() => { haptic(6); if (step === steps.length - 1) onDone(); else setStep(v => v + 1); }} style={{ flex: 2, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.blue, color: '#fff' }}>
+        {step === steps.length - 1 ? 'Start questing' : 'Next'}
+      </button>
+    </div>
+  </div>
+</div>
+);
+}
+
+// add to home screen / install prompt. Uses the browser's native PWA install
+// prompt when available; on iOS/unsupported browsers it gives the exact
+// manual path because browsers do not permit websites to silently create a
+// bookmark/home-screen icon themselves.
+function DeviceInstallPrompt({ onDismiss, onInstallReady, c }) {
 const [step, setStep] = useState(0);
 const [os, setOs] = useState(null);
+const [installable, setInstallable] = useState(false);
+const [installed, setInstalled] = useState(false);
+const deferredRef = useRef(null);
 
-const nextStep = () => { if (step === 1) setStep(2); else onDismiss(); };
+useEffect(() => {
+  const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  setInstalled(Boolean(standalone));
+  const handler = e => {
+    e.preventDefault();
+    deferredRef.current = e;
+    setInstallable(true);
+  };
+  window.addEventListener('beforeinstallprompt', handler);
+  return () => window.removeEventListener('beforeinstallprompt', handler);
+}, []);
+
+const doInstall = async () => {
+  const promptEvent = deferredRef.current;
+  if (!promptEvent) return;
+  try {
+    await promptEvent.prompt();
+    await promptEvent.userChoice;
+  } catch (err) {
+    console.warn('Install prompt failed:', err);
+  } finally {
+    deferredRef.current = null;
+    setInstallable(false);
+    onInstallReady?.();
+  }
+};
 
 const rowStyle = { width: '100%', padding: '16px 18px', borderRadius: 18, fontSize: 16, fontWeight: 500, textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: c.bgSecondary, color: c.label };
 
 return (
-<div className="fixed inset-0 z-[100] flex flex-col sq-anim-in" style={{ background: c.bg }}>
+<div className="fixed inset-0 z-[105] flex flex-col sq-anim-in" style={{ background: c.bg }}>
 <div className="flex-1 flex flex-col justify-center px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
-{step === 0 && (
-<>
-<div className="text-center mb-8">
-<div className="sq-icon-fff" style={{ width: 84, height: 84, borderRadius: 32, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
-<IOSAddIcon style={{ width: 40, height: 40 }} />
-</div>
-<h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 8 }}>Add to Home Screen</h3>
-<p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.4 }}>Which device are you using?</p>
-</div>
-<div className="flex flex-col gap-3">
-<button onClick={() => { setOs('ios'); setStep(1); }} style={rowStyle}>
-<span>iPhone or iPad</span><ChevronIcon color={c.labelTertiary} />
-</button>
-<button onClick={() => { setOs('android'); setStep(1); }} style={rowStyle}>
-<span>Android</span><ChevronIcon color={c.labelTertiary} />
-</button>
-</div>
-</>
-)}
-
-{step > 0 && os === 'ios' && (
-<>
-<div className="text-center mb-2">
-<h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 6 }}>Install on iOS</h3>
-<p style={{ fontSize: 14, color: c.labelSecondary, marginBottom: 28 }}>Step {step} of 2</p>
-</div>
-<div style={{ ...glassStyle(c), borderRadius: 28, padding: '40px 24px', marginBottom: 20, textAlign: 'center' }}>
-<div className="sq-icon-fff" style={{ width: 72, height: 72, borderRadius: 999, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
-{step === 1 ? <IOSShareIcon style={{ width: 30, height: 30 }} /> : <IOSAddIcon style={{ width: 30, height: 30 }} />}
-</div>
-<p style={{ fontSize: 18, fontWeight: 600, color: c.label, marginBottom: 6 }}>
-{step === 1 ? 'Tap the Share button' : 'Tap Add to Home Screen'}
-</p>
-<p style={{ fontSize: 14, color: c.labelSecondary }}>
-{step === 1 ? 'Find it in the Safari toolbar.' : 'Scroll down the share sheet to find it.'}
-</p>
-</div>
-</>
-)}
-
-{step > 0 && os === 'android' && (
-<>
-<div className="text-center mb-2">
-<h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 6 }}>Install on Android</h3>
-<p style={{ fontSize: 14, color: c.labelSecondary, marginBottom: 28 }}>Step {step} of 2</p>
-</div>
-<div style={{ ...glassStyle(c), borderRadius: 28, padding: '40px 24px', marginBottom: 20, textAlign: 'center' }}>
-<div className="sq-icon-fff" style={{ width: 72, height: 72, borderRadius: 999, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
-{step === 1 ? <AndroidMenuIcon style={{ width: 30, height: 30 }} /> : <AndroidAddIcon style={{ width: 30, height: 30 }} />}
-</div>
-<p style={{ fontSize: 18, fontWeight: 600, color: c.label, marginBottom: 6 }}>
-{step === 1 ? 'Tap the menu icon' : 'Tap Add to Home Screen'}
-</p>
-<p style={{ fontSize: 14, color: c.labelSecondary }}>
-{step === 1 ? 'Three dots, usually top right in Chrome.' : 'Select it from the menu, or "Install app".'}
-</p>
-</div>
-</>
-)}
-</div>
-
-<div className="px-6" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 24px)' }}>
-{step === 0 ? (
-<button onClick={onDismiss} style={{ width: '100%', padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, color: c.blue, background: c.fill }}>
-Not Now
-</button>
+{installed ? (
+  <div className="text-center" style={{ maxWidth: 390, width: '100%', margin: '0 auto' }}>
+    <div className="sq-icon-fff" style={{ width: 84, height: 84, borderRadius: 32, background: c.green, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}><Check size={42} /></div>
+    <h3 className="sq-large-title" style={{ fontSize: 28, fontWeight: 800, color: c.label, marginBottom: 8 }}>QuestDaily is installed</h3>
+    <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.45 }}>You can open QuestDaily from your home screen like an app.</p>
+  </div>
+) : step === 0 ? (
+  <>
+    <div className="text-center mb-8">
+      <div className="sq-icon-fff" style={{ width: 84, height: 84, borderRadius: 32, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+        <Smartphone size={40} />
+      </div>
+      <h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 8 }}>Install QuestDaily</h3>
+      <p style={{ fontSize: 15, color: c.labelSecondary, lineHeight: 1.4 }}>Put QuestDaily on your home screen for one-tap access.</p>
+    </div>
+    {installable ? (
+      <button onClick={doInstall} style={{ ...rowStyle, justifyContent: 'center', background: c.blue, color: '#fff', fontWeight: 700, marginBottom: 12 }}>
+        <Download size={18} /> <span style={{ marginLeft: 8 }}>Install app</span>
+      </button>
+    ) : (
+      <div className="flex flex-col gap-3">
+        <button onClick={() => { setOs('ios'); setStep(1); }} style={rowStyle}>
+          <span>iPhone or iPad</span><ChevronRight size={18} color={c.labelTertiary} />
+        </button>
+        <button onClick={() => { setOs('android'); setStep(1); }} style={rowStyle}>
+          <span>Android</span><ChevronRight size={18} color={c.labelTertiary} />
+        </button>
+      </div>
+    )}
+  </>
 ) : (
-<div className="flex gap-3">
-{step === 2 && <button onClick={() => setStep(1)} style={{ flex: 1, padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, background: c.fill, color: c.label }}>Back</button>}
-<button onClick={nextStep} style={{ flex: 2, padding: '16px', borderRadius: 999, fontSize: 16, fontWeight: 600, background: os === 'ios' ? c.blue : c.green, color: '#fff' }}>
-{step === 1 ? 'Next' : 'Done'}
-</button>
-</div>
+  <>
+    <div className="text-center mb-2">
+      <h3 className="sq-large-title" style={{ fontSize: 26, fontWeight: 800, color: c.label, marginBottom: 6 }}>Save QuestDaily</h3>
+      <p style={{ fontSize: 14, color: c.labelSecondary, marginBottom: 28 }}>A browser cannot silently create bookmarks or home-screen icons, so use the built-in menu once.</p>
+    </div>
+    <div style={{ ...glassStyle(c), borderRadius: 28, padding: '36px 24px', marginBottom: 20, textAlign: 'center' }}>
+      <div className="sq-icon-fff" style={{ width: 72, height: 72, borderRadius: 999, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+        {os === 'ios' ? <Download size={30} /> : <Download size={30} />}
+      </div>
+      <p style={{ fontSize: 18, fontWeight: 600, color: c.label, marginBottom: 6 }}>
+        {step === 1 ? (os === 'ios' ? 'Tap Share' : 'Open the browser menu') : 'Add QuestDaily'}
+      </p>
+      <p style={{ fontSize: 14, color: c.labelSecondary, lineHeight: 1.5 }}>
+        {os === 'ios'
+          ? (step === 1 ? 'In Safari, tap Share, then choose “Add to Home Screen”.' : 'Confirm Add to Home Screen, then open QuestDaily from your home screen.')
+          : (step === 1 ? 'In Chrome, tap ⋮, then choose “Install app” or “Add to Home screen”.' : 'Confirm the install and launch QuestDaily from your home screen.')}
+      </p>
+    </div>
+  </>
 )}
+</div>
+<div className="px-6" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 24px)' }}>
+  {installed ? (
+    <button onClick={onDismiss} style={{ width: '100%', padding: 16, borderRadius: 999, fontSize: 16, fontWeight: 700, color: c.blue, background: c.fill }}>Done</button>
+  ) : installable && step === 0 ? (
+    <button onClick={onDismiss} style={{ width: '100%', padding: 16, borderRadius: 999, fontSize: 16, fontWeight: 700, color: c.blue, background: c.fill }}>Not now</button>
+  ) : step === 0 ? (
+    <button onClick={onDismiss} style={{ width: '100%', padding: 16, borderRadius: 999, fontSize: 16, fontWeight: 700, color: c.blue, background: c.fill }}>Not now</button>
+  ) : (
+    <div className="flex gap-3">
+      <button onClick={() => setStep(0)} style={{ flex: 1, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.fill, color: c.label }}>Back</button>
+      <button onClick={onDismiss} style={{ flex: 2, padding: 16, borderRadius: 999, fontSize: 15, fontWeight: 700, background: c.blue, color: '#fff' }}>Done</button>
+    </div>
+  )}
 </div>
 </div>
 );
@@ -2690,9 +2794,9 @@ function createPoseInferenceWorker() {
           },
           runningMode: 'VIDEO',
           numPoses: 1,
-          minPoseDetectionConfidence: 0.45,
-          minPosePresenceConfidence: 0.45,
-          minTrackingConfidence: 0.45,
+          minPoseDetectionConfidence: 0.35,
+          minPosePresenceConfidence: 0.35,
+          minTrackingConfidence: 0.35,
           outputSegmentationMasks: false,
         };
         try {
@@ -3511,11 +3615,12 @@ poseUiCueRef.current = update.cue;
 setRepCue(update.cue);
 }
 if (update.counted) {
-setRepsDone(update.reps);
-if (update.reps >= quest.reps) {
+const nextReps = Math.min(quest.reps, Math.max(0, update.reps));
+setRepsDone(nextReps);
+if (nextReps >= quest.reps) {
 if (repSpoofSuspectedRef.current) {
-poseStateRef.current.reps = quest.reps - 1;
-setRepsDone(quest.reps - 1);
+poseStateRef.current.reps = Math.max(0, quest.reps - 1);
+setRepsDone(Math.max(0, quest.reps - 1));
 haptic(10);
 } else {
 confirmedRef.current = true;
@@ -4151,6 +4256,10 @@ const uid = authUser?.uid ?? null;
 
 const [dark, setDark] = useState(true);
 const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+const [showTutorial, setShowTutorial] = useState(false);
+const [hasSeenTutorial, setHasSeenTutorial] = useState(true);
+const deferredInstallPromptRef = useRef(null);
+const [installSupported, setInstallSupported] = useState(false);
 const [level, setLevel] = useState(1);
 const [xp, setXp] = useState(0);
 const [totalXpEarned, setTotalXpEarned] = useState(0);
@@ -4174,11 +4283,17 @@ useEffect(() => {
 setIsMounted(true);
 const savedDark = localStorage.getItem('sq_dark');
 setDark(savedDark !== null ? savedDark === 'true' : window.matchMedia('(prefers-color-scheme: dark)').matches);
-setHasSeenWelcome(localStorage.getItem('sq_has_seen_welcome') === 'true');
+const welcomeSeen = localStorage.getItem('sq_has_seen_welcome_v2') === 'true';
+const tutorialSeen = localStorage.getItem('sq_has_seen_tutorial_v1') === 'true';
+setHasSeenWelcome(welcomeSeen);
+setHasSeenTutorial(tutorialSeen);
+if (welcomeSeen && !tutorialSeen) setShowTutorial(true);
 
-if (!localStorage.getItem('sq_has_seen_install_v2')) {
-setShowInstallPrompt(true);
-}
+const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+const onBeforeInstall = e => { e.preventDefault(); deferredInstallPromptRef.current = e; setInstallSupported(true); };
+window.addEventListener('beforeinstallprompt', onBeforeInstall);
+if (standalone) setInstallSupported(false);
+return () => window.removeEventListener('beforeinstallprompt', onBeforeInstall);
 
 setLevel(parseInt(localStorage.getItem('sq_level')) || 1);
 setXp(parseInt(localStorage.getItem('sq_xp')) || 0);
@@ -4281,8 +4396,32 @@ localStorage.setItem('sq_dark', dark);
 }, [dark, isMounted]);
 
 const handleDismissInstall = () => {
-localStorage.setItem('sq_has_seen_install_v2', 'true');
 setShowInstallPrompt(false);
+};
+
+const openTutorial = useCallback(() => {
+  setShowTutorial(true);
+}, []);
+
+const finishTutorial = useCallback(() => {
+  localStorage.setItem('sq_has_seen_tutorial_v1', 'true');
+  setHasSeenTutorial(true);
+  setShowTutorial(false);
+}, []);
+
+const openInstallPrompt = useCallback(async () => {
+  setShowInstallPrompt(true);
+}, []);
+
+const installFromSettings = useCallback(() => {
+  setShowInstallPrompt(true);
+}, []);
+
+const handleWelcomeContinue = () => {
+  haptic(10);
+  localStorage.setItem('sq_has_seen_welcome_v2', 'true');
+  setHasSeenWelcome(true);
+  if (!localStorage.getItem('sq_has_seen_tutorial_v1')) setShowTutorial(true);
 };
 
 // A brand-new account starts from a clean slate — no remote data to fetch,
@@ -4292,7 +4431,7 @@ const handleSignedUp = (finalUsername) => {
 hydratedUidRef.current = auth.currentUser?.uid ?? hydratedUidRef.current;
 setUsername(finalUsername);
 setLevel(1); setXp(0); setTotalXpEarned(0); setStreak(0); setHistory([]); setProofImages({}); setPhotoURL(null);
-setActiveTab('quests'); setHasSeenWelcome(true);
+setActiveTab('quests'); setHasSeenWelcome(true); if (!localStorage.getItem('sq_has_seen_tutorial_v1')) setShowTutorial(true);
 };
 
 const handleLoggedIn = async (finalUsername) => {
@@ -4302,7 +4441,7 @@ hydratedUidRef.current = auth.currentUser.uid;
 setProofImages({}); // proof photos are device-local and never synced
 await hydrateAccount(auth.currentUser.uid, auth.currentUser.email, auth.currentUser);
 }
-setActiveTab('quests'); setHasSeenWelcome(true);
+setActiveTab('quests'); setHasSeenWelcome(true); if (!localStorage.getItem('sq_has_seen_tutorial_v1')) setShowTutorial(true);
 };
 
 const resetLocalAccountState = () => {
@@ -4656,10 +4795,11 @@ return (
 )}
 
 {!hasSeenWelcome && (
-<WelcomeScreen c={c} onContinue={() => { haptic(10); localStorage.setItem('sq_has_seen_welcome', 'true'); setHasSeenWelcome(true); }} />
+<WelcomeScreen c={c} onContinue={handleWelcomeContinue} />
 )}
-{hasSeenWelcome && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} c={c} />}
-{hasSeenWelcome && !showInstallPrompt && !authUser && <AuthModal onSignedUp={handleSignedUp} onLoggedIn={handleLoggedIn} c={c} initialError={authError} />}
+{hasSeenWelcome && showTutorial && <AppTutorial c={c} onDone={finishTutorial} />}
+{hasSeenWelcome && !showTutorial && showInstallPrompt && <DeviceInstallPrompt onDismiss={handleDismissInstall} onInstallReady={() => {}} c={c} />}
+{hasSeenWelcome && !showTutorial && !showInstallPrompt && !authUser && <AuthModal onSignedUp={handleSignedUp} onLoggedIn={handleLoggedIn} c={c} initialError={authError} />}
 {authUser && !username && (
 <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{ background: c.bg }}>
 <div style={{ width: 28, height: 28, border: `2.5px solid ${c.fill}`, borderTopColor: c.blue, borderRadius: '50%' }} className="animate-spin" />
@@ -4702,6 +4842,9 @@ onUsernameChanged={handleUsernameChanged} onLogout={handleLogout} onDeleteAccoun
 hapticsOn={hapticsOn} onToggleHaptics={handleToggleHaptics}
 dailyReminderOn={dailyReminderOn} onToggleDailyReminder={handleToggleDailyReminder} notificationsSupported={notificationsSupported}
 onExportData={handleExportData}
+onReplayTutorial={openTutorial}
+onInstallApp={installFromSettings}
+installSupported={installSupported}
  isSaqoom={isSaqoom}
  c={c}
 />
