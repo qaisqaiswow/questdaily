@@ -2813,6 +2813,11 @@ const [uploadedProof, setUploadedProof] = useState(null);
 
 const [secondsLeft, setSecondsLeft] = useState(quest.duration ? (quest.progress ?? quest.duration) : 0);
 const [timerRunning, setTimerRunning] = useState(false);
+const timerEndAtRef = useRef(null);
+const timerRunningRef = useRef(false);
+const secondsLeftRef = useRef(quest.duration ? (quest.progress ?? quest.duration) : 0);
+const timerAutoStartedRef = useRef(false);
+const TIMED_START_PASSES = 2; // start quickly once the AI sees the activity twice in a row
 
 const labels = QUEST_LABELS[quest.id];
 const questType = labels?.type || 'action';
@@ -2833,24 +2838,60 @@ else if (questType === 'food') { instructionText = "Take a clear picture of the 
 else if (questType === 'reps') { instructionText = `Position the camera for full-body tracking: ${quest.reps} reps.`; uiSubtext = "Keep your entire working frame visible to log movements."; }
 
 useEffect(() => {
+secondsLeftRef.current = secondsLeft;
+}, [secondsLeft]);
+
+useEffect(() => {
+if (!timerRunning || !quest.duration || confirmed) return undefined;
 let intervalId = null;
-if (timerRunning && secondsLeft > 0) {
-intervalId = setInterval(() => {
-setSecondsLeft(prev => {
-if (prev <= 1) {
-setTimerRunning(false);
-if (!quest.reps && questType === 'action') {
-setConfirmed(true);
-confirmedRef.current = true;
+const tick = () => {
+const endAt = timerEndAtRef.current;
+if (!endAt) return;
+const remaining = Math.max(0, Math.ceil((endAt - Date.now()) / 1000));
+if (remaining !== secondsLeftRef.current) {
+  secondsLeftRef.current = remaining;
+  setSecondsLeft(remaining);
 }
-return 0;
+if (remaining <= 0) {
+  timerEndAtRef.current = null;
+  timerRunningRef.current = false;
+  setTimerRunning(false);
+  if (!quest.reps && questType === 'action' && !confirmedRef.current) {
+    confirmedRef.current = true;
+    setConfirmed(true);
+    haptic([15, 30, 15]);
+  }
 }
-return prev - 1;
-});
-}, 1000);
-}
+};
+tick();
+intervalId = window.setInterval(tick, 250);
 return () => clearInterval(intervalId);
-}, [timerRunning, secondsLeft, questType, quest.reps]);
+}, [timerRunning, quest.duration, questType, quest.reps, confirmed]);
+
+const startTimer = useCallback((automatic = false) => {
+const remaining = secondsLeftRef.current;
+if (!quest.duration || remaining <= 0 || confirmedRef.current || timerRunningRef.current) return false;
+timerEndAtRef.current = Date.now() + remaining * 1000;
+timerRunningRef.current = true;
+if (automatic) timerAutoStartedRef.current = true;
+setTimerRunning(true);
+setNotice(null);
+return true;
+}, [quest.duration]);
+
+const toggleTimer = useCallback(() => {
+if (!timerRunningRef.current) {
+  startTimer(false);
+  return;
+}
+const endAt = timerEndAtRef.current;
+const remaining = endAt ? Math.max(0, Math.ceil((endAt - Date.now()) / 1000)) : secondsLeftRef.current;
+secondsLeftRef.current = remaining;
+setSecondsLeft(remaining);
+timerEndAtRef.current = null;
+timerRunningRef.current = false;
+setTimerRunning(false);
+}, [startTimer]);
 
 const formatTimerString = (secs) => `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 
@@ -3022,11 +3063,16 @@ setNotice('This looks like it\'s coming from a screen or printed photo rather th
 spoofNoticeActiveRef.current = false;
 setNotice(null);
 }
-if (passStreakRef.current >= REQUIRED_PASSES && !verifyingRef.current && !confirmedRef.current) {
-visionBusyRef.current = false; // release live-scan slot; final verifier acquires it synchronously
-verifyingRef.current = true;
-setVerifying(true);
-await runFinalVerification();
+const timedStartReady = quest.duration && questType === 'action' && passStreakRef.current >= TIMED_START_PASSES;
+if ((passStreakRef.current >= REQUIRED_PASSES || timedStartReady) && !confirmedRef.current) {
+if (quest.duration && questType === 'action') {
+  if (!timerRunningRef.current && !timerAutoStartedRef.current) startTimer(true);
+} else if (!verifyingRef.current) {
+  visionBusyRef.current = false; // release live-scan slot; final verifier acquires it synchronously
+  verifyingRef.current = true;
+  setVerifying(true);
+  await runFinalVerification();
+}
 } else if (passed) {
 haptic(8);
 }
@@ -3095,7 +3141,7 @@ if (isCurrentRun()) scheduleNext(400);
 };
 scanLoop();
 return () => { disposed = true; scanRunRef.current += 1; clearTimeout(scanTimerRef.current); };
-}, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, activeNegatives]);
+}, [phase, modelReady, confirmed, uploading, labels, classifierLabels, quest.reps, activeNegatives, startTimer]);
 
 useEffect(() => {
 if (!hasSkeletonTracking || phase !== 'live' || confirmed) return undefined;
@@ -3224,10 +3270,9 @@ setRepCue(poseUiCueRef.current);
 };
 
 const dispatchPose = async (video, timestampMs, captureWallTime) => {
-if (cancelled || !usingWorker || !workerReady || workerBusy || visionBusyRef.current) return;
+if (cancelled || !usingWorker || !workerReady || workerBusy) return;
 workerBusy = true;
 poseWorkerBusyRef.current = true;
-visionBusyRef.current = true;
 try {
 let bitmap = null;
 try {
@@ -3405,7 +3450,6 @@ if (data.type === 'INIT_ERROR') {
 usingWorker = false;
 workerBusy = false;
 poseWorkerBusyRef.current = false;
-visionBusyRef.current = false;
 try { poseWorker.terminate(); } catch {}
 poseWorker = null;
 poseWorkerRef.current = null;
@@ -3415,7 +3459,6 @@ return;
 if (data.type === 'RESULT') {
 workerBusy = false;
 poseWorkerBusyRef.current = false;
-visionBusyRef.current = false;
 lastPoseInferenceMs = data.inferenceTime || 0;
 const threshold = lowEnd ? 85 : 65;
 if (lastPoseInferenceMs > threshold) {
@@ -3429,7 +3472,6 @@ return;
 if (data.type === 'DETECT_ERROR') {
 workerBusy = false;
 poseWorkerBusyRef.current = false;
-visionBusyRef.current = false;
 }
 };
 poseWorker.postMessage({ type: 'INIT' });
@@ -3443,7 +3485,6 @@ const now = performance.now();
 if (
 workerReady &&
 !workerBusy &&
-!visionBusyRef.current &&
 video.readyState >= 2 &&
 video.videoWidth &&
 video.currentTime !== poseLastVideoTimeRef.current &&
@@ -3502,72 +3543,24 @@ ctx?.clearRect(0, 0, skeletonCanvasRef.current.width, skeletonCanvasRef.current.
 // still cross those thresholds. This runs alongside pose tracking purely
 // to catch that: it doesn't judge the activity, only whether the feed
 // looks like it's coming from a screen or printed photo.
-useEffect(() => {
-if (!quest.reps || phase !== 'live' || confirmed) return undefined;
-let cancelled = false;
-let timer = null;
+// Rep quests use the pose worker continuously. A periodic SigLIP call here used
+// to run on the main thread every few seconds and visibly freeze the skeleton.
+// Keep this path pose-only so motion stays continuous on phones.
 
-const check = async () => {
-if (cancelled) return;
-if (document.visibilityState === 'hidden') {
-  timer = window.setTimeout(check, 1000);
-  return;
-}
-if (visionBusyRef.current || poseWorkerBusyRef.current) {
-  timer = window.setTimeout(check, 900);
-  return;
-}
-if (poseStateRef.current.movementStarted || poseStateRef.current.validFrames < FORM_STABLE_FRAMES) {
-  timer = window.setTimeout(check, 1800);
-  return;
-}
-
-visionBusyRef.current = true;
-try {
-const video = videoRef.current;
-const canvas = aiCanvasRef.current;
-if (video && canvas && video.videoWidth) {
-if (canvas.width !== 224 || canvas.height !== 224) { canvas.width = 224; canvas.height = 224; }
-const ctx = aiCtxRef.current?.canvas === canvas
-  ? aiCtxRef.current
-  : canvas.getContext('2d', { alpha: false, desynchronized: true, willReadFrequently: true });
-if (!ctx) throw new Error('Canvas 2D context unavailable');
-aiCtxRef.current = ctx;
-
-const scale = Math.min(224 / video.videoWidth, 224 / video.videoHeight);
-const w = video.videoWidth * scale, h = video.videoHeight * scale;
-ctx.fillStyle = '#000';
-ctx.fillRect(0, 0, 224, 224);
-ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, (224 - w) / 2, (224 - h) / 2, w, h);
-const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
-const classifier = await getClassifier();
-const results = await classifier(dataUrl, [...ANTI_SPOOF_LABELS, 'a real person exercising in a room']);
-if (!cancelled) {
-const spoofScore = getMaxLabelScore(results, ANTI_SPOOF_LABELS);
-smoothedRepSpoofRef.current = smoothedRepSpoofRef.current === null ? spoofScore : smoothedRepSpoofRef.current * 0.5 + spoofScore * 0.5;
-const suspected = smoothedRepSpoofRef.current >= SPOOF_BLOCK_THRESHOLD;
-repSpoofSuspectedRef.current = suspected;
-if (suspected) {
-repSpoofNoticeActiveRef.current = true;
-setNotice('This looks like it\'s coming from a screen or printed photo rather than you, live. Point the camera at yourself doing it in person.');
-} else if (repSpoofNoticeActiveRef.current) {
-repSpoofNoticeActiveRef.current = false;
-setNotice(null);
-}
-}
-}
-} catch { /* transient — try again next tick */ }
-finally {
-visionBusyRef.current = false;
-if (!cancelled) timer = window.setTimeout(check, 12000);
-}
+const retryCamera = () => {
+timerEndAtRef.current = null;
+timerRunningRef.current = false;
+timerAutoStartedRef.current = false;
+secondsLeftRef.current = quest.duration ? (quest.progress || quest.duration) : 0;
+setTimerRunning(false);
+scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); setSourceWarning(null);
 };
-timer = window.setTimeout(check, 6000);
-return () => { cancelled = true; clearTimeout(timer); };
-}, [quest.reps, phase, confirmed]);
-
-const retryCamera = () => { scanRunRef.current += 1; lastVideoTimeRef.current = -1; setCamError(null); setPhase('starting'); setCameraVersion(v => v + 1); setSourceWarning(null); };
 const flipCamera = () => {
+timerEndAtRef.current = null;
+timerRunningRef.current = false;
+timerAutoStartedRef.current = false;
+secondsLeftRef.current = quest.duration ? (quest.progress || quest.duration) : 0;
+setTimerRunning(false);
 clearTimeout(scanTimerRef.current); scanRunRef.current += 1; if (poseWorkerRef.current) { try { poseWorkerRef.current.terminate(); } catch {} poseWorkerRef.current = null; } poseWorkerBusyRef.current = false; setPhase('starting'); setLiveScore(0); setPassStreak(0); setRepsDone(quest.reps ? (quest.progress || 0) : 0); passStreakRef.current = 0; confirmedRef.current = false; lastVideoTimeRef.current = -1; smoothedActRef.current = null; smoothedNegRef.current = null; smoothedSpoofRef.current = null; spoofNoticeActiveRef.current = false; repSpoofSuspectedRef.current = false; smoothedRepSpoofRef.current = null; repSpoofNoticeActiveRef.current = false; verifyingRef.current = false; setVerifying(false); resetRepTracking(); setConfirmed(false); setSourceWarning(null); setFacingMode(m => m === 'environment' ? 'user' : 'environment');
 if (skeletonCanvasRef.current) {
 const ctx = skeletonCanvasRef.current.getContext('2d');
@@ -3629,6 +3622,9 @@ isScanningRef.current = false;
 visionBusyRef.current = false;
 verifyingRef.current = false;
 confirmedRef.current = false;
+timerEndAtRef.current = null;
+timerRunningRef.current = false;
+timerAutoStartedRef.current = false;
 setTimerRunning(false);
 setScanning(false);
 setUploading(false);
@@ -3681,9 +3677,19 @@ return (
 </div>
 
 <div className="relative flex-1 mx-4 rounded-3xl overflow-hidden sq-cam-shell" style={{ background: '#000' }}>
-<video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{ opacity: phase === 'live' && !uploadedProof ? 1 : 0, contain: 'strict' }} />
+<video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" style={{
+  opacity: phase === 'live' && !uploadedProof ? 1 : 0,
+  contain: 'strict',
+  transform: facingMode === 'user' ? 'scaleX(-1) translateZ(0)' : 'translateZ(0)',
+  transformOrigin: 'center center',
+}} />
 <canvas ref={skeletonCanvasRef} className="absolute inset-0 w-full h-full pointer-events-none object-cover z-10"
-style={{ opacity: phase === 'live' && !uploadedProof && hasSkeletonTracking ? 1 : 0, contain: 'strict' }} />
+style={{
+  opacity: phase === 'live' && !uploadedProof && hasSkeletonTracking ? 1 : 0,
+  contain: 'strict',
+  transform: facingMode === 'user' ? 'scaleX(-1) translateZ(0)' : 'translateZ(0)',
+  transformOrigin: 'center center',
+}} />
 
 {phase === 'live' && !uploadedProof && labels?.bodyParts && (
 <div className="absolute top-3 left-3 z-10" style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(10px)', borderRadius: 12, padding: '9px 11px' }}>
@@ -3807,7 +3813,7 @@ Tracking
 <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary }}>Duration</span>
 <p className="sq-mono" style={{ fontSize: 20, fontWeight: 700, color: c.label, marginTop: 2 }}>{formatTimerString(secondsLeft)}</p>
 </div>
-<button onClick={() => setTimerRunning(!timerRunning)} disabled={secondsLeft === 0}
+<button onClick={toggleTimer} disabled={secondsLeft === 0}
 style={{ padding: '10px 20px', borderRadius: 12, fontSize: 13, fontWeight: 600, color: '#fff', background: secondsLeft === 0 ? c.gray : timerRunning ? c.red : c.green, opacity: secondsLeft === 0 ? 0.5 : 1 }}>
 {secondsLeft === 0 ? 'Done' : timerRunning ? 'Pause' : 'Start'}
 </button>
