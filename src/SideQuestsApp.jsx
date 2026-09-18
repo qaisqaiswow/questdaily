@@ -17,13 +17,15 @@ Dumbbell, PersonStanding, Activity, Bike, Footprints, CircleDot, Timer, Chevrons
 Droplet, Leaf, Utensils, CookingPot, Flower2, Move, Zap, Flame,
 Pencil, Snowflake, Wind, Waves, Target, GlassWater, CupSoda,
 LogOut, Eye, EyeOff, Lock, AtSign, Camera, Trash2, ShieldCheck, Sparkles, ListChecks,
-Bell, Download, UserCog, KeyRound, ChevronRight, CircleUserRound, BookOpen, Play, Smartphone, Check, RotateCcw,
+Bell, Download, UserCog, KeyRound, ChevronRight, CircleUserRound, BookOpen, Play, Smartphone, Check, RotateCcw, Code2,
 } from 'lucide-react';
 
 // firebase / leaderboard stuff
 // swap in your own project config (Firebase console > project settings > your apps)
 // this is fine to ship client-side btw, it's not secret — the real access control
 // is in the firestore security rules
+const DEV_MODE = false; // launch build
+
 const firebaseConfig = {
 apiKey: "AIzaSyDWaoCQjCc8mpF9jE8FIZvSKDKkxgTUELA",
 authDomain: "quest-daily-8debb.firebaseapp.com",
@@ -429,6 +431,7 @@ const [entries, setEntries] = useState([]);
 const [status, setStatus] = useState('loading'); // 'loading' | 'ready' | 'error'
 const [errorDetail, setErrorDetail] = useState(null);
 useEffect(() => {
+if (DEV_MODE) { setEntries([]); setStatus('ready'); setErrorDetail(null); return undefined; }
 const q = query(collection(db, LEADERBOARD_COLLECTION), orderBy('totalXpEarned', 'desc'), limit(LEADERBOARD_SIZE));
 const timeout = setTimeout(() => {
 setStatus(prev => prev === 'loading' ? 'error' : prev);
@@ -464,12 +467,22 @@ return { entries, status, errorDetail };
 // just hiding a toggle that does nothing.
 let hapticsEnabled = true;
 function setHapticsPref(enabled) {
-hapticsEnabled = enabled;
-try { localStorage.setItem('sq_haptics_enabled', enabled ? 'true' : 'false'); } catch { /* storage unavailable */ }
+hapticsEnabled = Boolean(enabled);
+try { localStorage.setItem('sq_haptics_enabled', hapticsEnabled ? 'true' : 'false'); } catch { /* storage unavailable */ }
 }
 function haptic(pattern = 10) {
-if (!hapticsEnabled) return;
-try { if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(pattern); } catch { /* unsupported */ }
+if (!hapticsEnabled) return false;
+try {
+  if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+    // Cancelling first avoids dropped/queued pulses on Android Chromium.
+    navigator.vibrate(0);
+    return navigator.vibrate(pattern);
+  }
+} catch { /* Vibration API unavailable or blocked by browser */ }
+return false;
+}
+function hapticSupported() {
+return typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
 }
 
 function getLevelTitle(level) {
@@ -542,6 +555,9 @@ modelAssetPath:
 delegate: 'GPU',
 },
 runningMode: 'VIDEO',
+minPoseDetectionConfidence: 0.35,
+minPosePresenceConfidence: 0.25,
+minTrackingConfidence: 0.25,
 numPoses: 1,
 });
 })().catch(error => {
@@ -588,11 +604,17 @@ function visiblePt(pt, minVis = 0.5) {
 return pt && (pt.visibility === undefined || pt.visibility >= minVis);
 }
 
+// PoseLandmarker can temporarily score wrists/ankles below 0.32 on phones,
+// especially when the camera is angled or the person is farther away. 0.24 is
+// still high enough to reject genuinely missing points while avoiding dropped
+// reps caused by one noisy landmark.
+const EXERCISE_MIN_VIS = 0.24;
+
 function pickSide(lms, leftKeys, rightKeys) {
 const left = leftKeys.map(k => lms[k]);
 const right = rightKeys.map(k => lms[k]);
-const leftOk = left.every(p => visiblePt(p, 0.32));
-const rightOk = right.every(p => visiblePt(p, 0.32));
+const leftOk = left.every(p => visiblePt(p, EXERCISE_MIN_VIS));
+const rightOk = right.every(p => visiblePt(p, EXERCISE_MIN_VIS));
 if (leftOk && rightOk) {
 return left.map((p, i) => ({
 x: (p.x + right[i].x) / 2,
@@ -623,28 +645,30 @@ q12: (lms) => {
   return p ? angleBetween(p[0], p[1], p[2]) : null;
 },
 q17: (lms) => {
-  const ankles = [lms[LM.L_ANKLE], lms[LM.R_ANKLE]].filter(p => visiblePt(p));
+  const ankles = [lms[LM.L_ANKLE], lms[LM.R_ANKLE]].filter(p => visiblePt(p, EXERCISE_MIN_VIS));
   if (!ankles.length) return null;
   return ankles.reduce((sum, p) => sum + p.y, 0) / ankles.length;
 },
 q23: (lms) => {
-  const p = pickSide(lms, [LM.L_HIP, LM.L_KNEE, LM.L_ANKLE], [LM.R_HIP, LM.R_KNEE, LM.R_ANKLE]);
-  return p ? angleBetween(p[0], p[1], p[2]) : null;
+  const left = angleBetween(lms[LM.L_HIP], lms[LM.L_KNEE], lms[LM.L_ANKLE]);
+  const right = angleBetween(lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]);
+  const values = [left, right].filter(v => Number.isFinite(v));
+  return values.length ? Math.min(...values) : null;
 },
 };
 
 const REP_CONFIG = {
-q1: { mode: 'angle', downThreshold: 112, upThreshold: 148, cueDown: 'Lower into the pushup', cueUp: 'Push back up to full extension' },
-q2: { mode: 'angle', downThreshold: 122, upThreshold: 154, cueDown: 'Squat down', cueUp: 'Stand back up' },
-q4: { mode: 'angle', downThreshold: 96, upThreshold: 142, cueDown: 'Pull your chin toward the bar', cueUp: 'Lower to a full hang' },
-q12: { mode: 'angle', downThreshold: 112, upThreshold: 146, cueDown: 'Sit up and bring your torso forward', cueUp: 'Lie completely back down' },
-q17: { mode: 'height', downThreshold: 0.015, upThreshold: 0.006, cueDown: 'Jump', cueUp: 'Land and jump again' },
-q23: { mode: 'angle', downThreshold: 122, upThreshold: 150, cueDown: 'Lower into the lunge', cueUp: 'Return to standing' },
+q1: { mode: 'angle', downThreshold: 125, upThreshold: 138, cueDown: 'Lower into the pushup', cueUp: 'Push back up to full extension' },
+q2: { mode: 'angle', downThreshold: 132, upThreshold: 142, cueDown: 'Squat down', cueUp: 'Stand back up' },
+q4: { mode: 'angle', downThreshold: 112, upThreshold: 136, cueDown: 'Pull your chin toward the bar', cueUp: 'Lower to a full hang' },
+q12: { mode: 'angle', downThreshold: 116, upThreshold: 138, cueDown: 'Sit up and bring your torso forward', cueUp: 'Lie completely back down' },
+q17: { mode: 'height', downThreshold: 0.010, upThreshold: 0.004, cueDown: 'Jump', cueUp: 'Land and jump again' },
+q23: { mode: 'angle', downThreshold: 128, upThreshold: 140, cueDown: 'Lower into the lunge', cueUp: 'Return to standing' },
 };
 
-const MIN_REP_MS = 450;
-const FORM_STABLE_FRAMES = 3;
-const MAX_INVALID_REP_FRAMES = 8;
+const MIN_REP_MS = 320;
+const FORM_STABLE_FRAMES = 2;
+const MAX_INVALID_REP_FRAMES = 12;
 
 function createPoseRepState(initialReps = 0) {
 return {
@@ -653,8 +677,10 @@ return {
   baselineY: null,
   lastRepAt: 0,
   smoothed: null,
+  lastValue: null,
   validFrames: 0,
   invalidFrames: 0,
+  phaseFrames: 0,
   movementStarted: false,
 };
 }
@@ -667,20 +693,20 @@ return Math.hypot(a.x - b.x, a.y - b.y);
 function getAveragePoint(lms, leftIndex, rightIndex) {
 const left = lms[leftIndex];
 const right = lms[rightIndex];
-if (visiblePt(left, 0.32) && visiblePt(right, 0.32)) {
+if (visiblePt(left, EXERCISE_MIN_VIS) && visiblePt(right, EXERCISE_MIN_VIS)) {
   return {
     x: (left.x + right.x) / 2,
     y: (left.y + right.y) / 2,
     visibility: Math.min(left.visibility ?? 1, right.visibility ?? 1),
   };
 }
-return visiblePt(left, 0.32) ? left : visiblePt(right, 0.32) ? right : null;
+return visiblePt(left, EXERCISE_MIN_VIS) ? left : visiblePt(right, EXERCISE_MIN_VIS) ? right : null;
 }
 
 function getBestExerciseSide(lms) {
 const left = [lms[LM.L_SHOULDER], lms[LM.L_HIP], lms[LM.L_KNEE], lms[LM.L_ANKLE]];
 const right = [lms[LM.R_SHOULDER], lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]];
-const score = points => points.reduce((n, p) => n + (visiblePt(p, 0.32) ? 1 : 0), 0);
+const score = points => points.reduce((n, p) => n + (visiblePt(p, EXERCISE_MIN_VIS) ? 1 : 0), 0);
 return score(right) >= score(left) ? 'right' : 'left';
 }
 
@@ -710,9 +736,9 @@ if (!shoulder || !hip || !ankle) return null;
 return angleBetween(shoulder, hip, ankle);
 }
 
-// This is deliberately separate from the rep angle. The rep angle answers
-// "did a joint move?" while this answers "does the whole body look like the
-// exercise?". A rep can only progress after both checks pass.
+// Form is intentionally tolerant of normal phone-camera perspective. Rep
+// hysteresis and multi-frame stability do the anti-noise work; form validation
+// should primarily reject missing/obviously impossible poses.
 function validateExerciseForm(questId, lms) {
 if (!lms) return { valid: false, cue: 'Move fully into frame' };
 
@@ -723,140 +749,84 @@ const hips = getAveragePoint(lms, LM.L_HIP, LM.R_HIP);
 const knees = getAveragePoint(lms, LM.L_KNEE, LM.R_KNEE);
 const ankles = getAveragePoint(lms, LM.L_ANKLE, LM.R_ANKLE);
 
-// PUSHUPS: require a long, plank-like body instead of only an elbow bend.
 if (questId === 'q1') {
-  if (![p.shoulder, p.hip, p.knee, p.ankle, p.elbow, p.wrist].every(x => visiblePt(x, 0.32))) {
+  if (![p.shoulder, p.hip, p.knee, p.ankle, p.elbow, p.wrist].every(x => visiblePt(x, EXERCISE_MIN_VIS))) {
     return { valid: false, cue: 'Keep your full body and arms visible' };
   }
-
   const bodyAngle = straightBodyAngle(p.shoulder, p.hip, p.ankle);
   const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
   const shoulderHip = distance2D(p.shoulder, p.hip);
   const hipAnkle = distance2D(p.hip, p.ankle);
-
-  if (bodyAngle === null || bodyAngle < 125) {
-    return { valid: false, cue: 'Keep your body mostly straight' };
-  }
-  if (kneeAngle !== null && kneeAngle < 115) {
-    return { valid: false, cue: 'Keep your legs extended' };
-  }
-  if ((shoulderHip ?? 0) < 0.10 || (hipAnkle ?? 0) < 0.20) {
-    return { valid: false, cue: 'Use a full pushup position' };
-  }
+  if (bodyAngle === null || bodyAngle < 112) return { valid: false, cue: 'Keep your body mostly straight' };
+  if (kneeAngle !== null && kneeAngle < 105) return { valid: false, cue: 'Keep your legs extended' };
+  if ((shoulderHip ?? 0) < 0.075 || (hipAnkle ?? 0) < 0.16) return { valid: false, cue: 'Use a full pushup position' };
   return { valid: true, cue: 'Good pushup form' };
 }
 
-// SQUATS: require both feet/legs and a real hip/knee bend. This rejects
-// seated arm movements because the torso/leg geometry must also match.
 if (questId === 'q2') {
-  if (![p.hip, p.knee, p.ankle, p.shoulder].every(x => visiblePt(x, 0.32))) {
+  if (![p.hip, p.knee, p.ankle, p.shoulder].every(x => visiblePt(x, EXERCISE_MIN_VIS))) {
     return { valid: false, cue: 'Keep your legs and upper body visible' };
   }
-
   const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
   const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
-
-  if (kneeAngle === null || torsoAngle === null) {
-    return { valid: false, cue: 'Show your whole squat' };
-  }
-  if (torsoAngle < 70) {
-    return { valid: false, cue: 'Keep your chest up' };
-  }
+  if (kneeAngle === null || torsoAngle === null) return { valid: false, cue: 'Show your whole squat' };
+  if (torsoAngle < 62) return { valid: false, cue: 'Keep your chest up' };
   return { valid: true, cue: 'Good squat form' };
 }
 
-// PULLUPS: require a vertical hanging body and hands above the shoulders.
-// Sitting arm curls cannot satisfy this geometry.
 if (questId === 'q4') {
-  if (![p.shoulder, p.elbow, p.wrist, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.32))) {
+  if (![p.shoulder, p.elbow, p.wrist, p.hip, p.knee, p.ankle].every(x => visiblePt(x, EXERCISE_MIN_VIS))) {
     return { valid: false, cue: 'Show your full body hanging from the bar' };
   }
-
   const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
   const legAngle = angleBetween(p.hip, p.knee, p.ankle);
   const wristShoulderDistance = Math.abs(p.wrist.y - p.shoulder.y);
-
-  if (torsoAngle === null || torsoAngle < 105) {
-    return { valid: false, cue: 'Keep your torso fairly vertical' };
-  }
-  if (legAngle !== null && legAngle < 80) {
-    return { valid: false, cue: 'Keep your legs mostly extended' };
-  }
-  if (wristShoulderDistance < 0.035) {
-    return { valid: false, cue: 'Keep both hands clearly visible' };
-  }
+  if (torsoAngle === null || torsoAngle < 88) return { valid: false, cue: 'Keep your torso fairly vertical' };
+  if (legAngle !== null && legAngle < 65) return { valid: false, cue: 'Keep your legs mostly extended' };
+  if (wristShoulderDistance < 0.022) return { valid: false, cue: 'Keep both hands clearly visible' };
   return { valid: true, cue: 'Good pullup form' };
 }
 
-// SITUPS: require the hips and knees to stay anchored while the torso changes
-// angle. Arm-only movement while sitting/standing won't match this geometry.
 if (questId === 'q12') {
-  if (![p.shoulder, p.hip, p.knee, p.ankle].every(x => visiblePt(x, 0.32))) {
+  if (![p.shoulder, p.hip, p.knee, p.ankle].every(x => visiblePt(x, EXERCISE_MIN_VIS))) {
     return { valid: false, cue: 'Lie down with your full body visible' };
   }
-
   const torsoAngle = angleBetween(p.shoulder, p.hip, p.knee);
   const kneeAngle = angleBetween(p.hip, p.knee, p.ankle);
-
   if (torsoAngle === null) return { valid: false, cue: 'Keep your torso visible' };
-  if (kneeAngle !== null && kneeAngle < 55) {
-    return { valid: false, cue: 'Keep your knees reasonably stable' };
-  }
-  if (torsoAngle < 30) {
-    return { valid: false, cue: 'Use a controlled situp motion' };
-  }
+  if (kneeAngle !== null && kneeAngle < 50) return { valid: false, cue: 'Keep your knees reasonably stable' };
+  if (torsoAngle < 25) return { valid: false, cue: 'Use a controlled situp motion' };
   return { valid: true, cue: 'Good situp position' };
 }
 
-// JUMP ROPE: track the ankles rather than just hip movement, and require the
-// person to remain upright with both feet close together.
 if (questId === 'q17') {
-  if (![shoulders, hips, knees, ankles].every(x => visiblePt(x, 0.32))) {
+  if (![shoulders, hips, knees, ankles].every(x => visiblePt(x, EXERCISE_MIN_VIS))) {
     return { valid: false, cue: 'Keep your whole body and both feet visible' };
   }
-
   const torsoAngle = angleBetween(shoulders, hips, knees);
   const kneeLeft = angleBetween(lms[LM.L_HIP], lms[LM.L_KNEE], lms[LM.L_ANKLE]);
   const kneeRight = angleBetween(lms[LM.R_HIP], lms[LM.R_KNEE], lms[LM.R_ANKLE]);
   const ankleGap = Math.abs(lms[LM.L_ANKLE].x - lms[LM.R_ANKLE].x);
-
-  if (torsoAngle !== null && torsoAngle < 120) {
-    return { valid: false, cue: 'Stay fairly upright while jumping' };
-  }
-  if ((kneeLeft !== null && kneeLeft < 75) || (kneeRight !== null && kneeRight < 75)) {
-    return { valid: false, cue: 'Use small rope jumps, not deep squats' };
-  }
-  if (ankleGap > 0.50) {
-    return { valid: false, cue: 'Keep your feet closer together' };
-  }
+  if (torsoAngle !== null && torsoAngle < 115) return { valid: false, cue: 'Stay fairly upright while jumping' };
+  if ((kneeLeft !== null && kneeLeft < 65) || (kneeRight !== null && kneeRight < 65)) return { valid: false, cue: 'Use small rope jumps, not deep squats' };
+  if (ankleGap > 0.62) return { valid: false, cue: 'Keep your feet closer together' };
   return { valid: true, cue: 'Good jump-rope form' };
 }
 
-// LUNGES: require a real split stance. A seated knee bend or arm movement
-// cannot satisfy both legs' geometry.
 if (questId === 'q23') {
   const leftHip = lms[LM.L_HIP], rightHip = lms[LM.R_HIP];
   const leftKnee = lms[LM.L_KNEE], rightKnee = lms[LM.R_KNEE];
   const leftAnkle = lms[LM.L_ANKLE], rightAnkle = lms[LM.R_ANKLE];
-
-  if (![leftHip, rightHip, leftKnee, rightKnee, leftAnkle, rightAnkle].every(x => visiblePt(x, 0.32))) {
+  if (![leftHip, rightHip, leftKnee, rightKnee, leftAnkle, rightAnkle].every(x => visiblePt(x, EXERCISE_MIN_VIS))) {
     return { valid: false, cue: 'Keep both legs completely visible' };
   }
-
   const leftKneeAngle = angleBetween(leftHip, leftKnee, leftAnkle);
   const rightKneeAngle = angleBetween(rightHip, rightKnee, rightAnkle);
   const stanceWidth = Math.abs(leftAnkle.x - rightAnkle.x);
   const hipWidth = Math.abs(leftHip.x - rightHip.x);
-
-  if (stanceWidth < Math.max(0.08, hipWidth * 1.05)) {
-    return { valid: false, cue: 'Step one foot forward into a real lunge stance' };
-  }
-  if (leftKneeAngle === null || rightKneeAngle === null) {
-    return { valid: false, cue: 'Keep both knees visible' };
-  }
-  if (leftKneeAngle < 45 || rightKneeAngle < 45) {
-    return { valid: false, cue: 'Do not collapse your knees inward' };
-  }
+  if (stanceWidth < Math.max(0.07, hipWidth * 0.90)) return { valid: false, cue: 'Step one foot forward into a real lunge stance' };
+  if (leftKneeAngle === null || rightKneeAngle === null) return { valid: false, cue: 'Keep both knees visible' };
+  if (leftKneeAngle < 40 || rightKneeAngle < 40) return { valid: false, cue: 'Do not collapse your knees inward' };
   return { valid: true, cue: 'Good lunge form' };
 }
 
@@ -864,106 +834,130 @@ return { valid: true, cue: '' };
 }
 
 function updatePoseRepState(state, questId, landmarks, now) {
-const config = REP_CONFIG[questId];
-const metricFn = REP_METRICS[questId];
-if (!config || !metricFn || !landmarks) {
-return { reps: state.reps, phase: state.phase, cue: 'Move into frame', counted: false, formValid: false };
-}
-
-const form = validateExerciseForm(questId, landmarks);
-
-if (!form.valid) {
-  state.invalidFrames = Math.min(30, state.invalidFrames + 1);
-  state.validFrames = 0;
-  // A few weak/occluded pose frames should not erase the current rep.
-  // Only fully resync after a sustained loss of valid form.
-  if (state.invalidFrames >= MAX_INVALID_REP_FRAMES) {
-    state.movementStarted = false;
-    state.smoothed = null;
-  }
   const config = REP_CONFIG[questId];
-  return {
-    reps: state.reps,
-    phase: state.phase,
-    cue: form.cue || (state.phase === 'up' ? config?.cueDown : config?.cueUp) || 'Keep moving',
-    counted: false,
-    formValid: false,
-  };
-}
-
-state.invalidFrames = 0;
-state.validFrames = Math.min(FORM_STABLE_FRAMES + 4, state.validFrames + 1);
-
-const raw = metricFn(landmarks);
-if (raw === null) {
-  state.invalidFrames = Math.min(30, state.invalidFrames + 1);
-  return { reps: state.reps, phase: state.phase, cue: 'Move fully into frame', counted: false, formValid: false };
-}
-
-// Start from the posture the camera actually sees. This fixes the common
-// case where a user opens the camera already at the bottom/top of a rep.
-if (state.smoothed === null) {
-  state.smoothed = raw;
-  if (questId === 'q17') {
-    state.baselineY = raw;
-    state.phase = 'up';
-    state.movementStarted = false;
-  } else {
-    const config = REP_CONFIG[questId];
-    const midpoint = (config.downThreshold + config.upThreshold) / 2;
-    state.phase = raw <= midpoint ? 'down' : 'up';
-    state.movementStarted = state.phase === 'down';
-  }
-  if (state.validFrames < FORM_STABLE_FRAMES) {
-    return { reps: state.reps, phase: state.phase, cue: state.phase === 'up' ? REP_CONFIG[questId].cueDown : REP_CONFIG[questId].cueUp, counted: false, formValid: true };
-  }
-} else {
-  state.smoothed = state.smoothed * 0.70 + raw * 0.30;
-}
-
-const value = state.smoothed;
-let counted = false;
-
-if (config.mode === 'height') {
-  // Establish the jump baseline only while the athlete is in a valid standing
-  // rope-jump posture. This prevents camera movement from becoming a "rep".
-  if (state.baselineY === null) {
-    state.baselineY = value;
-  } else {
-    state.baselineY = state.baselineY * 0.992 + value * 0.008;
+  const metricFn = REP_METRICS[questId];
+  if (!config || !metricFn || !landmarks) {
+    return { reps: state.reps, phase: state.phase, cue: 'Move into frame', counted: false, formValid: false };
   }
 
-  const jumpHeight = state.baselineY - value;
-
-  if (state.phase === 'up' && jumpHeight >= config.downThreshold) {
-    state.phase = 'down';
-    state.movementStarted = true;
-  } else if (state.phase === 'down' && jumpHeight <= config.upThreshold) {
-    if (state.movementStarted && now - state.lastRepAt >= MIN_REP_MS) {
-      state.reps += 1;
-      state.lastRepAt = now;
-      counted = true;
+  // Rep counting deliberately does NOT hard-fail on the full-form validator.
+  // Phone cameras routinely drop a wrist/ankle for a frame or two. The metric
+  // itself already requires enough landmarks to calculate the joint angle.
+  const raw = metricFn(landmarks);
+  if (raw === null || !Number.isFinite(raw)) {
+    state.invalidFrames = Math.min(30, state.invalidFrames + 1);
+    if (state.invalidFrames >= MAX_INVALID_REP_FRAMES) {
+      state.movementStarted = false;
+      state.smoothed = null;
+      state.lastValue = null;
+      state.phaseFrames = 0;
     }
-    state.phase = 'up';
-    state.movementStarted = false;
+    return {
+      reps: state.reps,
+      phase: state.phase,
+      cue: 'Keep the tracked joints visible',
+      counted: false,
+      formValid: false,
+    };
   }
-} else {
-  if (state.phase === 'up' && value <= config.downThreshold) {
-    state.phase = 'down';
-    state.movementStarted = true;
-  } else if (state.phase === 'down' && value >= config.upThreshold) {
-    if (state.movementStarted && now - state.lastRepAt >= MIN_REP_MS) {
-      state.reps += 1;
-      state.lastRepAt = now;
-      counted = true;
-    }
-    state.phase = 'up';
-    state.movementStarted = false;
-  }
-}
 
-const cue = state.phase === 'up' ? config.cueDown : config.cueUp;
-return { reps: state.reps, phase: state.phase, cue, counted, formValid: true };
+  state.invalidFrames = 0;
+  state.validFrames = Math.min(FORM_STABLE_FRAMES + 4, state.validFrames + 1);
+
+  // Metric smoothing is separate from the visual skeleton smoothing. This path
+  // is intentionally low-latency so quick reps still cross the hysteresis bands.
+  const previous = state.smoothed;
+  state.smoothed = previous === null ? raw : previous * 0.64 + raw * 0.36;
+  const value = state.smoothed;
+  const delta = previous === null ? 0 : Math.abs(value - previous);
+  const motionThreshold = config.mode === 'height' ? 0.0014 : 0.55;
+
+  if (delta >= motionThreshold) state.movementStarted = true;
+
+  // Establish the starting phase from the real camera posture instead of
+  // forcing every user to begin from a perfectly upright/extended position.
+  if (previous === null) {
+    if (config.mode === 'height') {
+      state.baselineY = value;
+      state.phase = 'up';
+    } else if (value <= config.downThreshold) {
+      state.phase = 'down';
+    } else {
+      state.phase = 'up';
+    }
+    state.phaseFrames = 0;
+    state.lastValue = value;
+    state.movementStarted = false;
+    return {
+      reps: state.reps,
+      phase: state.phase,
+      cue: state.phase === 'up' ? config.cueDown : config.cueUp,
+      counted: false,
+      formValid: true,
+    };
+  }
+
+  if (config.mode === 'height') {
+    if (state.baselineY === null) state.baselineY = value;
+    const jumpHeight = state.baselineY - value;
+
+    if (state.phase === 'up') {
+      if (jumpHeight >= config.downThreshold) {
+        state.phase = 'down';
+        state.phaseFrames = 1;
+        state.movementStarted = true;
+      } else if (!state.movementStarted && Math.abs(jumpHeight) < config.upThreshold) {
+        state.baselineY = state.baselineY * 0.992 + value * 0.008;
+      }
+    } else {
+      if (jumpHeight <= config.upThreshold) {
+        state.phaseFrames += 1;
+        if (state.phaseFrames >= 2) {
+          const canCount = state.movementStarted && now - state.lastRepAt >= MIN_REP_MS;
+          if (canCount) {
+            state.reps += 1;
+            state.lastRepAt = now;
+          }
+          state.phase = 'up';
+          state.phaseFrames = 0;
+          state.movementStarted = false;
+          state.baselineY = value;
+          state.lastValue = value;
+          return { reps: state.reps, phase: state.phase, cue: config.cueDown, counted: canCount, formValid: true };
+        }
+      } else {
+        state.phaseFrames = 0;
+      }
+    }
+  } else {
+    if (state.phase === 'up') {
+      if (value <= config.downThreshold) {
+        state.phase = 'down';
+        state.phaseFrames = 1;
+        state.movementStarted = true;
+      }
+    } else if (value >= config.upThreshold) {
+      state.phaseFrames += 1;
+      if (state.phaseFrames >= 2) {
+        const canCount = state.movementStarted && now - state.lastRepAt >= MIN_REP_MS;
+        if (canCount) {
+          state.reps += 1;
+          state.lastRepAt = now;
+        }
+        state.phase = 'up';
+        state.phaseFrames = 0;
+        state.movementStarted = false;
+        state.lastValue = value;
+        return { reps: state.reps, phase: state.phase, cue: config.cueDown, counted: canCount, formValid: true };
+      }
+    } else if (state.phase === 'down') {
+      state.phaseFrames = 0;
+    }
+  }
+
+  state.lastValue = value;
+  const cue = state.phase === 'up' ? config.cueDown : config.cueUp;
+  return { reps: state.reps, phase: state.phase, cue, counted: false, formValid: true };
 }
 
 // quest labels
@@ -974,9 +968,9 @@ q4: { type: 'reps', activity: ['person doing pullups on bar', 'pullup bar exerci
 q12: { type: 'reps', activity: ['person doing situps or crunches', 'abdominal exercise on floor'], label: 'doing situps', bodyParts: ['Abs', 'Obliques', 'Hip Flexors'] },
 q17: { type: 'reps', activity: ['person jumping rope', 'skipping rope exercise'], label: 'jumping rope', bodyParts: ['Calves', 'Quads', 'Shoulders', 'Cardio'] },
 q23: { type: 'reps', activity: ['person doing lunges exercise', 'lunge workout legs split stance'], label: 'doing lunges', bodyParts: ['Quads', 'Glutes', 'Hamstrings'] },
-q3: { type: 'map', activity: ['gps tracking map route screenshot', 'fitness tracker map running route'], label: 'running map screenshot' },
-q16: { type: 'map', activity: ['gps tracking map route screenshot', 'cycling route map on phone screen'], label: 'cycling map screenshot' },
-q5: { type: 'map', activity: ['gps tracking map route screenshot', 'walking route map tracker'], label: 'walking map screenshot' },
+q3: { type: 'action', activity: ['person running outdoors', 'person jogging or running', 'person doing a run'], label: 'running' },
+q16: { type: 'action', activity: ['person riding a bicycle outdoors', 'person cycling', 'cyclist riding a bike'], label: 'cycling' },
+q5: { type: 'action', activity: ['person walking outdoors', 'person taking a walk', 'person walking outside'], label: 'walking' },
 q22: { type: 'map', activity: ['gps tracking map route screenshot', 'step counter fitness app screenshot'], label: 'step tracking map' },
 q9: { type: 'food', activity: ['healthy food meal salad vegetables on a plate', 'nutritious meal in a bowl'], label: 'plate of healthy food' },
 q19: { type: 'food', activity: ['clean healthy meal on plate', 'plate of vegetables and whole foods'], label: 'plate of clean food' },
@@ -999,6 +993,15 @@ q28: { type: 'action', activity: ['person doing high knees exercise'], label: 'd
 q29: { type: 'action', activity: ['person doing mountain climbers exercise'], label: 'doing mountain climbers', bodyParts: ['Core', 'Cardio'] },
 q30: { type: 'action', activity: ['person doing a superman back exercise lying face down'], label: 'holding a superman pose', bodyParts: ['Lower Back', 'Glutes'] },
 q31: { type: 'action', activity: ['person doing burpees exercise'], label: 'doing burpees', bodyParts: ['Full Body', 'Cardio'] },
+q32: { type: 'action', activity: ['person doing a mobility flow', 'person doing mobility exercises', 'person stretching dynamically'], label: 'doing a mobility flow', bodyParts: ['Full Body', 'Mobility'] },
+q33: { type: 'action', activity: ['person walking outdoors', 'person taking a walk', 'person walking outside'], label: 'walking outside', bodyParts: ['Legs', 'Cardio'] },
+q34: { type: 'action', activity: ['person running up stairs', 'person doing stair running', 'person climbing stairs quickly'], label: 'running stairs', bodyParts: ['Quads', 'Glutes', 'Cardio'] },
+q35: { type: 'action', activity: ['person riding a bicycle outdoors', 'person cycling', 'cyclist riding a bike'], label: 'cycling intervals', bodyParts: ['Quads', 'Glutes', 'Cardio'] },
+q36: { type: 'action', activity: ['person balancing on one leg', 'person doing a balance exercise', 'person standing on one foot'], label: 'holding a balance pose', bodyParts: ['Legs', 'Core'] },
+q37: { type: 'action', activity: ['person doing calf raises', 'standing calf raise exercise'], label: 'doing calf raises', bodyParts: ['Calves', 'Legs'] },
+q38: { type: 'action', activity: ['person standing outside in morning sunlight', 'person outside in sunlight', 'person enjoying morning sun'], label: 'getting morning sunlight' },
+q39: { type: 'action', activity: ['person reading a book', 'person reading quietly'], label: 'reading' },
+q40: { type: 'action', activity: ['person doing box breathing', 'person practicing breathing exercise', 'person taking slow deep breaths'], label: 'doing box breathing' },
 };
 
 const MOVEMENT_ACTION_IDS = new Set(['q8', 'q11', 'q15', 'q26', 'q27', 'q28', 'q29', 'q30', 'q31']);
@@ -1028,48 +1031,149 @@ return [...base, 'phone or computer screen'];
 const QUEST_POOL = [
 { id: 'q1', textTemplate: 'Do {n} pushups', xp: 50, reps: 20 },
 { id: 'q2', textTemplate: 'Do {n} squats', xp: 45, reps: 30 },
-{ id: 'q3', textTemplate: 'Go for a {n}-second run', xp: 75, duration: 180 },
+{ id: 'q3', textTemplate: 'Run for {n}', xp: 75, durationOptions: [5 * 60, 8 * 60, 10 * 60], durationDisplay: 'minutes' },
 { id: 'q4', textTemplate: 'Do {n} pullups', xp: 60, reps: 10 },
-{ id: 'q16', textTemplate: 'Do {n} seconds of cycling', xp: 55, duration: 180 },
+{ id: 'q16', textTemplate: 'Cycle for {n}', xp: 55, durationOptions: [15 * 60, 20 * 60, 30 * 60], durationDisplay: 'minutes' },
 { id: 'q17', textTemplate: 'Do {n} jumping rope reps', xp: 40, reps: 50 },
-{ id: 'q21', textTemplate: 'Do {n} seconds of deep breathing', xp: 30, duration: 180 },
+{ id: 'q21', textTemplate: 'Do {n} of deep breathing', xp: 30, durationOptions: [60, 90, 120], durationDisplay: 'seconds' },
 { id: 'q23', textTemplate: 'Do {n} lunges', xp: 40, reps: 30 },
-{ id: 'q25', textTemplate: 'Do a {n}-second ice bath or cold plunge', xp: 80, duration: 180 },
-{ id: 'q5', textTemplate: 'Walk outside for {n} seconds', xp: 35, duration: 180 },
-{ id: 'q7', textTemplate: 'Meditate for {n} seconds', xp: 45, duration: 180 },
-{ id: 'q8', textTemplate: 'Stretch for {n} seconds', xp: 35, duration: 180 },
-{ id: 'q11', textTemplate: 'Do {n} seconds of jumping jacks', xp: 30, duration: 180 },
+{ id: 'q25', textTemplate: 'Stay in a cold plunge for {n}', xp: 80, durationOptions: [20, 30, 45, 60], durationDisplay: 'seconds' },
+{ id: 'q5', textTemplate: 'Walk outside for {n}', xp: 35, durationOptions: [10 * 60, 15 * 60, 20 * 60, 30 * 60], durationDisplay: 'minutes' },
+{ id: 'q7', textTemplate: 'Meditate for {n}', xp: 45, durationOptions: [2 * 60, 3 * 60, 5 * 60], durationDisplay: 'minutes' },
+{ id: 'q8', textTemplate: 'Stretch for {n}', xp: 35, durationOptions: [3 * 60, 5 * 60, 8 * 60], durationDisplay: 'minutes' },
+{ id: 'q11', textTemplate: 'Do jumping jacks for {n}', xp: 30, durationOptions: [30, 45, 60, 90], durationDisplay: 'seconds' },
 { id: 'q12', textTemplate: 'Do {n} situps', xp: 40, reps: 20 },
-{ id: 'q15', textTemplate: 'Hold a plank for {n} seconds', xp: 50, duration: 180 },
-{ id: 'q26', textTemplate: 'Hold a wall sit for {n} seconds', xp: 40, duration: 180 },
-{ id: 'q27', textTemplate: 'Hold a glute bridge for {n} seconds', xp: 35, duration: 180 },
-{ id: 'q28', textTemplate: 'Do {n} seconds of high knees', xp: 35, duration: 180 },
-{ id: 'q29', textTemplate: 'Do {n} seconds of mountain climbers', xp: 40, duration: 180 },
-{ id: 'q30', textTemplate: 'Hold a superman pose for {n} seconds', xp: 35, duration: 180 },
-{ id: 'q31', textTemplate: 'Do {n} seconds of burpees', xp: 45, duration: 180 },
+{ id: 'q15', textTemplate: 'Hold a plank for {n}', xp: 50, durationOptions: [30, 45, 60], durationDisplay: 'seconds' },
+{ id: 'q26', textTemplate: 'Hold a wall sit for {n}', xp: 40, durationOptions: [30, 45, 60, 75], durationDisplay: 'seconds' },
+{ id: 'q27', textTemplate: 'Hold a glute bridge for {n}', xp: 35, durationOptions: [30, 45, 60], durationDisplay: 'seconds' },
+{ id: 'q28', textTemplate: 'Do high knees for {n}', xp: 35, durationOptions: [30, 45, 60, 90], durationDisplay: 'seconds' },
+{ id: 'q29', textTemplate: 'Do mountain climbers for {n}', xp: 40, durationOptions: [30, 45, 60, 90], durationDisplay: 'seconds' },
+{ id: 'q30', textTemplate: 'Hold a superman pose for {n}', xp: 35, durationOptions: [20, 30, 45, 60], durationDisplay: 'seconds' },
+{ id: 'q31', textTemplate: 'Do burpees for {n}', xp: 45, durationOptions: [30, 45, 60, 90], durationDisplay: 'seconds' },
+// New challenge families — these are still using the same QuestDaily card/icon system.
+{ id: 'q32', textTemplate: 'Do a mobility flow for {n}', xp: 40, durationOptions: [4 * 60, 5 * 60, 6 * 60], durationDisplay: 'minutes' },
+{ id: 'q33', textTemplate: 'Take a phone-free outdoor walk for {n}', xp: 45, durationOptions: [10 * 60, 15 * 60, 20 * 60], durationDisplay: 'minutes' },
+{ id: 'q34', textTemplate: 'Run stairs for {n}', xp: 65, durationOptions: [3 * 60, 4 * 60, 5 * 60], durationDisplay: 'minutes' },
+{ id: 'q35', textTemplate: 'Cycle intervals for {n}', xp: 65, durationOptions: [10 * 60, 12 * 60, 15 * 60], durationDisplay: 'minutes' },
+{ id: 'q36', textTemplate: 'Hold a balance pose for {n}', xp: 35, durationOptions: [30, 45, 60], durationDisplay: 'seconds' },
+{ id: 'q37', textTemplate: 'Do calf raises for {n}', xp: 35, durationOptions: [30, 45, 60], durationDisplay: 'seconds' },
+{ id: 'q38', textTemplate: 'Get morning sunlight for {n}', xp: 30, durationOptions: [5 * 60, 8 * 60, 10 * 60], durationDisplay: 'minutes' },
+{ id: 'q39', textTemplate: 'Read without your phone for {n}', xp: 35, durationOptions: [8 * 60, 10 * 60, 15 * 60], durationDisplay: 'minutes' },
+{ id: 'q40', textTemplate: 'Do box breathing for {n}', xp: 30, durationOptions: [2 * 60, 3 * 60, 5 * 60], durationDisplay: 'minutes' },
+{ id: 'q6', textTemplate: 'Drink a full glass of water', xp: 25 },
+{ id: 'q9', textTemplate: 'Eat one balanced, whole-food meal', xp: 50 },
+{ id: 'q10', textTemplate: 'Get a full night of sleep', xp: 70 },
+{ id: 'q13', textTemplate: 'Write one journal entry', xp: 35 },
+{ id: 'q14', textTemplate: 'Have a green smoothie', xp: 35 },
+{ id: 'q18', textTemplate: 'Take a cold shower', xp: 40 },
+{ id: 'q19', textTemplate: 'Skip added sugar for the day', xp: 35 },
+{ id: 'q20', textTemplate: 'Cook one meal yourself', xp: 45 },
+{ id: 'q22', textTemplate: 'Hit your step goal', xp: 45 },
+{ id: 'q24', textTemplate: 'Go to bed earlier tonight', xp: 50 },
 ];
 
-function randomizeQuest(pool) {
-if (pool.reps) {
-const n = Math.floor(Math.random() * 55) + 1; // 1-55 reps
-return { ...pool, reps: n, text: pool.textTemplate.replace('{n}', n), completed: false, progress: 0 };
+const QUEST_SCHEMA_VERSION = 'timed-v4';
+const DAILY_QUEST_COUNT = 8;
+
+function hashSeed(input) {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
 }
-if (pool.duration) {
-const seconds = Math.floor(Math.random() * 26) + 5; // 5-30 seconds
-return { ...pool, duration: seconds, text: pool.textTemplate.replace('{n}', seconds), completed: false, progress: 0 };
+
+function seededRng(seedText) {
+  let a = hashSeed(seedText);
+  return () => {
+    a += 0x6D2B79F5;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
-return { ...pool, text: pool.textTemplate, completed: false, progress: 0 };
+
+function shuffleSeeded(items, rng) {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+function localDayKey(ts = Date.now()) {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function formatQuestDuration(seconds, display = 'auto') {
+  const safe = Math.max(1, Math.round(seconds));
+  if (display === 'seconds') return `${safe} second${safe === 1 ? '' : 's'}`;
+  if (display === 'minutes') {
+    const minutes = Math.max(1, Math.round(safe / 60));
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+  if (safe >= 60 && safe % 60 === 0) {
+    const minutes = safe / 60;
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+  return `${safe} second${safe === 1 ? '' : 's'}`;
+}
+
+function randomizeQuest(pool, rng = Math.random) {
+  if (pool.reps) {
+    const min = pool.id === 'q1' ? 10 : pool.id === 'q2' ? 15 : pool.id === 'q4' ? 5 : pool.id === 'q12' ? 10 : pool.id === 'q17' ? 25 : 10;
+    const max = pool.id === 'q1' ? 35 : pool.id === 'q2' ? 40 : pool.id === 'q4' ? 12 : pool.id === 'q12' ? 30 : pool.id === 'q17' ? 70 : 35;
+    const n = Math.floor(rng() * (max - min + 1)) + min;
+    return { ...pool, reps: n, text: pool.textTemplate.replace('{n}', n), completed: false, progress: 0 };
+  }
+  if (pool.durationOptions?.length) {
+    const seconds = pool.durationOptions[Math.floor(rng() * pool.durationOptions.length)];
+    const label = formatQuestDuration(seconds, pool.durationDisplay);
+    return { ...pool, duration: seconds, text: pool.textTemplate.replace('{n}', label), completed: false, progress: 0 };
+  }
+  return { ...pool, text: pool.textTemplate, completed: false, progress: 0 };
+}
+
+function createDailyQuests(dayKey = localDayKey(Date.now())) {
+  const rng = seededRng(`questdaily:${dayKey}`);
+  const reps = shuffleSeeded(QUEST_POOL.filter(q => q.reps), rng);
+  const timedMinutes = shuffleSeeded(QUEST_POOL.filter(q => q.durationOptions?.length && q.durationDisplay === 'minutes'), rng);
+  const timedSeconds = shuffleSeeded(QUEST_POOL.filter(q => q.durationOptions?.length && q.durationDisplay === 'seconds'), rng);
+  const proof = shuffleSeeded(QUEST_POOL.filter(q => !q.reps && !q.durationOptions?.length), rng);
+
+  // Guaranteed daily mix: reps + minute-scale activities + short timed work + a couple of proof/lifestyle quests.
+  let selected = [
+    ...reps.slice(0, 2),
+    ...timedMinutes.slice(0, 2),
+    ...timedSeconds.slice(0, 2),
+    ...proof.slice(0, 2),
+  ];
+
+  if (selected.length < DAILY_QUEST_COUNT) {
+    const used = new Set(selected.map(q => q.id));
+    const fallback = shuffleSeeded(QUEST_POOL.filter(q => !used.has(q.id)), rng);
+    selected = selected.concat(fallback.slice(0, DAILY_QUEST_COUNT - selected.length));
+  }
+
+  return shuffleSeeded(selected.slice(0, DAILY_QUEST_COUNT), rng).map(q => randomizeQuest(q, rng));
 }
 
 const normalizeTimedQuest = (quest) => {
-if (!quest?.duration) return quest;
-const clampedDuration = Math.min(30, Math.max(5, Number.isFinite(quest.duration) ? quest.duration : 5));
-const progress = Number.isFinite(quest.progress) ? Math.min(clampedDuration, Math.max(0, quest.progress)) : 0;
-const text = typeof quest.text === 'string' ? quest.text
-  .replace(/\b\d+-(?:minute|minutes|second|seconds)\b/g, `${clampedDuration}-second`)
-  .replace(/\b\d+ (?:minute|minutes|second|seconds)\b/g, `${clampedDuration} seconds`)
-  : quest.text;
-return { ...quest, duration: clampedDuration, progress };
+  if (!quest?.duration) return quest;
+  const pool = QUEST_POOL.find(q => q.id === quest.id);
+  const safeDuration = Math.min(60 * 60, Math.max(5, Number.isFinite(quest.duration) ? Math.round(quest.duration) : (pool?.durationOptions?.[0] || 60)));
+  const progress = Number.isFinite(quest.progress) ? Math.min(safeDuration, Math.max(0, quest.progress)) : 0;
+  const text = pool?.durationOptions?.length
+    ? pool.textTemplate.replace('{n}', formatQuestDuration(safeDuration, pool.durationDisplay))
+    : quest.text;
+  return { ...quest, duration: safeDuration, progress, text };
 };
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -1156,6 +1260,32 @@ boxShadow: `inset 0 1px 0 ${c.glassHighlight}, inset 0 0 0 0.5px rgba(255,255,25
 transform: 'translateZ(0)',
 });
 
+
+// Quest actions share one theme-aware treatment everywhere: the button follows
+// the quest's category color (including the private pink Saqoom theme) instead
+// of hard-coded blue/green fills that can clash with the current theme.
+const questButtonStyle = (c, accent = c.blue, variant = 'primary') => {
+  if (variant === 'secondary') {
+    return {
+      width: '100%', minHeight: 48, padding: '12px 16px', borderRadius: 16,
+      fontSize: 14, fontWeight: 700, color: c.labelSecondary, background: c.fill,
+      border: `1px solid ${c.separator}`, display: 'flex', alignItems: 'center',
+      justifyContent: 'center', gap: 8, transition: 'transform 160ms ease, background-color 160ms ease',
+    };
+  }
+  const bg = variant === 'dev'
+    ? `linear-gradient(135deg, ${c.green} 0%, ${accent} 100%)`
+    : `linear-gradient(135deg, ${accent} 0%, ${accent}DD 100%)`;
+  return {
+    width: '100%', minHeight: 50, padding: '14px 16px', borderRadius: 16,
+    fontSize: 15, fontWeight: 750, color: '#fff', background: bg,
+    border: `1px solid rgba(255,255,255,0.16)`,
+    boxShadow: `0 14px 34px -22px ${accent}`,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+    transition: 'transform 160ms ease, filter 160ms ease, box-shadow 180ms ease',
+  };
+};
+
 // system font stack, no google fonts import — applied to every descendant so
 // nothing inside the app can accidentally fall back to a non-system typeface
 const SystemType = ({ c }) => {
@@ -1170,7 +1300,11 @@ useEffect(() => {
   body.style.backgroundColor = bg;
   body.style.backgroundImage = 'none';
   body.style.color = c?.label || '#000';
-  if (appRoot) appRoot.style.backgroundColor = bg;
+  root.style.overflow = 'hidden';
+  root.style.height = '100dvh';
+  body.style.overflow = 'hidden';
+  body.style.height = '100dvh';
+  if (appRoot) { appRoot.style.backgroundColor = bg; appRoot.style.height = '100dvh'; appRoot.style.overflow = 'hidden'; }
 
   let themeMeta = document.querySelector('meta[name="theme-color"]');
   if (!themeMeta) {
@@ -1190,6 +1324,8 @@ return (
 .sq-root, .sq-root * { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; }
 .sq-mono, .sq-mono * { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
 .sq-large-title { letter-spacing: -0.6px; }
+.sq-quest-cta:active { transform: scale(0.985); filter: brightness(0.97); }
+.sq-quest-cta { -webkit-tap-highlight-color: transparent; }
 .sq-title { letter-spacing: -0.2px; }
 * { -webkit-tap-highlight-color: transparent; }
 /* No text selection, no pinch/double-tap zoom — this is meant to feel
@@ -1199,10 +1335,28 @@ scrolling (pan-y); it only blocks the pinch/double-tap zoom gestures —
 the viewport meta tag in index.html should also set
 maximum-scale=1, user-scalable=no as the primary safeguard, since
 some browsers only respect that and ignore touch-action for zoom. */
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden !important; }
+html, body { overscroll-behavior: none; }
+.sq-fit-screen { min-height: 0 !important; height: 100% !important; max-height: 100dvh !important; overflow: hidden !important; }
+.sq-scroll { overflow: hidden !important; -webkit-overflow-scrolling: auto; overscroll-behavior: none; }
+.sq-settings-pager { scrollbar-width: none; }
+.sq-settings-pager::-webkit-scrollbar { display: none; }
+.sq-settings-page-hidden { display: none !important; }
+.sq-settings-section { min-width: 0; }
+@keyframes sqSettingsSwipeNext { from { opacity: 0; transform: translate3d(34px,0,0) scale(.995); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } }
+@keyframes sqSettingsSwipePrev { from { opacity: 0; transform: translate3d(-34px,0,0) scale(.995); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } }
+.sq-settings-swipe-next { animation: sqSettingsSwipeNext 180ms cubic-bezier(.22,1,.36,1); }
+.sq-settings-swipe-prev { animation: sqSettingsSwipePrev 180ms cubic-bezier(.22,1,.36,1); }
+.sq-settings-pager button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sq-settings-shell[data-page="1"] .sq-settings-page-2, .sq-settings-shell[data-page="1"] .sq-settings-page-3, .sq-settings-shell[data-page="1"] .sq-settings-page-4, .sq-settings-shell[data-page="2"] .sq-settings-page-1, .sq-settings-shell[data-page="2"] .sq-settings-page-3, .sq-settings-shell[data-page="2"] .sq-settings-page-4, .sq-settings-shell[data-page="3"] .sq-settings-page-1, .sq-settings-shell[data-page="3"] .sq-settings-page-2, .sq-settings-shell[data-page="3"] .sq-settings-page-4, .sq-settings-shell[data-page="4"] .sq-settings-page-1, .sq-settings-shell[data-page="4"] .sq-settings-page-2, .sq-settings-shell[data-page="4"] .sq-settings-page-3 { display: none !important; }
+.sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
+@media (max-height: 920px) { .sq-home-quest-grid { gap: 6px; } .sq-home-quest-card { padding: 10px 12px !important; border-radius: 16px !important; } .sq-home-quest-card > span { font-size: 13.5px !important; } }
+@media (max-height: 900px) and (max-width: 700px) { .sq-home-quest-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; } .sq-home-quest-card { min-height: 62px; padding: 9px !important; gap: 8px !important; } .sq-home-quest-card .sq-mono { font-size: 9px !important; } .sq-home-quest-card > span { font-size: 11.5px !important; line-height: 1.15 !important; } .sq-home-quest-card .sq-icon-tap { display: none; } }
+@media (max-height: 760px) { .sq-root h1 { line-height: 1.05; } .sq-welcome-steps > div { padding: 10px !important; gap: 10px !important; } .sq-welcome-steps p { font-size: 11px !important; } .sq-welcome-steps > div > div:first-child { width: 32px !important; height: 32px !important; } }
 .sq-root {
 -webkit-user-select: none; -moz-user-select: none; user-select: none;
 -webkit-touch-callout: none;
-touch-action: pan-x pan-y;
+touch-action: none;
 }
 .sq-root input, .sq-root textarea {
 -webkit-user-select: text; -moz-user-select: text; user-select: text;
@@ -1217,7 +1371,7 @@ still crossfade smoothly. */
 transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease;
 }
 svg { transition: stroke 0.2s ease, fill 0.2s ease; }
-.sq-scroll { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.sq-scroll { -webkit-overflow-scrolling: auto; overscroll-behavior: none; overflow: hidden !important; }
 .sq-root button, .sq-root a { contain: layout style; }
 .sq-root { overflow-x: clip; }
 .sq-heart-rain {
@@ -1238,8 +1392,26 @@ svg { transition: stroke 0.2s ease, fill 0.2s ease; }
 .sq-icon-fff svg { color: #fff; }
 @keyframes sq-fade-up { from { opacity: 0; transform: translate3d(0,7px,0); } to { opacity: 1; transform: translate3d(0,0,0); } }
 @keyframes sq-check-in { 0% { opacity: 0; transform: scale(0.5); } 70% { opacity: 1; transform: scale(1.06); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes sq-complete-burst { 0% { transform: scale(.72); opacity: 0; } 58% { transform: scale(1.11); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes sq-complete-ring { 0% { transform: scale(.82); opacity: .05; } 60% { transform: scale(1.24); opacity: .34; } 100% { transform: scale(1.48); opacity: 0; } }
+@keyframes sq-complete-float { 0% { transform: translateY(8px); opacity: 0; } 100% { transform: translateY(0); opacity: 1; } }
+@keyframes sq-xp-pop { 0% { opacity: 0; transform: translateY(10px) scale(.86); } 70% { opacity: 1; transform: translateY(-2px) scale(1.06); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes sq-complete-dot { 0% { opacity: 0; transform: translate3d(0,12px,0) scale(.4); } 35% { opacity: 1; } 100% { opacity: 0; transform: translate3d(var(--sx,0px), var(--sy,-120px),0) scale(1); } }
+@keyframes sq-all-done-orbit { 0% { transform: rotate(0deg) translateX(68px) rotate(0deg); opacity: 0; } 12% { opacity: 1; } 100% { transform: rotate(360deg) translateX(68px) rotate(-360deg); opacity: 0; } }
+@keyframes sq-all-done-pulse { 0%,100% { transform: scale(1); opacity: .25; } 50% { transform: scale(1.12); opacity: .55; } }
+@keyframes sq-all-done-check { 0% { transform: scale(.55); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes sq-all-done-spark { 0% { opacity: 0; transform: translate3d(0,8px,0) scale(.4); } 25% { opacity: 1; } 100% { opacity: 0; transform: translate3d(var(--dx), var(--dy),0) scale(1); } }
+.sq-all-done-orbit { position:absolute; left:50%; top:50%; width:7px; height:7px; margin:-3.5px; border-radius:50%; animation: sq-all-done-orbit 1.8s cubic-bezier(.22,1,.36,1) var(--od,0ms) infinite; }
+.sq-all-done-pulse { animation: sq-all-done-pulse 1.8s ease-in-out infinite; }
+.sq-all-done-check { animation: sq-all-done-check .7s cubic-bezier(.22,1,.36,1) both; }
+.sq-all-done-spark { position:absolute; left:50%; top:50%; border-radius:50%; animation: sq-all-done-spark 1.05s cubic-bezier(.22,1,.36,1) var(--sd,0ms) both; }
 .sq-anim-in { animation: sq-fade-up 0.32s cubic-bezier(0.22,1,0.36,1) both; will-change: transform, opacity; }
 .sq-anim-check { animation: sq-check-in 0.4s cubic-bezier(0.22,1,0.36,1) both; }
+.sq-complete-burst { animation: sq-complete-burst .62s cubic-bezier(.22,1,.36,1) both; }
+.sq-complete-ring { position: absolute; inset: -14px; border-radius: 50%; border: 2px solid currentColor; pointer-events: none; animation: sq-complete-ring .9s ease-out .05s both; }
+.sq-complete-copy { animation: sq-complete-float .5s cubic-bezier(.22,1,.36,1) .16s both; }
+.sq-xp-pop { animation: sq-xp-pop .55s cubic-bezier(.22,1,.36,1) .34s both; }
+.sq-complete-dot { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; border-radius: 50%; animation: sq-complete-dot .95s ease-out var(--sd,0ms) both; will-change: transform, opacity; }
 button, a { transition: opacity 0.2s ease-out, transform 0.2s cubic-bezier(0.22,1,0.36,1), background-color 0.25s ease; }
 button:active { transform: scale(0.96); }
 @keyframes sq-icon-pop { 0% { opacity: 0; transform: scale(0.6) rotate(-8deg); } 60% { opacity: 1; transform: scale(1.12) rotate(2deg); } 100% { opacity: 1; transform: scale(1) rotate(0deg); } }
@@ -1393,6 +1565,20 @@ return (
 // quest icons — mapped straight onto Lucide (SF-Symbols-style) components.
 // Each is a drop-in React component, so existing call sites (which pass
 // size/color/style props) work unchanged.
+const QuestCustomIcon = React.memo(function QuestCustomIcon({ kind, width = 24, height = 24, strokeWidth = 1.75, color = 'currentColor', ...rest }) {
+const paths = {
+  mobility: <><path d="M7 4h10"/><path d="M12 4v6"/><path d="M5 10c1.5 2 3.4 3 7 3s5.5-1 7-3"/><path d="M8 13l-3 6"/><path d="M16 13l3 6"/></>,
+  walkSun: <><circle cx="17" cy="7" r="2.5"/><path d="M17 2v2"/><path d="M17 10v2"/><path d="M12 7h2"/><path d="M20 7h2"/><circle cx="9" cy="7" r="2"/><path d="M9 9v5l-3 5"/><path d="M9 14l4 2 3 4"/></>,
+  stairs: <><path d="M4 20h4v-4h4v-4h4V8h4"/><path d="M4 20h16"/></>,
+  balance: <><circle cx="12" cy="4.5" r="2"/><path d="M12 7v6"/><path d="M12 9l-4 3"/><path d="M12 10l4 2"/><path d="M12 13l-5 7"/><path d="M12 13l6 7"/></>,
+  calf: <><path d="M9 4h6"/><path d="M12 4v6"/><path d="M12 10c-3 1-4 3-3 6l1 4"/><path d="M12 10c3 1 4 3 3 6l-1 4"/><path d="M7 20h4"/><path d="M13 20h4"/></>,
+  sunrise: <><path d="M4 17h16"/><path d="M7 17a5 5 0 0 1 10 0"/><path d="M12 3v3"/><path d="M5.6 6.1l2.1 2.1"/><path d="M18.4 6.1l-2.1 2.1"/></>,
+  book: <><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v17H6.5A2.5 2.5 0 0 0 4 22Z"/><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v17h4.5A2.5 2.5 0 0 1 20 22Z"/></>,
+  breathe: <><path d="M4 12c3-5 6-5 8 0s5 5 8 0"/><path d="M8 5v3"/><path d="M16 16v3"/></>,
+};
+return <svg width={width} height={height} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" {...rest}>{paths[kind]}</svg>;
+});
+
 const QuestSvg = {
 cup: GlassWater,
 smoothie: CupSoda,
@@ -1418,6 +1604,14 @@ snowflake: Snowflake,
 wind: Wind,
 rope: Waves,
 target: Target,
+mobility: (props) => <QuestCustomIcon kind="mobility" {...props} />,
+walkSun: (props) => <QuestCustomIcon kind="walkSun" {...props} />,
+stairs: (props) => <QuestCustomIcon kind="stairs" {...props} />,
+balance: (props) => <QuestCustomIcon kind="balance" {...props} />,
+calf: (props) => <QuestCustomIcon kind="calf" {...props} />,
+sunrise: (props) => <QuestCustomIcon kind="sunrise" {...props} />,
+book: (props) => <QuestCustomIcon kind="book" {...props} />,
+breathe: (props) => <QuestCustomIcon kind="breathe" {...props} />,
 };
 
 // Quest categories map to system colors, not a rotating decorative palette —
@@ -1450,6 +1644,11 @@ q25: { icon: 'snowflake',cat: CAT.cold },
 q26: { icon: 'legs', cat: CAT.strength }, q27: { icon: 'core', cat: CAT.strength },
 q28: { icon: 'bolt', cat: CAT.cardio }, q29: { icon: 'core', cat: CAT.cardio },
 q30: { icon: 'stretch', cat: CAT.recover }, q31: { icon: 'flame', cat: CAT.cardio },
+q32: { icon: 'mobility', cat: CAT.recover }, q33: { icon: 'walkSun', cat: CAT.track },
+q34: { icon: 'stairs', cat: CAT.cardio }, q35: { icon: 'bike', cat: CAT.cardio },
+q36: { icon: 'balance', cat: CAT.mind }, q37: { icon: 'calf', cat: CAT.strength },
+q38: { icon: 'sunrise', cat: CAT.cardio }, q39: { icon: 'book', cat: CAT.mind },
+q40: { icon: 'breathe', cat: CAT.mind },
 };
 
 const QUEST_ABOUT = {
@@ -1472,10 +1671,55 @@ q28: "High knees spike your heart rate fast and sharpen coordination.",
 q29: "Mountain climbers combine cardio and core work in one fluid movement.",
 q30: "The superman hold strengthens your lower back and posterior chain.",
 q31: "Burpees are a full-body blast that builds strength and conditioning together.",
+q32: "A mobility flow keeps your joints moving and turns stiffness into usable range of motion.",
+q33: "A phone-free walk gives you steady movement plus a real mental reset.",
+q34: "Stair running adds a short burst of climbing that challenges your legs and cardio.",
+q35: "Cycling intervals let you build cardio while keeping impact low.",
+q36: "Balance work trains stability, control, and the small muscles that keep you steady.",
+q37: "Calf raises strengthen the lower legs and support running, jumping, and everyday movement.",
+q38: "A few minutes of morning light is a simple outdoor reset before the day gets busy.",
+q39: "Reading without your phone gives your attention a clean block away from notifications.",
+q40: "Box breathing gives you a simple rhythm for slowing the breath and settling your focus.",
 };
 
+const UPDATE_LOG = [
+  {
+    date: 'SEP 18, 2026',
+    current: true,
+    items: [
+      { Icon: ListChecks, title: 'Refresh-safe daily challenges', body: 'Your daily challenge set is now seeded from the day, so refreshing the page keeps the same quests instead of generating a new set.' },
+      { Icon: Timer, title: 'Real timed challenges', body: 'Timed quests now support both seconds and minutes. Runs, walks, cycling, mobility, reading, meditation and other longer activities keep their full duration.' },
+      { Icon: Sparkles, title: '40 total challenge types', body: 'The challenge pool has expanded with mobility, phone-free walks, stair runs, cycling intervals, balance work, calf raises, sunlight, reading and box breathing.' },
+      { Icon: ShieldCheck, title: 'More reliable camera reps', body: 'Rep counting is less likely to fail when a landmark briefly loses visibility, while movement thresholds and exercise form checks are more forgiving.' },
+      { Icon: Activity, title: 'Smoother skeleton tracking', body: 'The live skeleton now uses responsive landmark smoothing so it follows movement more naturally without making rep detection feel delayed.' },
+      { Icon: ListChecks, title: 'Challenge library in Settings', body: 'Settings now includes the full challenge list with an icon, timing or rep type, and a short explanation for every challenge.' },
+      { Icon: HistoryIcon, title: 'Update history', body: 'QuestDaily now keeps a dated update log so you can see what changed in the current release and in the previous Sep 16 release.' },
+      { Icon: Zap, title: 'Reliable haptic feedback', body: 'Haptic pulses now fire directly from completion and control interactions, with a dedicated test control in Settings where the browser supports vibration.' },
+      { Icon: Check, title: 'Animated quest completion', body: 'Completing a quest now opens a richer completion scene with a pulsing checkmark, animated XP reveal, celebratory particles and level-up treatment.' },
+      { Icon: TrophyIcon, title: 'All quests done home screen', body: 'When every daily quest is completed or cleared, the Home screen replaces the quest list with a dedicated animated finish state and the next reset countdown.' },
+      { Icon: Trash2, title: 'Skip quest', body: 'You can now skip a quest directly from its detail screen. It disappears for the rest of the day and awards no XP.' },
+      { Icon: ChevronRight, title: 'Swipe through Settings', body: 'Swipe left or right on the Settings area to move between Account, Alerts, App, and Library pages without scrolling.' },
+      { Icon: Sparkles, title: 'Theme-matched quest actions', body: 'Quest action buttons now use the challenge category color and shared styling, so the quest controls stay consistent with the active theme across detail and verification screens.' },
+    ],
+  },
+  {
+    date: 'SEP 16, 2026',
+    current: false,
+    items: [
+      { Icon: Sparkles, title: 'Expo glass UI', body: 'A cleaner, deeper glass treatment with blur, highlights, reflections, and smoother depth across the app.' },
+      { Icon: CircleDot, title: 'Thinking orbs', body: 'Animated thinking orbs make AI processing and verification states feel alive without blocking the experience.' },
+      { Icon: ShieldCheck, title: 'AI camera upgrade', body: 'The body skeleton stays visible on camera challenges with clearer tracking and verification feedback.' },
+      { Icon: Activity, title: 'Smarter exercise form detection', body: 'Exercise posture, movement and range of motion are checked before a rep is counted.' },
+      { Icon: Camera, title: 'Camera controls', body: 'Camera flow and cancel behavior were cleaned up so leaving a challenge is more reliable.' },
+      { Icon: Timer, title: '24-hour quests', body: 'The daily countdown and automatic 24-hour refresh are visible with the next reset.' },
+      { Icon: ListChecks, title: 'Cleaner navigation', body: 'The leaderboard became its own page and zero-XP players stay out of the rankings.' },
+      { Icon: UserCog, title: 'Account + settings', body: 'Account and settings options were brought together while keeping the existing controls.' },
+    ],
+  },
+];
+
 const QUEST_QUOTES = ["Small steps every day lead to big changes.", "Discipline is choosing between what you want now and what you want most.", "Progress, not perfection.", "The body achieves what the mind believes.", "One quest at a time.", "Consistency beats intensity.", "You didn't come this far to only come this far."];
-const QUEST_QUOTE = { q1: "Strength grows one rep at a time.", q2: "Every squat builds a stronger foundation.", q3: "Miles don't lie — you earned this one.", q4: "Small steps every day lead to big changes.", q5: "One step at a time is still progress.", q6: "Small steps every day lead to big changes.", q7: "A quiet mind carries the loudest strength.", q8: "Flexibility today, resilience tomorrow.", q9: "You fueled the body that carries you.", q10: "Rest is where the real gains happen.", q11: "Energy in motion stays in motion.", q12: "A strong core holds everything else together.", q13: "The pen remembers what the mind forgets.", q14: "Good fuel, good day.", q15: "Stillness can be the hardest work of all.", q16: "Every mile ridden is a mile earned.", q17: "Rhythm builds more than just your legs.", q18: "Discomfort today, discipline for life.", q19: "Progress, not perfection.", q20: "What you cook is what you become.", q21: "Breathe in control, breathe out doubt.", q22: "One step at a time is still progress.", q23: "Balance is built one side at a time.", q24: "Tonight's rest is tomorrow's edge.", q25: "You didn't come this far to only come this far." };
+const QUEST_QUOTE = { q1: "Strength grows one rep at a time.", q2: "Every squat builds a stronger foundation.", q3: "Miles don't lie — you earned this one.", q4: "Small steps every day lead to big changes.", q5: "One step at a time is still progress.", q6: "Small steps every day lead to big changes.", q7: "A quiet mind carries the loudest strength.", q8: "Flexibility today, resilience tomorrow.", q9: "You fueled the body that carries you.", q10: "Rest is where the real gains happen.", q11: "Energy in motion stays in motion.", q12: "A strong core holds everything else together.", q13: "The pen remembers what the mind forgets.", q14: "Good fuel, good day.", q15: "Stillness can be the hardest work of all.", q16: "Every mile ridden is a mile earned.", q17: "Rhythm builds more than just your legs.", q18: "Discomfort today, discipline for life.", q19: "Progress, not perfection.", q20: "What you cook is what you become.", q21: "Breathe in control, breathe out doubt.", q22: "One step at a time is still progress.", q23: "Balance is built one side at a time.", q24: "Tonight's rest is tomorrow's edge.", q25: "You didn't come this far to only come this far.", q32: "Move better, not just more.", q33: "A walk can be a reset button.", q34: "Take the stairs and earn the burn.", q35: "Find your rhythm and keep it rolling.", q36: "Steady is a skill.", q37: "Strong feet support strong movement.", q38: "Step outside and catch some daylight.", q39: "Protect your attention for a few quiet minutes.", q40: "Inhale four, hold four, exhale four, hold four." };
 
 // flat icon tile, one color one glyph, no gradient/gloss nonsense
 const QuestIconBadge = React.memo(function QuestIconBadge({ questId, size = 88, c }) {
@@ -1622,19 +1866,10 @@ const steps = [
 { Icon: Sparkles, title: 'Level up and climb the leaderboard', body: 'Earn XP for every quest, build a daily streak, and see how you rank against everyone else.' },
 { Icon: Camera, title: 'Add a profile photo anytime', body: "Once you're signed in, open Account → tap your avatar → choose a photo. It syncs to your account automatically." },
 ];
-const updates = [
-{ Icon: Sparkles, title: 'Expo glass UI', body: 'A cleaner, deeper glass treatment with blur, highlights, reflections, and smoother depth across the app.' },
-{ Icon: CircleDot, title: 'Thinking orbs', body: 'New animated thinking orbs make AI processing and verification states feel alive without blocking the experience.' },
-{ Icon: ShieldCheck, title: 'AI camera upgrade', body: 'The body skeleton now stays visible on every camera challenge, with smoother tracking and clearer verification feedback.' },
-{ Icon: Activity, title: 'Smarter exercise form detection', body: 'AI now checks your actual exercise posture, movement, and range of motion before counting a rep, making fake or incorrect movements much harder to count.' },
-{ Icon: Camera, title: 'Camera controls', body: 'The camera flow and cancel behavior were cleaned up so leaving a challenge is more reliable.' },
-{ Icon: Timer, title: '24-hour quests', body: 'The daily countdown and automatic 24-hour refresh are back, with the next reset always visible.' },
-{ Icon: ListChecks, title: 'Cleaner navigation', body: 'The leaderboard is now its own page and zero-XP players stay out of the rankings.' },
-{ Icon: UserCog, title: 'Account + settings', body: 'Your account and settings options stay together in one place, with the previous controls preserved.' },
-];
+const updates = UPDATE_LOG[0].items.slice(0, 4);
 return (
-<div className="fixed inset-0 z-[100] flex flex-col sq-anim-in" style={{ background: c.bg }}>
-<div className="flex-1 sq-scroll overflow-y-auto px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 32px)', paddingBottom: 24 }}>
+<div className="fixed inset-0 z-[100] flex flex-col sq-anim-in sq-fit-screen" style={{ background: c.bg }}>
+<div className="flex-1 sq-scroll overflow-hidden px-6" style={{ paddingTop: 'max(env(safe-area-inset-top), 32px)', paddingBottom: 24 }}>
 <div className="text-center mb-7" style={{ paddingTop: 10 }}>
 <div style={{ width: 76, height: 76, borderRadius: 30, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px', boxShadow: `0 18px 45px ${c.blue}33` }}>
 <BrandLogo size={40} />
@@ -1677,7 +1912,7 @@ className="sq-anim-in">
 </div>
 </div>
 
-<div className="flex flex-col gap-3">
+<div className="flex flex-col gap-2.5 sq-welcome-steps">
 {steps.map(({ Icon, title, body }, i) => (
 <div key={title} className="sq-anim-in" style={{ ...glassStyle(c), borderRadius: 20, padding: 16, display: 'flex', gap: 14, animationDelay: `${(showUpdates ? 0.18 : 0) + i * 0.06}s` }}>
 <div className="sq-icon-fff" style={{ width: 40, height: 40, borderRadius: 14, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -1848,7 +2083,7 @@ return idx === -1 ? null : idx + 1;
 const RANK_COLOR = { 1: c.yellow, 2: c.gray, 3: c.orange };
 
 return (
-<div className="sq-anim-in relative z-10 min-h-screen flex flex-col">
+<div className="sq-anim-in relative z-10 sq-fit-screen flex flex-col">
 <div className="flex items-center px-4 pb-3" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
 <button onClick={onBack} className="flex items-center gap-1" style={{ color: c.blue }}>
 <BackChevron color={c.blue} />
@@ -1886,7 +2121,7 @@ return (
 </div>
 )}
 
-<div className="flex-1 sq-scroll overflow-y-auto px-4 pb-10">
+<div className="flex-1 sq-scroll overflow-hidden px-4 pb-10">
 {status === 'loading' && (
 <div className="flex flex-col items-center justify-center py-16 gap-3">
 <div style={{ width: 26, height: 26, border: `2.5px solid ${c.fill}`, borderTopColor: c.blue, borderRadius: '50%' }} className="animate-spin" />
@@ -1959,38 +2194,38 @@ return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: s
 }
 
 function HistoryScreen({ history, dark, onToggleTheme, c }) {
-const groups = useMemo(() => {
-const sorted = [...history].sort((a, b) => b.ts - a.ts);
-const out = [];
-let current = null;
-for (const entry of sorted) {
-const label = groupLabelForDate(entry.ts);
-if (!current || current.label !== label) { current = { label, items: [] }; out.push(current); }
-current.items.push(entry);
-}
-return out;
-}, [history]);
-
+const sortedHistory = useMemo(() => [...history].sort((a, b) => b.ts - a.ts), [history]);
 const totalXp = useMemo(() => history.reduce((sum, e) => sum + (e.xp || 0), 0), [history]);
+const PAGE_SIZE = 6;
+const [page, setPage] = useState(0);
+const pageCount = Math.max(1, Math.ceil(sortedHistory.length / PAGE_SIZE));
+useEffect(() => { setPage(p => Math.min(p, pageCount - 1)); }, [pageCount]);
+const pageEntries = sortedHistory.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+const groups = useMemo(() => {
+  const out = [];
+  let current = null;
+  for (const entry of pageEntries) {
+    const label = groupLabelForDate(entry.ts);
+    if (!current || current.label !== label) { current = { label, items: [] }; out.push(current); }
+    current.items.push(entry);
+  }
+  return out;
+}, [pageEntries]);
 
 return (
-<div className="relative z-10 flex flex-col flex-1 sq-anim-in">
+<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-fit-screen">
 <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
 <div className="flex items-center justify-between">
 <h1 className="sq-large-title" style={{ fontSize: 30, fontWeight: 700, color: c.label }}>History</h1>
-<button onClick={onToggleTheme} aria-label="Toggle theme"
-style={{ ...glassStyle(c), width: 32, height: 32, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
-<span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
-</button>
 </div>
 <p style={{ fontSize: 13, color: c.labelSecondary, marginTop: 2 }}>Every quest you've ever completed</p>
 </div>
 
-<div className="flex-1 sq-scroll overflow-y-auto px-4 pt-2 space-y-5" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
+<div className="flex-1 sq-scroll overflow-hidden px-4 pt-2 space-y-5" style={{ paddingBottom: 'calc(94px + env(safe-area-inset-bottom))' }}>
 <div className="grid grid-cols-3 gap-2.5 sq-anim-in">
 <StatChip label="Completed" value={history.length} c={c} />
 <StatChip label="Total XP" value={totalXp.toLocaleString()} c={c} />
-<StatChip label="Days logged" value={groups.length} c={c} />
+<StatChip label="Days logged" value={new Set(history.map(e => groupLabelForDate(e.ts))).size} c={c} />
 </div>
 
 {groups.length === 0 ? (
@@ -2009,11 +2244,11 @@ groups.map(group => (
 {group.items.map((entry, i) => (
 <div key={entry.id}>
 {i > 0 && <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />}
-<div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 14px' }}>
+<div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', minHeight: 54 }}>
 <QuestRowIcon questId={entry.questId} c={c} />
 <div style={{ flex: 1, minWidth: 0 }}>
-<p style={{ fontSize: 15, fontWeight: 500, color: c.label, lineHeight: 1.3 }}>{entry.text}</p>
-<p className="sq-mono" style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>
+<p style={{ fontSize: 14, fontWeight: 500, color: c.label, lineHeight: 1.28, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{entry.text}</p>
+<p className="sq-mono" style={{ fontSize: 10.5, color: c.labelTertiary, marginTop: 2 }}>
 {new Date(entry.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
 {entry.leveledUp ? ' · Level up' : ''}
 </p>
@@ -2027,6 +2262,14 @@ groups.map(group => (
 ))
 )}
 </div>
+
+{sortedHistory.length > PAGE_SIZE && (
+<div className="sq-history-pager" style={{ position: 'fixed', left: '50%', bottom: 'max(env(safe-area-inset-bottom), 92px)', transform: 'translateX(-50%)', zIndex: 42, display: 'flex', alignItems: 'center', gap: 8, padding: '6px', borderRadius: 999, ...glassStyle(c, true) }}>
+<button type="button" disabled={page <= 0} onClick={() => { haptic(4); setPage(p => Math.max(0, p - 1)); }} style={{ minWidth: 72, padding: '8px 12px', borderRadius: 999, background: page <= 0 ? 'transparent' : c.fill, color: page <= 0 ? c.labelTertiary : c.label, fontSize: 11.5, fontWeight: 700 }}>Newer</button>
+<span className="sq-mono" style={{ minWidth: 54, textAlign: 'center', fontSize: 10.5, color: c.labelSecondary }}>{page + 1} / {pageCount}</span>
+<button type="button" disabled={page >= pageCount - 1} onClick={() => { haptic(4); setPage(p => Math.min(pageCount - 1, p + 1)); }} style={{ minWidth: 72, padding: '8px 12px', borderRadius: 999, background: page >= pageCount - 1 ? 'transparent' : c.fill, color: page >= pageCount - 1 ? c.labelTertiary : c.label, fontSize: 11.5, fontWeight: 700 }}>Older</button>
+</div>
+)}
 </div>
 );
 }
@@ -2040,22 +2283,54 @@ onPhotoFile, photoUploading, photoError, onDismissPhotoError,
 onUsernameChanged, onLogout, onDeleteAccount,
 hapticsOn, onToggleHaptics,
 dailyReminderOn, onToggleDailyReminder, notificationsSupported,
-onExportData, onReplayTutorial, onInstallApp, installSupported = false, isSaqoom = false, c,
+onExportData, onReplayTutorial, onInstallApp, installSupported = false, isSaqoom = false,
+devMode = false, onDevCompleteAll, onDevResetDay, onDevAddXp, c,
 }) {
 // null | 'username' | 'password' | 'delete' — only one inline editor
 // open at a time, inside the Account card.
 const [editing, setEditing] = useState(null);
 const [showUpdates, setShowUpdates] = useState(false);
-const updates = [
-  { Icon: Sparkles, title: 'Expo glass UI', body: 'A cleaner, deeper glass treatment with blur, highlights, reflections, and smoother depth across the app.' },
-  { Icon: CircleDot, title: 'Thinking orbs', body: 'New animated thinking orbs make AI processing and verification states feel alive without blocking the experience.' },
-  { Icon: ShieldCheck, title: 'AI camera upgrade', body: 'The body skeleton now stays visible on every camera challenge, with smoother tracking and clearer verification feedback.' },
-{ Icon: Activity, title: 'Smarter exercise form detection', body: 'AI now checks your actual exercise posture, movement, and range of motion before counting a rep, making fake or incorrect movements much harder to count.' },
-  { Icon: Camera, title: 'Camera controls', body: 'The camera flow and cancel behavior were cleaned up so leaving a challenge is more reliable.' },
-  { Icon: Timer, title: '24-hour quests', body: 'The daily countdown and automatic 24-hour refresh are back, with the next reset always visible.' },
-  { Icon: ListChecks, title: 'Cleaner navigation', body: 'The leaderboard is now its own page and zero-XP players stay out of the rankings.' },
-  { Icon: UserCog, title: 'Account + settings', body: 'Your account and settings options stay together in one place, with the previous controls preserved.' },
-];
+const [showChallengeLibrary, setShowChallengeLibrary] = useState(false);
+const [settingsPage, setSettingsPage] = useState(1);
+const [settingsSwipeDirection, setSettingsSwipeDirection] = useState('next');
+const settingsTouchRef = useRef({ x: 0, y: 0 });
+const [challengeLibraryPage, setChallengeLibraryPage] = useState(0);
+const [settingsUpdatesPage, setSettingsUpdatesPage] = useState(0);
+const SETTINGS_CHALLENGES_PER_PAGE = 8;
+const SETTINGS_UPDATES_PER_PAGE = 6;
+const challengePageCount = Math.max(1, Math.ceil(QUEST_POOL.length / SETTINGS_CHALLENGES_PER_PAGE));
+const flatUpdateItems = UPDATE_LOG.flatMap(release => release.items.map(item => ({ ...item, releaseDate: release.date, current: release.current })));
+const settingsUpdatePageCount = Math.max(1, Math.ceil(flatUpdateItems.length / SETTINGS_UPDATES_PER_PAGE));
+const visibleChallenges = QUEST_POOL.slice(challengeLibraryPage * SETTINGS_CHALLENGES_PER_PAGE, challengeLibraryPage * SETTINGS_CHALLENGES_PER_PAGE + SETTINGS_CHALLENGES_PER_PAGE);
+const visibleSettingsUpdates = flatUpdateItems.slice(settingsUpdatesPage * SETTINGS_UPDATES_PER_PAGE, settingsUpdatesPage * SETTINGS_UPDATES_PER_PAGE + SETTINGS_UPDATES_PER_PAGE);
+useEffect(() => { setChallengeLibraryPage(p => Math.min(p, challengePageCount - 1)); }, [challengePageCount]);
+useEffect(() => { setSettingsUpdatesPage(p => Math.min(p, settingsUpdatePageCount - 1)); }, [settingsUpdatePageCount]);
+
+const switchSettingsPage = useCallback((nextPage, direction = 'next') => {
+  const clamped = Math.max(1, Math.min(4, nextPage));
+  if (clamped === settingsPage) return;
+  haptic(4);
+  setSettingsSwipeDirection(direction);
+  setSettingsPage(clamped);
+}, [settingsPage]);
+
+const handleSettingsTouchStart = useCallback((event) => {
+  const touch = event.touches?.[0];
+  if (!touch) return;
+  settingsTouchRef.current = { x: touch.clientX, y: touch.clientY };
+}, []);
+
+const handleSettingsTouchEnd = useCallback((event) => {
+  const touch = event.changedTouches?.[0];
+  if (!touch) return;
+  const { x, y } = settingsTouchRef.current;
+  const dx = touch.clientX - x;
+  const dy = touch.clientY - y;
+  const horizontal = Math.abs(dx) >= 45 && Math.abs(dx) > Math.abs(dy) * 1.2;
+  if (!horizontal) return;
+  if (dx < 0 && settingsPage < 4) switchSettingsPage(settingsPage + 1, 'next');
+  if (dx > 0 && settingsPage > 1) switchSettingsPage(settingsPage - 1, 'prev');
+}, [settingsPage, switchSettingsPage]);
 
 const [usernameInput, setUsernameInput] = useState(username || '');
 const [usernameReauthPassword, setUsernameReauthPassword] = useState('');
@@ -2086,6 +2361,7 @@ if (which === 'delete') setDeleteError(null);
 const closeEditor = () => setEditing(null);
 
 const handleSaveUsername = async () => {
+if (devMode) { setUsernameError('Account editing is disabled in the local Dev build.'); return; }
 const validationError = validateUsername(usernameInput);
 if (validationError) { setUsernameError(validationError); return; }
 setUsernameSaving(true); setUsernameError(null);
@@ -2111,6 +2387,7 @@ setUsernameSaving(false);
 };
 
 const handleSavePassword = async () => {
+if (devMode) { setPasswordError('Password changes are disabled in the local Dev build.'); return; }
 if (!currentPasswordInput) { setPasswordError('Enter your current password.'); return; }
 const validationError = validatePassword(newPasswordInput);
 if (validationError) { setPasswordError(validationError); return; }
@@ -2134,6 +2411,7 @@ setPasswordSaving(false);
 };
 
 const handleDeleteConfirm = async () => {
+if (devMode) { setDeleteError('Account deletion is disabled in the local Dev build.'); return; }
 setDeleting(true); setDeleteError(null);
 const res = await onDeleteAccount();
 if (res && !res.ok) { setDeleting(false); setDeleteError(res.error); }
@@ -2143,18 +2421,24 @@ if (res && !res.ok) { setDeleting(false); setDeleteError(res.error); }
 const usesPassword = authProviderLabel === 'password';
 
 return (
-<div className="relative z-10 flex flex-col flex-1 sq-anim-in">
-<div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
+<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-fit-screen">
+<div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 12px)' }}>
 <div className="flex items-center justify-between">
-<h1 className="sq-large-title" style={{ fontSize: 30, fontWeight: 700, color: c.label }}>Account & Settings</h1>
-<button onClick={onToggleTheme} aria-label="Toggle theme"
-style={{ ...glassStyle(c), width: 32, height: 32, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
-<span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
-</button>
+<h1 className="sq-large-title" style={{ fontSize: 28, fontWeight: 700, color: c.label }}>Account & Settings</h1>
+</div>
+<div className="sq-settings-pager" style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 5, padding: 4, borderRadius: 14, background: c.fill }}>
+{['Account','Alerts','App','Library'].map((label, i) => { const p = i + 1; const active = settingsPage === p; return <button key={label} type="button" onClick={() => switchSettingsPage(p, p > settingsPage ? 'next' : 'prev')} style={{ minWidth: 0, padding: '7px 4px', borderRadius: 10, background: active ? c.bgElevated : 'transparent', color: active ? c.label : c.labelTertiary, fontSize: 10.5, fontWeight: active ? 800 : 600 }}>{label}</button>; })}
 </div>
 </div>
 
-<div className="flex-1 sq-scroll overflow-y-auto px-4 pt-3 space-y-6" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
+<div
+className={`flex-1 sq-scroll overflow-hidden px-4 pt-2 space-y-4 sq-settings-shell ${settingsSwipeDirection === 'next' ? 'sq-settings-swipe-next' : 'sq-settings-swipe-prev'}`}
+key={settingsPage}
+onTouchStart={handleSettingsTouchStart}
+onTouchEnd={handleSettingsTouchEnd}
+data-page={settingsPage}
+style={{ paddingBottom: 'calc(94px + env(safe-area-inset-bottom))' }}
+>
 {/* Profile */}
 <div style={{ ...glassStyle(c), borderRadius: 20, padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
 <label style={{ position: 'relative', cursor: 'pointer', display: 'inline-block' }}>
@@ -2178,7 +2462,7 @@ onChange={e => { const f = e.target.files?.[0]; if (f) onPhotoFile(f); e.target.
 </div>
 
 {/* Account */}
-<div>
+<div className="sq-settings-section sq-settings-page-1">
 <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Account</p>
 <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
 
@@ -2322,7 +2606,7 @@ style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 
 </div>
 
 {isSaqoom && (
-  <div>
+  <div className="sq-settings-section sq-settings-page-2">
     <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Special</p>
     <button type="button" aria-label="Love letter" onClick={() => setSpecialMessage(prev => !prev)} style={{ ...glassStyle(c), width: '100%', borderRadius: 20, border: `1px solid ${c.glassBorder}`, padding: 14, display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', cursor: 'pointer' }}>
       <div style={{ width: 42, height: 42, borderRadius: 14, background: 'rgba(255,45,85,0.14)', color: c.pink, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -2343,7 +2627,7 @@ style={{ flex: 1, padding: '11px', borderRadius: 999, fontSize: 13, fontWeight: 
 )}
 
 {/* Notifications */}
-<div>
+<div className="sq-settings-section sq-settings-page-2">
 <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Notifications</p>
 <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
 <div style={rowStyle}>
@@ -2375,28 +2659,22 @@ style={{ width: 46, height: 27, borderRadius: 999, background: hapticsOn ? c.blu
 <span style={{ position: 'absolute', top: 2, left: hapticsOn ? 21 : 2, width: 23, height: 23, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)', transition: 'left 0.22s cubic-bezier(0.34,1.56,0.64,1)' }} />
 </button>
 </div>
-</div>
-</div>
-
-{/* Appearance */}
-<div>
-<p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Appearance</p>
-<div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
-<div style={rowStyle}>
-<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.indigo, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-{dark ? <Moon size={15} strokeWidth={1.9} /> : <Sun size={15} strokeWidth={1.9} />}
-</div>
-<span style={{ flex: 1, fontSize: 15, fontWeight: 500, color: c.label }}>Dark mode</span>
-<button onClick={onToggleTheme} aria-label="Toggle dark mode"
-style={{ width: 46, height: 27, borderRadius: 999, background: dark ? c.blue : c.fill, position: 'relative', flexShrink: 0, transition: 'background-color 0.25s ease' }}>
-<span style={{ position: 'absolute', top: 2, left: dark ? 21 : 2, width: 23, height: 23, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)', transition: 'left 0.22s cubic-bezier(0.34,1.56,0.64,1)' }} />
+<div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+<button type="button" onClick={() => { haptic([10, 25, 10]); }} style={rowStyle}>
+  <div style={{ width: 30, height: 30, borderRadius: 10, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+    <Zap size={14} strokeWidth={1.9} />
+  </div>
+  <div style={{ flex: 1, minWidth: 0 }}>
+    <p style={{ fontSize: 15, fontWeight: 500, color: c.label }}>Test haptic feedback</p>
+    <p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>{hapticSupported() ? 'Tap to send a sample vibration' : 'This browser does not expose vibration controls'}</p>
+  </div>
+  <ChevronRight size={17} color={c.labelTertiary} />
 </button>
-</div>
 </div>
 </div>
 
 {/* Privacy & data */}
-<div>
+<div className="sq-settings-section sq-settings-page-3">
 <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Privacy & data</p>
 <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
 <button onClick={onExportData} style={rowStyle}>
@@ -2413,7 +2691,7 @@ Downloads your level, XP, streak, and full quest history as a JSON file.
 </div>
 
 {/* App tutorial + install */}
-<div>
+<div className="sq-settings-section sq-settings-page-3">
 <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>App</p>
 <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
 <button type="button" onClick={() => { haptic(6); onReplayTutorial?.(); }} style={rowStyle}>
@@ -2437,8 +2715,63 @@ Downloads your level, XP, streak, and full quest history as a JSON file.
 </div>
 </div>
 
+{/* Challenge library */}
+<div className="sq-settings-section sq-settings-page-4">
+<p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Challenges</p>
+<div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+<button type="button" onClick={() => { haptic(6); setShowChallengeLibrary(v => !v); }} aria-expanded={showChallengeLibrary} style={rowStyle}>
+<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.orange, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+<ListChecks size={14} strokeWidth={1.9} />
+</div>
+<div style={{ flex: 1, minWidth: 0 }}>
+<p style={{ fontSize: 15, fontWeight: 500, color: c.label }}>All challenges</p>
+<p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>40 challenges • reps, seconds, minutes & check-ins</p>
+</div>
+<ChevronRight size={17} color={c.labelTertiary} style={{ transform: showChallengeLibrary ? 'rotate(90deg)' : 'none', transition: 'transform 220ms ease', flexShrink: 0 }} />
+</button>
+<div style={{ overflow: 'hidden', maxHeight: showChallengeLibrary ? 360 : 0, opacity: showChallengeLibrary ? 1 : 0, transition: 'max-height 500ms cubic-bezier(.22,1,.36,1), opacity 220ms ease' }}>
+<div style={{ borderTop: `1px solid ${c.separator}`, padding: '6px 0 10px' }}>
+{visibleChallenges.map((challenge, i) => {
+  const theme = QUEST_THEME[challenge.id] || { icon: 'target', cat: 'blue' };
+  const Icon = QuestSvg[theme.icon] || QuestSvg.target;
+  const accent = c[theme.cat] || c.blue;
+  const typeLabel = challenge.reps
+    ? 'Rep challenge • target varies daily'
+    : challenge.durationOptions?.length
+      ? `Timed challenge • ${challenge.durationDisplay === 'minutes' ? 'minutes' : 'seconds'}`
+      : 'Check-in challenge';
+  const durationHint = challenge.durationOptions?.length
+    ? `${formatQuestDuration(Math.min(...challenge.durationOptions), challenge.durationDisplay)} – ${formatQuestDuration(Math.max(...challenge.durationOptions), challenge.durationDisplay)}`
+    : null;
+    return (
+    <div key={challenge.id} style={{ display: 'flex', gap: 11, padding: '10px 14px', alignItems: 'flex-start' }}>
+      <div style={{ width: 36, height: 36, borderRadius: 12, background: accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <Icon width={17} height={17} strokeWidth={1.8} color="#fff" />
+      </div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <p style={{ fontSize: 13, fontWeight: 700, color: c.label, lineHeight: 1.28 }}>{challenge.reps ? challenge.textTemplate.replace('{n}', '').replace(/\s+/g, ' ').trim() : challenge.durationOptions?.length ? challenge.textTemplate.replace('{n}', durationHint || '').trim() : challenge.textTemplate}</p>
+          <span style={{ fontSize: 9.5, fontWeight: 700, color: accent, background: `${accent}18`, borderRadius: 999, padding: '3px 6px' }}>{typeLabel}</span>
+        </div>
+        <p style={{ fontSize: 11.2, color: c.labelSecondary, marginTop: 3, lineHeight: 1.42 }}>{QUEST_ABOUT[challenge.id] || 'Stay consistent and complete the challenge.'}</p>
+        {durationHint && <p style={{ fontSize: 10.5, color: c.labelTertiary, marginTop: 3 }}>{durationHint}</p>}
+      </div>
+    </div>
+  );
+})}
+{showChallengeLibrary && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '6px 10px 2px' }}>
+<button type="button" disabled={challengeLibraryPage <= 0} onClick={() => { haptic(4); setChallengeLibraryPage(p => Math.max(0, p - 1)); }} style={{ flex: 1, padding: '7px 10px', borderRadius: 999, background: challengeLibraryPage <= 0 ? 'transparent' : c.fill, color: challengeLibraryPage <= 0 ? c.labelTertiary : c.label, fontSize: 10.5, fontWeight: 700 }}>Previous</button>
+<span className="sq-mono" style={{ minWidth: 52, textAlign: 'center', fontSize: 9.5, color: c.labelSecondary }}>{challengeLibraryPage + 1} / {challengePageCount}</span>
+<button type="button" disabled={challengeLibraryPage >= challengePageCount - 1} onClick={() => { haptic(4); setChallengeLibraryPage(p => Math.min(challengePageCount - 1, p + 1)); }} style={{ flex: 1, padding: '7px 10px', borderRadius: 999, background: challengeLibraryPage >= challengePageCount - 1 ? 'transparent' : c.fill, color: challengeLibraryPage >= challengePageCount - 1 ? c.labelTertiary : c.label, fontSize: 10.5, fontWeight: 700 }}>Next</button>
+</div>}
+</div>
+</div>
+</div>
+<p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 8, paddingLeft: 2, lineHeight: 1.4 }}>Browse every QuestDaily challenge and see what each one is designed to do.</p>
+</div>
+
 {/* Updates */}
-<div>
+<div className="sq-settings-section sq-settings-page-4">
 <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Updates</p>
 <div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
 <button onClick={() => { haptic(6); setShowUpdates(v => !v); }} aria-expanded={showUpdates} style={rowStyle}>
@@ -2449,27 +2782,67 @@ Downloads your level, XP, streak, and full quest history as a JSON file.
 <span style={{ fontSize: 9, fontWeight: 800, color: '#fff', background: c.blue, borderRadius: 999, padding: '3px 7px', letterSpacing: 0.35 }}>UPDATE</span>
 <ChevronRight size={17} color={c.labelTertiary} style={{ transform: showUpdates ? 'rotate(90deg)' : 'none', transition: 'transform 220ms ease', flexShrink: 0 }} />
 </button>
-<div style={{ overflow: 'hidden', maxHeight: showUpdates ? 900 : 0, opacity: showUpdates ? 1 : 0, transition: 'max-height 420ms cubic-bezier(.22,1,.36,1), opacity 220ms ease' }}>
-<div style={{ borderTop: `1px solid ${c.separator}`, padding: '6px 0' }}>
-{updates.map(({ Icon, title, body }, i) => (
-<div key={title} className="sq-anim-in" style={{ display: 'flex', gap: 12, padding: '11px 14px', animationDelay: `${i * 0.035}s` }}>
-<div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-<Icon size={14} strokeWidth={1.9} />
-</div>
-<div style={{ minWidth: 0 }}>
-<p style={{ fontSize: 13, fontWeight: 700, color: c.label, lineHeight: 1.3 }}>{title}</p>
-<p style={{ fontSize: 11.5, color: c.labelSecondary, marginTop: 3, lineHeight: 1.45 }}>{body}</p>
-</div>
-</div>
+<div style={{ overflow: 'hidden', maxHeight: showUpdates ? 430 : 0, opacity: showUpdates ? 1 : 0, transition: 'max-height 500ms cubic-bezier(.22,1,.36,1), opacity 220ms ease' }}>
+<div style={{ borderTop: `1px solid ${c.separator}`, padding: '10px 0 4px' }}>
+{visibleSettingsUpdates.map(({ Icon, title, body, releaseDate, current }, i) => (
+  <div key={`${releaseDate}-${title}-${i}`} className="sq-anim-in" style={{ display: 'flex', gap: 10, padding: '8px 12px', animationDelay: `${i * 0.03}s` }}>
+    <div className="sq-icon-fff" style={{ width: 28, height: 28, borderRadius: 9, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <Icon size={13} strokeWidth={1.9} />
+    </div>
+    <div style={{ minWidth: 0, flex: 1 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <p style={{ fontSize: 11.5, fontWeight: 700, color: c.label, lineHeight: 1.25 }}>{title}</p>
+        <span className="sq-mono" style={{ fontSize: 7.5, fontWeight: 800, color: c.blue, flexShrink: 0 }}>{releaseDate}{current ? ' · LATEST' : ''}</span>
+      </div>
+      <p style={{ fontSize: 10, color: c.labelSecondary, marginTop: 2, lineHeight: 1.3 }}>{body}</p>
+    </div>
+  </div>
 ))}
+{showUpdates && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '5px 10px 4px' }}>
+<button type="button" disabled={settingsUpdatesPage <= 0} onClick={() => { haptic(4); setSettingsUpdatesPage(p => Math.max(0, p - 1)); }} style={{ flex: 1, padding: '6px 9px', borderRadius: 999, background: settingsUpdatesPage <= 0 ? 'transparent' : c.fill, color: settingsUpdatesPage <= 0 ? c.labelTertiary : c.label, fontSize: 10, fontWeight: 700 }}>Previous</button>
+<span className="sq-mono" style={{ minWidth: 52, textAlign: 'center', fontSize: 9, color: c.labelSecondary }}>{settingsUpdatesPage + 1} / {settingsUpdatePageCount}</span>
+<button type="button" disabled={settingsUpdatesPage >= settingsUpdatePageCount - 1} onClick={() => { haptic(4); setSettingsUpdatesPage(p => Math.min(settingsUpdatePageCount - 1, p + 1)); }} style={{ flex: 1, padding: '6px 9px', borderRadius: 999, background: settingsUpdatesPage >= settingsUpdatePageCount - 1 ? 'transparent' : c.fill, color: settingsUpdatesPage >= settingsUpdatePageCount - 1 ? c.labelTertiary : c.label, fontSize: 10, fontWeight: 700 }}>Next</button>
+</div>}
 </div>
 </div>
 </div>
-<p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 8, paddingLeft: 2, lineHeight: 1.4 }}>See the latest QuestDaily features and improvements anytime from here.</p>
+<p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 8, paddingLeft: 2, lineHeight: 1.4 }}>See the latest QuestDaily features plus previous releases with their dates anytime from here.</p>
 </div>
 
+{/* Developer tools */}
+{devMode && (
+<div className="sq-settings-section sq-settings-page-4">
+<p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>Developer mode</p>
+<div style={{ ...glassStyle(c), borderRadius: 20, overflow: 'hidden' }}>
+  <div style={{ padding: '12px 14px', background: c.fill }}>
+    <p style={{ fontSize: 13, fontWeight: 800, color: c.green }}>LOCAL TEST BUILD</p>
+    <p style={{ fontSize: 11.5, lineHeight: 1.45, color: c.labelSecondary, marginTop: 3 }}>No account, no Firebase progress, and no camera proof required for test controls.</p>
+  </div>
+  <div style={{ borderTop: `1px solid ${c.separator}` }} />
+  <button type="button" onClick={() => { haptic([12, 24, 12]); onDevCompleteAll?.(); }} style={rowStyle}>
+    <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.green, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Check size={14} strokeWidth={2} /></div>
+    <div style={{ flex: 1 }}><p style={{ fontSize: 15, fontWeight: 500, color: c.label }}>Complete all today's quests</p><p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>Finish the current daily set instantly</p></div>
+    <ChevronRight size={17} color={c.labelTertiary} />
+  </button>
+  <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+  <button type="button" onClick={() => { haptic(10); onDevAddXp?.(100); }} style={rowStyle}>
+    <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Zap size={14} strokeWidth={1.9} /></div>
+    <div style={{ flex: 1 }}><p style={{ fontSize: 15, fontWeight: 500, color: c.label }}>Add 100 XP</p><p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>Stress-test leveling and completion animation</p></div>
+    <ChevronRight size={17} color={c.labelTertiary} />
+  </button>
+  <div style={{ marginLeft: 58, borderTop: `1px solid ${c.separator}` }} />
+  <button type="button" onClick={() => { haptic([8, 20, 8]); onDevResetDay?.(); }} style={rowStyle}>
+    <div className="sq-icon-fff" style={{ width: 30, height: 30, borderRadius: 10, background: c.orange, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><RotateCcw size={14} strokeWidth={1.9} /></div>
+    <div style={{ flex: 1 }}><p style={{ fontSize: 15, fontWeight: 500, color: c.label }}>Reset today's quests</p><p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 2 }}>Generate the same day set with progress cleared</p></div>
+    <ChevronRight size={17} color={c.labelTertiary} />
+  </button>
+</div>
+<p style={{ fontSize: 11, color: c.labelTertiary, marginTop: 8, paddingLeft: 2, lineHeight: 1.4 }}>Developer tools are only present in the separate Dev build.</p>
+</div>
+)}
+
 {/* About */}
-<div>
+<div className="sq-settings-section sq-settings-page-4">
 <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>About</p>
 <div style={{ ...glassStyle(c), borderRadius: 20, padding: '14px 16px' }}>
 <p style={{ fontSize: 12.5, color: c.labelSecondary, lineHeight: 1.5 }}>
@@ -2610,7 +2983,7 @@ const platformName = os === 'ios' ? 'iPhone / iPad' : os === 'android' ? (browse
 
 return (
 <div className="fixed inset-0 z-[110] flex flex-col sq-anim-in" style={{ background: c.bg }}>
-  <div className="flex-1 flex flex-col justify-center px-6 overflow-y-auto" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
+  <div className="flex-1 flex flex-col justify-center px-6 overflow-hidden" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
     <div style={{ maxWidth: 430, width: '100%', margin: '0 auto' }}>
       <div className="text-center" style={{ marginBottom: isHomeStep ? 18 : 24 }}>
         <div style={{ width: 82, height: 82, borderRadius: 28, background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px', boxShadow: `0 18px 45px ${c.blue}2e` }}>
@@ -2772,8 +3145,8 @@ const current = platformSteps[Math.min(step, platformSteps.length - 1)];
 const rowStyle = { width: '100%', padding: '16px 18px', borderRadius: 18, fontSize: 16, fontWeight: 500, textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: c.bgSecondary, color: c.label };
 
 return (
-<div className="fixed inset-0 z-[105] flex flex-col sq-anim-in" style={{ background: c.bg }}>
-<div className="flex-1 flex flex-col justify-center px-6 overflow-y-auto" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
+<div className="fixed inset-0 z-[105] flex flex-col sq-anim-in sq-fit-screen" style={{ background: c.bg }}>
+<div className="flex-1 flex flex-col justify-center px-6 overflow-hidden" style={{ paddingTop: 'max(env(safe-area-inset-top), 24px)', paddingBottom: 24 }}>
 <div style={{ width: '100%', maxWidth: 430, margin: '0 auto' }}>
 {installed ? (
   <div className="text-center">
@@ -2870,22 +3243,20 @@ return (
 }
 
 // quest detail
-function QuestDetailScreen({ quest, dark, onToggleTheme, lastReset, onBack, onMarkComplete, c }) {
+function QuestDetailScreen({ quest, dark, onToggleTheme, lastReset, onBack, onMarkComplete, onSkip, onDevComplete, devMode = false, c }) {
 const about = QUEST_ABOUT[quest.id] || 'Stay consistent — every quest you complete adds up to real progress.';
 const theme = QUEST_THEME[quest.id] || { cat: 'blue' };
 const accent = c[theme.cat];
 
 return (
-<div className="sq-anim-in relative z-10 min-h-screen flex flex-col">
+<div className="sq-anim-in relative z-10 sq-fit-screen flex flex-col">
 <div className="flex items-center justify-between px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
 <button onClick={onBack} className="flex items-center gap-1" style={{ color: c.blue }}>
 <BackChevron color={c.blue} /><span style={{ fontSize: 17 }}>Quests</span>
 </button>
 <div className="flex items-center gap-3">
 <CountdownDisplay lastReset={lastReset} className="sq-mono" style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }} />
-<button onClick={onToggleTheme} style={{ ...glassStyle(c), width: 30, height: 30, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
-<span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
-</button>
+
 </div>
 </div>
 
@@ -2903,10 +3274,90 @@ return (
 </div>
 
 <div className="px-4 pb-8 mt-6">
+{devMode && onDevComplete && (
+  <button type="button" onClick={() => { haptic([8, 20, 8]); onDevComplete(quest.id); }}
+  style={{ ...questButtonStyle(c, accent, 'dev'), marginBottom: 9 }} className="sq-quest-cta">
+  Complete instantly (Dev)
+  </button>
+)}
 <button onClick={onMarkComplete}
-style={{ width: '100%', padding: '15px', borderRadius: 999, fontSize: 16, fontWeight: 600, color: '#fff', background: c.blue }}>
-Start
+style={{ ...questButtonStyle(c, accent, 'primary') }} className="sq-quest-cta">
+{devMode ? 'Open normal verification' : 'Start'}
 </button>
+{onSkip && (
+  <button type="button" onClick={onSkip}
+  style={{ ...questButtonStyle(c, accent, 'secondary'), marginTop: 10 }} className="sq-quest-cta">
+    <Trash2 size={15} strokeWidth={1.8} />
+    Skip quest — no XP
+  </button>
+)}
+</div>
+</div>
+);
+}
+
+function AllQuestsDoneScreen({ dark, onToggleTheme, lastReset, c, completedCount = 0, skippedCount = 0 }) {
+const particles = useMemo(() => Array.from({ length: 16 }, (_, i) => ({
+  dx: `${((i * 43) % 150) - 75}px`,
+  dy: `${-44 - ((i * 29) % 84)}px`,
+  delay: `${(i * 47) % 420}ms`,
+  size: 4 + (i % 4),
+})), []);
+const orbitDots = useMemo(() => Array.from({ length: 8 }, (_, i) => ({ delay: `${i * 110}ms` })), []);
+
+useEffect(() => {
+  haptic([18, 36, 18, 50, 70]);
+}, []);
+
+const headline = skippedCount > 0 ? 'All quests cleared' : 'All quests complete';
+const subline = skippedCount > 0
+  ? `${completedCount} completed • ${skippedCount} skipped • nothing left on today’s list.`
+  : 'You cleared every quest for today. Enjoy the win.';
+
+return (
+<div className="sq-anim-in relative z-10 sq-fit-screen">
+<div className="flex items-center justify-end px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
+<div className="flex items-center gap-3">
+<CountdownDisplay lastReset={lastReset} className="sq-mono" style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }} />
+
+</div>
+</div>
+
+<div className="px-4 pt-5 pb-8 flex flex-col items-center text-center">
+<div className="relative" style={{ width: 178, height: 178, color: c.green }}>
+  <div className="absolute inset-4 rounded-full sq-all-done-pulse" style={{ border: `1.5px solid ${c.green}55`, background: `${c.green}0D` }} />
+  {orbitDots.map((dot, i) => (
+    <span key={i} className="sq-all-done-orbit" style={{ background: c.green, '--od': dot.delay }} />
+  ))}
+  {particles.map((p, i) => (
+    <span key={i} className="sq-all-done-spark" aria-hidden="true" style={{ '--dx': p.dx, '--dy': p.dy, '--sd': p.delay, width: p.size, height: p.size, background: i % 3 === 0 ? c.orange : c.green, marginLeft: -p.size / 2, marginTop: -p.size / 2 }} />
+  ))}
+  <div className="sq-all-done-check sq-icon-fff" style={{ position: 'absolute', left: 43, top: 43, width: 92, height: 92, borderRadius: '50%', background: c.green, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: `0 18px 54px -18px ${c.green}` }}>
+    <CheckIcon size={42} />
+  </div>
+</div>
+
+<div style={{ marginTop: 2 }}>
+  <div className="sq-mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '6px 11px', borderRadius: 999, background: c.fill, color: c.green, fontSize: 10, fontWeight: 800, letterSpacing: .5, textTransform: 'uppercase' }}>
+    <TrophyIcon size={13} /> Daily clear
+  </div>
+  <h2 className="sq-complete-copy" style={{ marginTop: 13, fontSize: 28, fontWeight: 850, color: c.label }}>{headline}</h2>
+  <p style={{ marginTop: 7, fontSize: 14, lineHeight: 1.5, color: c.labelSecondary, maxWidth: 330 }}>{subline}</p>
+</div>
+
+<div className="w-full mt-8" style={{ ...glassStyle(c), borderRadius: 22, padding: '15px 16px' }}>
+  <div className="flex items-center justify-between">
+    <div className="flex items-center gap-2">
+      <Check size={16} color={c.green} strokeWidth={2} />
+      <span style={{ fontSize: 13, fontWeight: 650, color: c.label }}>Today’s board is clear</span>
+    </div>
+    <span className="sq-mono" style={{ fontSize: 12, fontWeight: 800, color: c.green }}>{completedCount + skippedCount}/8</span>
+  </div>
+  <div style={{ marginTop: 11, height: 7, borderRadius: 999, background: c.fill, overflow: 'hidden' }}>
+    <div style={{ width: '100%', height: '100%', borderRadius: 999, background: c.green, animation: 'sq-pulse-soft 1.8s ease-in-out infinite' }} />
+  </div>
+  <p style={{ marginTop: 9, fontSize: 11, lineHeight: 1.45, color: c.labelTertiary }}>New quests appear automatically when today’s 24-hour cycle resets.</p>
+</div>
 </div>
 </div>
 );
@@ -2917,20 +3368,28 @@ function CompletionScreen({ quest, dark, onToggleTheme, lastReset, onBack, c }) 
 const quote = useMemo(() => QUEST_QUOTE[quest?.id] || QUEST_QUOTES[Math.floor(Math.random() * QUEST_QUOTES.length)], [quest?.id]);
 const leveledUp = Boolean(quest?.leveledUp);
 const accent = leveledUp ? c.orange : c.green;
+const burstDots = useMemo(() => Array.from({ length: 18 }, (_, i) => ({
+  x: ((i * 47) % 150) - 75,
+  y: -72 - ((i * 31) % 82),
+  delay: (i * 28) % 260,
+  size: 5 + (i % 4),
+})), []);
 
-useEffect(() => { haptic(leveledUp ? [25, 40, 25, 40, 70] : [15, 30, 15]); }, [leveledUp]);
+useEffect(() => {
+  // This runs immediately after the user gesture that completed the quest in
+  // normal flow, and also covers timed challenges that finish automatically.
+  haptic(leveledUp ? [25, 40, 25, 40, 70] : [18, 35, 18]);
+}, [leveledUp, quest?.id]);
 
 return (
-<div className="sq-anim-in relative z-10 min-h-screen flex flex-col">
+<div className="sq-anim-in relative z-10 sq-fit-screen flex flex-col">
 <div className="flex items-center justify-between px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
 <button onClick={onBack} className="flex items-center gap-1" style={{ color: c.blue }}>
 <BackChevron color={c.blue} /><span style={{ fontSize: 17 }}>Quests</span>
 </button>
 <div className="flex items-center gap-3">
 <CountdownDisplay lastReset={lastReset} className="sq-mono" style={{ fontSize: 13, fontWeight: 500, color: c.labelSecondary }} />
-<button onClick={onToggleTheme} style={{ ...glassStyle(c), width: 30, height: 30, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
-<span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
-</button>
+
 </div>
 </div>
 
@@ -2941,11 +3400,17 @@ return (
 Level up
 </span>
 )}
-<div className="sq-anim-check sq-icon-fff" style={{ width: 88, height: 88, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: accent }}>
-<CheckIcon size={38} />
+<div className="relative" style={{ width: 118, height: 118, color: accent }}>
+  <div className="sq-complete-ring" aria-hidden="true" />
+  {burstDots.map((dot, i) => (
+    <span key={i} className="sq-complete-dot" aria-hidden="true" style={{ '--sx': `${dot.x}px`, '--sy': `${dot.y}px`, '--sd': `${dot.delay}ms`, width: dot.size, height: dot.size, background: accent, marginLeft: -dot.size / 2, marginTop: -dot.size / 2 }} />
+  ))}
+  <div className="sq-anim-check sq-complete-burst sq-icon-fff" style={{ width: 88, height: 88, margin: 15, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: accent, boxShadow: `0 14px 44px -18px ${accent}` }}>
+    <CheckIcon size={38} />
+  </div>
 </div>
-<h2 style={{ marginTop: 18, fontSize: 22, fontWeight: 700, color: c.label }}>Quest complete</h2>
-<span className="sq-mono" style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: '#fff', background: accent, padding: '4px 12px', borderRadius: 999 }}>
+<h2 className="sq-complete-copy" style={{ marginTop: 10, fontSize: 24, fontWeight: 800, color: c.label }}>Quest complete</h2>
+<span className="sq-mono sq-xp-pop" style={{ marginTop: 10, fontSize: 13, fontWeight: 800, color: '#fff', background: accent, padding: '5px 13px', borderRadius: 999 }}>
 +{quest?.xp ?? 0} XP
 </span>
 </div>
@@ -3038,8 +3503,8 @@ function createPoseInferenceWorker() {
       let inputBitmap = bitmap;
       try {
         const model = await createLandmarker();
-        const targetWidth = data.lowEnd ? 256 : 320;
-        const targetHeight = data.lowEnd ? 192 : 240;
+        const targetWidth = data.lowEnd ? 288 : 384;
+        const targetHeight = data.lowEnd ? 216 : 288;
         try {
           if (bitmap.width > targetWidth || bitmap.height > targetHeight) {
             inputBitmap = await createImageBitmap(bitmap, {
@@ -3237,7 +3702,7 @@ const cancelHandledRef = useRef(false);
 
 const [phase, setPhase] = useState('starting');
 const [camError, setCamError] = useState(null);
-const [facingMode, setFacingMode] = useState('environment');
+const [facingMode, setFacingMode] = useState(() => quest.reps ? 'user' : 'environment');
 const [cameraVersion, setCameraVersion] = useState(0);
 const [modelReady, setModelReady] = useState(false);
 const [modelProgress, setModelProgress] = useState(null);
@@ -3266,7 +3731,7 @@ const [lastLabel, setLastLabel] = useState('');
 const [uploadedProof, setUploadedProof] = useState(null);
 
 const timerDurationSeconds = quest.duration
-  ? Math.min(30, Math.max(5, Number.isFinite(quest.duration) ? quest.duration : 5))
+  ? Math.min(60 * 60, Math.max(5, Number.isFinite(quest.duration) ? quest.duration : 5))
   : 0;
 const initialTimerSeconds = quest.duration
   ? ((Number.isFinite(quest.progress) && quest.progress > 0) ? Math.min(timerDurationSeconds, quest.progress) : timerDurationSeconds)
@@ -3372,7 +3837,7 @@ const lowEnd = cores <= 4 || (deviceMemory > 0 && deviceMemory <= 4);
 const cameraWidth = lowEnd ? 480 : 640;
 const cameraHeight = lowEnd ? 360 : 480;
 const attempts = [
-{ video: { facingMode: { ideal: mode }, width: { ideal: cameraWidth }, height: { ideal: cameraHeight }, frameRate: { ideal: 24, max: 24 } }, audio: false },
+{ video: { facingMode: { ideal: mode }, width: { ideal: cameraWidth }, height: { ideal: cameraHeight }, frameRate: { ideal: 30, max: 30 } }, audio: false },
 { video: { facingMode: { ideal: mode } }, audio: false },
 { video: true, audio: false },
 ];
@@ -3701,13 +4166,13 @@ let lastFallbackDetectAt = 0;
 let lastSampleWallTime = 0;
 let lastPoseInferenceMs = 0;
 const lowEnd = (typeof navigator !== 'undefined' && ((navigator.hardwareConcurrency || 4) <= 4 || ((navigator.deviceMemory || 0) > 0 && navigator.deviceMemory <= 4)));
-const BASE_INTERVAL = lowEnd ? 125 : 90;
-const MIN_INTERVAL = lowEnd ? 100 : 75;
-const MAX_INTERVAL = lowEnd ? 220 : 180;
+const BASE_INTERVAL = lowEnd ? 84 : 62;
+const MIN_INTERVAL = lowEnd ? 62 : 46;
+const MAX_INTERVAL = lowEnd ? 135 : 105;
 let detectIntervalMs = BASE_INTERVAL;
-const PAINT_INTERVAL_MS = 1000 / 30;
-const PREDICTION_MS_MAX = lowEnd ? 180 : 240;
-const SMOOTH_ALPHA = lowEnd ? 0.72 : 0.78;
+const PAINT_INTERVAL_MS = 1000 / 45;
+const PREDICTION_MS_MAX = lowEnd ? 65 : 80;
+const SMOOTH_ALPHA = lowEnd ? 0.48 : 0.56;
 const VELOCITY_ALPHA = 0.65;
 const MIN_VIS = 0.28;
 const MAJOR_JOINTS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
@@ -3721,6 +4186,7 @@ let filtered = null;
 let velocityX = null;
 let velocityY = null;
 let renderPoints = null;
+let lastRenderAt = 0;
 
 const filterLandmarks = (landmarks, captureWallTime) => {
 if (!landmarks) return null;
@@ -3757,15 +4223,27 @@ return filtered;
 const getRenderLandmarks = (now) => {
 if (!filtered || !renderPoints) return null;
 const rawAge = Math.max(0, now - lastSampleWallTime);
-const leadMs = Math.min(PREDICTION_MS_MAX, rawAge + (lowEnd ? 10 : 14));
+const leadMs = Math.min(PREDICTION_MS_MAX, Math.max(8, rawAge * 0.22));
 const lead = leadMs / 1000;
-const staleDamp = rawAge <= 90 ? 1 : Math.max(0.2, 1 - ((rawAge - 90) / 420));
+const staleDamp = rawAge <= 120 ? 1 : Math.max(0.18, 1 - ((rawAge - 120) / 500));
+const dt = lastRenderAt ? Math.min(0.08, Math.max(0.008, (now - lastRenderAt) / 1000)) : 1 / 45;
+lastRenderAt = now;
+// A second-stage spring smooths the rendered skeleton between model samples.
+// It removes the visible 10–15fps "teleporting" without adding rep-count lag.
+const renderAlpha = 1 - Math.exp(-(lowEnd ? 15 : 19) * dt);
 for (let i = 0; i < filtered.length; i += 1) {
 const p = filtered[i];
 const out = renderPoints[i];
-out.x = Math.max(0, Math.min(1, p.x + velocityX[i] * lead * staleDamp));
-out.y = Math.max(0, Math.min(1, p.y + velocityY[i] * lead * staleDamp));
-out.vis = p.visibility ?? 1;
+const tx = Math.max(0, Math.min(1, p.x + velocityX[i] * lead * staleDamp));
+const ty = Math.max(0, Math.min(1, p.y + velocityY[i] * lead * staleDamp));
+if (!Number.isFinite(out.x) || !Number.isFinite(out.y) || (out.x === 0 && out.y === 0 && rawAge < 20)) {
+  out.x = tx;
+  out.y = ty;
+} else {
+  out.x += (tx - out.x) * renderAlpha;
+  out.y += (ty - out.y) * renderAlpha;
+}
+out.vis += ((p.visibility ?? 1) - out.vis) * renderAlpha;
 }
 return renderPoints;
 };
@@ -3798,13 +4276,13 @@ return packed;
 
 const applyPoseResult = (rawLandmarks, captureWallTime) => {
 const decoded = decodePoseLandmarks(rawLandmarks);
-const landmarks = filterLandmarks(decoded, captureWallTime || performance.now());
+const renderLandmarks = filterLandmarks(decoded, captureWallTime || performance.now());
 poseStableFramesRef.current = rawLandmarks
 ? Math.min(30, poseStableFramesRef.current + 1)
 : Math.max(0, poseStableFramesRef.current - 1);
 
-if (landmarks && quest.reps) {
-const update = updatePoseRepState(poseStateRef.current, quest.id, landmarks, performance.now());
+if (decoded && quest.reps) {
+const update = updatePoseRepState(poseStateRef.current, quest.id, decoded, performance.now());
 if (update.phase !== poseUiPhaseRef.current) {
 poseUiPhaseRef.current = update.phase;
 setRepPhase(update.phase);
@@ -3830,7 +4308,7 @@ haptic([15, 30, 15]);
 haptic(10);
 }
 }
-} else if (!landmarks && quest.reps && poseUiCueRef.current !== 'Step back so your full body is visible') {
+} else if (!decoded && quest.reps && poseUiCueRef.current !== 'Step back so your full body is visible') {
 poseUiCueRef.current = 'Step back so your full body is visible';
 setRepCue(poseUiCueRef.current);
 }
@@ -3883,9 +4361,12 @@ const Ox = (Wc - Wr) / 2, Oy = (Hc - Hr) / 2;
 
 const repActive = Boolean(quest.reps);
 const currentPhase = poseStateRef.current.phase;
+const poseMoving = Boolean(poseStateRef.current.movementStarted);
 const poseReadyNow = poseStableFramesRef.current >= 2;
+// Blue = ready/settled. Green = the athlete is actively inside a rep.
+// updatePoseRepState clears movementStarted as soon as the rep completes.
 const lineColor = repActive
-? (currentPhase === 'down' ? '#30D158' : '#0A84FF')
+? (poseMoving || currentPhase === 'down' ? '#30D158' : '#0A84FF')
 : (poseReadyNow ? '#0A84FF' : 'rgba(255,255,255,.72)');
 
 drawCtx.globalAlpha = poseReadyNow ? 0.94 : 0.66;
@@ -4289,7 +4770,7 @@ Tracking
 <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: 13, lineHeight: 1.5, marginBottom: 4 }}>
 {camError === 'permission' ? 'Open this app in a new tab and allow camera access when prompted.' : quest.reps ? 'This quest needs a live camera. Check your camera and try again.' : 'Upload a photo instead.'}
 </p>
-<button onClick={retryCamera} style={{ background: c.blue, color: '#fff', fontSize: 13, fontWeight: 600, padding: '9px 22px', borderRadius: 999 }}>Try again</button>
+<button onClick={retryCamera} className="sq-quest-cta" style={{ ...questButtonStyle(c, c.blue, 'primary'), width: 'auto', minHeight: 44, padding: '10px 22px', borderRadius: 999, fontSize: 13 }}>Try again</button>
 </div>
 )}
 
@@ -4379,7 +4860,7 @@ Tracking
 <div className="mx-4 mt-4" style={{ padding: '13px 16px', borderRadius: 20, background: c.bgElevated, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
 <div>
 <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary }}>Duration</span>
-<p className="sq-mono" style={{ fontSize: 20, fontWeight: 700, color: c.label, marginTop: 2 }}>{formatTimerString(Math.min(30, Math.max(0, secondsLeft)))}</p>
+<p className="sq-mono" style={{ fontSize: 20, fontWeight: 700, color: c.label, marginTop: 2 }}>{formatTimerString(Math.min(60 * 60, Math.max(0, secondsLeft)))}</p>
 </div>
 <button onClick={toggleTimer} disabled={secondsLeft === 0}
 style={{ padding: '10px 20px', borderRadius: 12, fontSize: 13, fontWeight: 600, color: '#fff', background: secondsLeft === 0 ? c.gray : timerRunning ? c.red : c.green, opacity: secondsLeft === 0 ? 0.5 : 1 }}>
@@ -4447,11 +4928,91 @@ class QuestDailyErrorBoundary extends React.Component {
   }
 }
 
+// One-time release screen for returning users. It intentionally uses its own
+// storage key, so a user who already completed the welcome flow gets the new
+// release notes once per release without being shown the welcome screen again.
+function NewUpdateScreen({ c, onDone }) {
+const release = UPDATE_LOG[0];
+const items = release?.items || [];
+const releaseDate = release?.date || 'SEP 18, 2026';
+const PAGE_SIZE = 5;
+const [page, setPage] = useState(0);
+const pageCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+const pageItems = items.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+const handleNext = () => { haptic(6); setPage(p => Math.min(pageCount - 1, p + 1)); };
+const handleDone = () => { haptic([8, 18, 8]); onDone(); };
+return (
+<div className="fixed inset-0 z-[110] flex flex-col sq-new-update-overlay sq-anim-in sq-fit-screen" style={{ background: c.bg }}>
+<style>{`@keyframes sq-new-update-float { 0%,100%{ transform:translateY(0) rotate(0deg); } 50%{ transform:translateY(-5px) rotate(1deg); } }
+@keyframes sq-new-update-ring { 0%{ transform:scale(.86); opacity:.55; } 75%,100%{ transform:scale(1.14); opacity:0; } }
+@keyframes sq-new-update-spark { 0%{ transform:translate(-50%,-50%) translate(0,0) scale(.4); opacity:0; } 18%{ opacity:.95; } 100%{ transform:translate(-50%,-50%) translate(var(--u),var(--v)) scale(1); opacity:0; } }
+.sq-new-update-orbit { animation: sq-new-update-float 3.2s ease-in-out infinite; }
+.sq-new-update-ring { position:absolute; inset:-10px; border-radius:38px; border:1px solid rgba(255,255,255,.2); animation:sq-new-update-ring 2.2s ease-out infinite; }
+.sq-new-update-spark { position:absolute; left:50%; top:50%; width:6px; height:6px; border-radius:50%; background:#fff; opacity:0; animation:sq-new-update-spark 1.8s cubic-bezier(.22,1,.36,1) infinite; animation-delay:var(--d); }
+.sq-new-update-card { will-change:transform,opacity; }
+`}</style>
+<div className="flex-1 px-4" style={{ minHeight: 0, paddingTop: 'max(env(safe-area-inset-top), 18px)', paddingBottom: 8, display: 'flex', flexDirection: 'column' }}>
+  <div style={{ width: '100%', maxWidth: 620, margin: '0 auto', minHeight: 0, display: 'flex', flexDirection: 'column', flex: 1 }}>
+    <div className="text-center" style={{ paddingTop: 0, marginBottom: 10 }}>
+      <div className="sq-new-update-orbit" style={{ width: 72, height: 72, borderRadius: 24, margin: '0 auto 9px', background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', boxShadow: `0 18px 48px -18px ${c.blue}` }}>
+        <div className="sq-new-update-ring" aria-hidden="true" />
+        <Sparkles size={30} strokeWidth={1.65} />
+        <span className="sq-new-update-spark" style={{ '--u': '-24px', '--v': '-30px', '--d': '0ms' }} />
+        <span className="sq-new-update-spark" style={{ '--u': '28px', '--v': '-25px', '--d': '120ms' }} />
+        <span className="sq-new-update-spark" style={{ '--u': '30px', '--v': '25px', '--d': '220ms' }} />
+        <span className="sq-new-update-spark" style={{ '--u': '-28px', '--v': '28px', '--d': '320ms' }} />
+      </div>
+      <div className="sq-mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 999, background: c.fill, color: c.blue, fontSize: 9.5, fontWeight: 850, letterSpacing: .55, textTransform: 'uppercase' }}><Sparkles size={12} /> New update</div>
+      <h1 className="sq-large-title" style={{ fontSize: 26, fontWeight: 850, color: c.label, marginTop: 8 }}>What’s new in QuestDaily</h1>
+      <p className="sq-mono" style={{ marginTop: 4, fontSize: 11, fontWeight: 750, color: c.labelSecondary, letterSpacing: .4 }}>{releaseDate} · {page + 1}/{pageCount}</p>
+      <p style={{ margin: '5px auto 0', maxWidth: 430, fontSize: 12.5, lineHeight: 1.38, color: c.labelSecondary }}>Everything in this release, shown a few changes at a time so it fits every screen.</p>
+    </div>
+
+    <div className="flex flex-col gap-1.5" style={{ minHeight: 0, flex: 1 }}>
+      {pageItems.map(({ Icon, title, body }, localIndex) => {
+        const i = page * PAGE_SIZE + localIndex;
+        return (
+          <div key={`${title}-${i}`} className="sq-new-update-card sq-anim-in" style={{ ...glassStyle(c), flex: 1, minHeight: 0, borderRadius: 16, padding: '10px 11px', display: 'flex', gap: 10, alignItems: 'center', animationDelay: `${localIndex * 40}ms` }}>
+            <div className="sq-icon-fff" style={{ width: 34, height: 34, borderRadius: 11, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon size={15} strokeWidth={2} /></div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <p style={{ fontSize: 12.4, fontWeight: 750, color: c.label, lineHeight: 1.25 }}>{title}</p>
+              <p style={{ fontSize: 10.7, color: c.labelSecondary, marginTop: 3, lineHeight: 1.35 }}>{body}</p>
+            </div>
+            <span className="sq-mono" style={{ flexShrink: 0, fontSize: 8.5, fontWeight: 800, color: c.blue, background: `${c.blue}12`, borderRadius: 999, padding: '3px 5px' }}>{String(i + 1).padStart(2, '0')}</span>
+          </div>
+        );
+      })}
+    </div>
+
+    <div className="sq-new-update-footer-card" style={{ ...glassStyle(c), borderRadius: 16, padding: '9px 11px', marginTop: 6 }}>
+      <div className="flex items-center gap-2"><Check size={14} color={c.green} strokeWidth={2.2} /><span style={{ fontSize: 11.5, fontWeight: 700, color: c.label }}>{page === pageCount - 1 ? 'You’re up to date' : 'More changes below'}</span></div>
+    </div>
+  </div>
+</div>
+
+<div style={{ padding: '8px 16px max(env(safe-area-inset-bottom), 12px)', background: `linear-gradient(to top, ${c.bg} 72%, transparent)`, flexShrink: 0 }}>
+  <div style={{ width: '100%', maxWidth: 620, margin: '0 auto', display: 'flex', gap: 8 }}>
+    {page > 0 && <button type="button" onClick={() => { haptic(4); setPage(p => Math.max(0, p - 1)); }} style={{ flex: 1, minHeight: 48, borderRadius: 999, border: 0, background: c.fill, color: c.label, fontSize: 14, fontWeight: 800 }}>Back</button>}
+    <button type="button" onClick={page === pageCount - 1 ? handleDone : handleNext} style={{ flex: page > 0 ? 1.5 : 1, minHeight: 48, borderRadius: 999, border: 0, background: c.blue, color: '#fff', fontSize: 14, fontWeight: 800, boxShadow: `0 12px 30px -18px ${c.blue}` }}>{page === pageCount - 1 ? 'Continue to QuestDaily' : 'Next changes'}</button>
+  </div>
+</div>
+</div>
+);
+}
+
+
+
 // main app
 function QuestDailyAppInner() {
 const [isMounted, setIsMounted] = useState(false);
-const { user: authUser, loading: authLoading, authError } = useAuthUser();
-const uid = authUser?.uid ?? null;
+const authState = useAuthUser();
+const realAuthUser = authState.user;
+const realAuthLoading = authState.loading;
+const realAuthError = authState.authError;
+const authUser = DEV_MODE ? { uid: 'dev-local', email: 'developer@questdaily.local' } : realAuthUser;
+const authLoading = DEV_MODE ? false : realAuthLoading;
+const authError = DEV_MODE ? null : realAuthError;
+const uid = DEV_MODE ? null : (authUser?.uid ?? null);
 
 const [dark, setDark] = useState(true);
 const [showInstallPrompt, setShowInstallPrompt] = useState(false);
@@ -4474,6 +5035,7 @@ const [photoURL, setPhotoURL] = useState(null);
 const [photoUploading, setPhotoUploading] = useState(false);
 const [photoError, setPhotoError] = useState(null);
 const [hasSeenWelcome, setHasSeenWelcome] = useState(true);
+const [showNewUpdate, setShowNewUpdate] = useState(false);
 const [hapticsOn, setHapticsOnState] = useState(true);
 const [dailyReminderOn, setDailyReminderOn] = useState(false);
 const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
@@ -4484,9 +5046,13 @@ const savedDark = localStorage.getItem('sq_dark');
 setDark(savedDark !== null ? savedDark === 'true' : window.matchMedia('(prefers-color-scheme: dark)').matches);
 const welcomeSeen = localStorage.getItem('sq_has_seen_welcome_v3') === 'true';
 const tutorialSeen = localStorage.getItem('sq_has_seen_tutorial_v2') === 'true';
-setHasSeenWelcome(welcomeSeen);
-setHasSeenTutorial(tutorialSeen);
-if (welcomeSeen && !tutorialSeen) setShowTutorial(true);
+const updateSeenKey = DEV_MODE ? 'sq_has_seen_update_sep18_v1_dev' : 'sq_has_seen_update_sep18_v1';
+const updateAlreadySeen = localStorage.getItem(updateSeenKey) === 'true';
+setHasSeenWelcome(DEV_MODE ? true : welcomeSeen);
+setHasSeenTutorial(DEV_MODE ? true : tutorialSeen);
+if (welcomeSeen && !updateAlreadySeen) setShowNewUpdate(true);
+if (!DEV_MODE && welcomeSeen && !tutorialSeen) setShowTutorial(true);
+if (DEV_MODE) setUsername('Developer');
 
 const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
 const onBeforeInstall = e => { e.preventDefault(); deferredInstallPromptRef.current = e; setInstallSupported(true); };
@@ -4509,23 +5075,25 @@ try { setHistory(JSON.parse(localStorage.getItem('sq_history') || '[]') || []); 
 
 let savedQuests = [];
 try { savedQuests = JSON.parse(localStorage.getItem('sq_quests') || '[]') || []; } catch { savedQuests = []; }
-const anyDone = savedQuests.some(q => q.completed);
 const lastResetTs = parseInt(localStorage.getItem('sq_lastReset')) || 0;
-const expired = Date.now() - lastResetTs >= ONE_DAY_MS;
+const savedDayKey = localStorage.getItem('sq_quests_day_key') || '';
+const savedSchema = localStorage.getItem('sq_quests_schema') || '';
+const todayKey = localDayKey(Date.now());
+const canReuse = savedDayKey === todayKey && savedSchema === QUEST_SCHEMA_VERSION && savedQuests.length === DAILY_QUEST_COUNT;
 
-const normalizedSavedQuests = savedQuests.map(normalizeTimedQuest);
-if (!expired && normalizedSavedQuests.length >= 5) {
-setQuests(normalizedSavedQuests);
-} else if (!expired && anyDone) {
-setQuests(normalizedSavedQuests);
+if (canReuse) {
+  const normalizedSavedQuests = savedQuests.map(q => ({ ...normalizeTimedQuest(q), skipped: Boolean(q?.skipped) }));
+  setQuests(normalizedSavedQuests);
+  setLastReset(lastResetTs || Date.now());
 } else {
-const now = Date.now();
-const n = Math.floor(Math.random() * 3) + 5;
-const fresh = [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(randomizeQuest);
-setQuests(fresh);
-setLastReset(now);
-localStorage.setItem('sq_quests', JSON.stringify(fresh));
-localStorage.setItem('sq_lastReset', String(now));
+  const now = Date.now();
+  const fresh = createDailyQuests(todayKey);
+  setQuests(fresh);
+  setLastReset(now);
+  localStorage.setItem('sq_quests', JSON.stringify(fresh));
+  localStorage.setItem('sq_lastReset', String(now));
+  localStorage.setItem('sq_quests_day_key', todayKey);
+  localStorage.setItem('sq_quests_schema', QUEST_SCHEMA_VERSION);
 }
 }, []);
 
@@ -4566,7 +5134,7 @@ setPhotoURL(profileDoc?.exists?.() ? (profileDoc.data()?.photoURL ?? null) : (pr
 // loop — only an actual account change re-hydrates.
 const hydratedUidRef = useRef(null);
 useEffect(() => {
-if (!isMounted || authLoading) return;
+if (!isMounted || authLoading || DEV_MODE) return;
 if (!authUser) { hydratedUidRef.current = null; return; }
 if (hydratedUidRef.current === authUser.uid) return;
 hydratedUidRef.current = authUser.uid;
@@ -4580,7 +5148,7 @@ hydrateAccount(authUser.uid, authUser.email, authUser);
 // becomes usable a few seconds later instead of sitting on the loading
 // screen forever.
 useEffect(() => {
-if (!authUser || username) return undefined;
+if (DEV_MODE || !authUser || username) return undefined;
 const t = setTimeout(() => {
 setUsername(prev => prev || (authUser.email ? authUser.email.split('@')[0] : 'You'));
 }, 8000);
@@ -4597,6 +5165,12 @@ localStorage.setItem('sq_dark', dark);
 const handleDismissInstall = () => {
 setShowInstallPrompt(false);
 };
+
+const handleDismissNewUpdate = useCallback(() => {
+  const updateSeenKey = DEV_MODE ? 'sq_has_seen_update_sep18_v1_dev' : 'sq_has_seen_update_sep18_v1';
+  localStorage.setItem(updateSeenKey, 'true');
+  setShowNewUpdate(false);
+}, []);
 
 const openTutorial = useCallback(() => {
   setShowTutorial(true);
@@ -4650,12 +5224,17 @@ setLevel(1); setXp(0); setTotalXpEarned(0); setStreak(0); setHistory([]); setPro
 setQuests([]); setLastReset(0);
 setDetailQuestId(null); setCompletionQuest(null); setProofModalId(null);
 setActiveTab('quests');
-['sq_level','sq_xp','sq_totalXpEarned','sq_streak','sq_quests','sq_lastReset','sq_proofs','sq_history','sq_streak_date']
+['sq_level','sq_xp','sq_totalXpEarned','sq_streak','sq_quests','sq_lastReset','sq_quests_day_key','sq_quests_schema','sq_proofs','sq_history','sq_streak_date']
 .forEach(k => localStorage.removeItem(k));
 };
 
 const handleLogout = async () => {
 haptic(10);
+if (DEV_MODE) {
+  localStorage.removeItem('sq_level'); localStorage.removeItem('sq_xp'); localStorage.removeItem('sq_totalXpEarned'); localStorage.removeItem('sq_streak');
+  setLevel(1); setXp(0); setTotalXpEarned(0); setStreak(0); setUsername('Developer'); setPhotoURL(null); setHistory([]);
+  return;
+}
 try {
 await logOutAccount();
 } catch (err) {
@@ -4681,6 +5260,7 @@ setPhotoUploading(false);
 };
 
 const handleDeleteAccount = async () => {
+if (DEV_MODE) return { ok: false, error: 'Account deletion is disabled in the local Dev build.' };
 const currentUser = auth.currentUser;
 if (!currentUser) return { ok: false, error: 'You need to be signed in to do that.' };
 const usernameLower = username ? username.toLowerCase() : null;
@@ -4812,9 +5392,15 @@ useEffect(() => { totalXpEarnedRef.current = totalXpEarned; }, [totalXpEarned]);
 const xpRequired = level * 100;
 
 const generateNewQuests = useCallback((ts) => {
-const n = Math.floor(Math.random() * 3) + 5;
-const selected = [...QUEST_POOL].sort(() => 0.5 - Math.random()).slice(0, n).map(randomizeQuest);
-setQuests(selected); setLastReset(ts); setProofImages({});
+const dayKey = localDayKey(ts);
+const selected = createDailyQuests(dayKey);
+setQuests(selected);
+setLastReset(ts);
+setProofImages({});
+localStorage.setItem('sq_quests', JSON.stringify(selected));
+localStorage.setItem('sq_lastReset', String(ts));
+localStorage.setItem('sq_quests_day_key', dayKey);
+localStorage.setItem('sq_quests_schema', QUEST_SCHEMA_VERSION);
 }, []);
 
 // Perf fix: this used to hold `timeLeft` as *state on the top-level App
@@ -4834,7 +5420,7 @@ if (!isMounted) return;
 const id = setInterval(() => {
 const now = Date.now();
 const remaining = ONE_DAY_MS - (now - lastResetRef.current);
-if (remaining <= 0 || questsLenRef.current === 0) generateNewQuests(now);
+if (remaining <= 0) generateNewQuests(now);
 }, 1000);
 return () => clearInterval(id);
 }, [generateNewQuests, isMounted]);
@@ -4855,6 +5441,8 @@ localStorage.setItem('sq_totalXpEarned', totalXpEarned);
 localStorage.setItem('sq_streak', streak);
 localStorage.setItem('sq_quests', JSON.stringify(quests));
 localStorage.setItem('sq_lastReset', lastReset);
+localStorage.setItem('sq_quests_day_key', lastReset ? localDayKey(lastReset) : '');
+localStorage.setItem('sq_quests_schema', QUEST_SCHEMA_VERSION);
 localStorage.setItem('sq_proofs', JSON.stringify(proofImages));
 localStorage.setItem('sq_history', JSON.stringify(history));
 }, 300);
@@ -4880,13 +5468,86 @@ setTotalXpEarned(newTotal);
 return { leveledUp: newLevel > startLevel, newXp, newLevel, newTotal };
 }, []);
 
+const finishQuestLocally = useCallback((quest, { awardXp = true } = {}) => {
+if (!quest || quest.completed) return;
+setQuests(prev => prev.map(q => q.id === quest.id ? { ...q, completed: true, progress: 0 } : q));
+const { leveledUp, newXp, newLevel, newTotal } = awardXp ? applyXpChange(quest.xp ?? 0) : { leveledUp: false, newXp: xpRef.current, newLevel: levelRef.current, newTotal: totalXpEarnedRef.current };
+const entry = { id: `dev-${quest.id}-${Date.now()}`, questId: quest.id, text: quest.text, xp: awardXp ? quest.xp : 0, ts: Date.now(), leveledUp, dev: true };
+setHistory(prev => [entry, ...prev].slice(0, 500));
+setCompletionQuest({ ...quest, completed: true, leveledUp, dev: true });
+}, [applyXpChange]);
+
+const handleDevCompleteQuest = useCallback((questId) => {
+if (!DEV_MODE) return;
+const quest = quests.find(q => q.id === questId);
+if (!quest || quest.completed) return;
+haptic([18, 35, 18]);
+finishQuestLocally(quest);
+setProofModalId(null);
+setDetailQuestId(null);
+}, [quests, finishQuestLocally]);
+
+const handleDevCompleteAll = useCallback(() => {
+if (!DEV_MODE) return;
+const pending = quests.filter(q => !q.completed);
+if (!pending.length) return;
+const totalAward = pending.reduce((sum, q) => sum + (q.xp ?? 0), 0);
+const { leveledUp } = applyXpChange(totalAward);
+const ts = Date.now();
+const entries = pending.map((q, i) => ({ id: `dev-${q.id}-${ts}-${i}`, questId: q.id, text: q.text, xp: q.xp ?? 0, ts: ts + i, leveledUp: false, dev: true }));
+setQuests(prev => prev.map(q => q.completed ? q : { ...q, completed: true, progress: 0 }));
+setHistory(prev => [...entries, ...prev].slice(0, 500));
+setCompletionQuest({ ...pending[pending.length - 1], completed: true, leveledUp, dev: true });
+setProofModalId(null);
+setDetailQuestId(null);
+haptic([25, 45, 20, 45, 75]);
+}, [quests, applyXpChange]);
+
+const handleDevResetDay = useCallback(() => {
+if (!DEV_MODE) return;
+const fresh = createDailyQuests(localDayKey(Date.now()));
+setQuests(fresh);
+setProofImages({});
+setLastReset(Date.now());
+setCompletionQuest(null);
+setProofModalId(null);
+setDetailQuestId(null);
+localStorage.setItem('sq_quests', JSON.stringify(fresh));
+localStorage.setItem('sq_lastReset', String(Date.now()));
+localStorage.setItem('sq_quests_day_key', localDayKey(Date.now()));
+localStorage.setItem('sq_quests_schema', QUEST_SCHEMA_VERSION);
+}, []);
+
+const handleDevAddXp = useCallback((amount) => {
+if (!DEV_MODE) return;
+const result = applyXpChange(amount);
+setCompletionQuest(prev => prev ? { ...prev, leveledUp: result.leveledUp } : prev);
+}, [applyXpChange]);
+
 const handleQuestClick = (quest) => {
 if (quest.completed) return;
 haptic(6);
 setDetailQuestId(quest.id);
 };
 
+const handleSkipQuest = useCallback((questId) => {
+const quest = quests.find(q => q.id === questId);
+if (!quest || quest.completed || quest.skipped) return;
+setQuests(prev => prev.map(q => q.id === questId ? { ...q, skipped: true, progress: 0 } : q));
+setProofImages(prev => {
+  if (!prev?.[questId]) return prev;
+  const next = { ...prev };
+  delete next[questId];
+  return next;
+});
+setProofModalId(null);
+setDetailQuestId(null);
+setCompletionQuest(null);
+haptic([8, 18]);
+}, [quests]);
+
 const handleProofConfirm = (questId, img) => {
+haptic([18, 35, 18]);
 const quest = quests.find(q => q.id === questId);
 if (!quest || quest.completed) { setProofModalId(null); setDetailQuestId(null); return; }
 setProofImages(prev => ({ ...prev, [questId]: img }));
@@ -4963,15 +5624,17 @@ if (!isMounted || authLoading) {
 }
 
 const xpPct = Math.min(100, Math.max(0, (xp / xpRequired) * 100));
-const allDone = quests.length > 0 && quests.every(q => q.completed);
-
+const visibleQuests = quests.filter(q => !q.skipped);
 const completedCount = quests.filter(q => q.completed).length;
+const skippedCount = quests.filter(q => q.skipped).length;
+const allResolved = quests.length > 0 && quests.every(q => q.completed || q.skipped);
+const allDone = allResolved;
 const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
 return (
-<div className={`sq-root${LOW_END_DEVICE ? ' sq-low-end' : ''}`} style={{ background: c.bg, minHeight: '100vh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
+<div className={`sq-root${LOW_END_DEVICE ? ' sq-low-end' : ''}`} style={{ background: c.bg, height: '100dvh', minHeight: '100dvh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflow: 'hidden', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
 <SystemType c={c} />
-<div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg, zIndex: 2 }}>
+<div className="relative w-full flex flex-col sq-fit-screen" style={{ background: c.bg, zIndex: 2 }}>
 <AmbientBackground c={c} disabled={Boolean(proofModal)} />
 
 {isSaqoom && !proofModal && (
@@ -4996,8 +5659,9 @@ return (
 {!hasSeenWelcome && (
 <WelcomeScreen c={c} onContinue={handleWelcomeContinue} />
 )}
-{hasSeenWelcome && showTutorial && <AppTutorial c={c} onDone={finishTutorial} />}
-{hasSeenWelcome && !showTutorial && !showInstallPrompt && !authUser && <AuthModal onSignedUp={handleSignedUp} onLoggedIn={handleLoggedIn} c={c} initialError={authError} />}
+{hasSeenWelcome && showNewUpdate && <NewUpdateScreen c={c} onDone={handleDismissNewUpdate} />}
+{hasSeenWelcome && !showNewUpdate && showTutorial && <AppTutorial c={c} onDone={finishTutorial} />}
+{hasSeenWelcome && !showNewUpdate && !showTutorial && !showInstallPrompt && !authUser && <AuthModal onSignedUp={handleSignedUp} onLoggedIn={handleLoggedIn} c={c} initialError={authError} />}
 {authUser && !username && (
 <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{ background: c.bg }}>
 <div style={{ width: 28, height: 28, border: `2.5px solid ${c.fill}`, borderTopColor: c.blue, borderRadius: '50%' }} className="animate-spin" />
@@ -5028,6 +5692,8 @@ onToggleTheme={() => setDark(d => !d)} onBack={() => setCompletionQuest(null)} /
 ) : detailQuest ? (
 <QuestDetailScreen quest={detailQuest} dark={dark} c={c} lastReset={lastReset}
 onToggleTheme={() => setDark(d => !d)} onBack={() => setDetailQuestId(null)}
+onSkip={() => handleSkipQuest(detailQuest.id)}
+devMode={DEV_MODE} onDevComplete={handleDevCompleteQuest}
 onMarkComplete={() => setProofModalId(detailQuest.id)} />
 ) : activeTab === 'history' ? (
 <HistoryScreen history={history} dark={dark} c={c} onToggleTheme={() => setDark(d => !d)} />
@@ -5044,6 +5710,7 @@ onReplayTutorial={openTutorial}
 onInstallApp={installFromSettings}
 installSupported={installSupported}
  isSaqoom={isSaqoom}
+ devMode={DEV_MODE} onDevCompleteAll={handleDevCompleteAll} onDevResetDay={handleDevResetDay} onDevAddXp={handleDevAddXp}
  c={c}
 />
 ) : (
@@ -5053,10 +5720,7 @@ installSupported={installSupported}
 <div className="flex items-center justify-between">
 <h1 className="sq-large-title" style={{ fontSize: 32, fontWeight: 800, color: c.label }}>QuestDaily</h1>
 <div className="flex items-center gap-2">
-<button onClick={() => setDark(d => !d)} aria-label="Toggle theme"
-style={{ ...glassStyle(c), width: 32, height: 32, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.label }}>
-<span className="sq-icon-tap">{dark ? <Sun key="sun" size={16} strokeWidth={1.75} className="sq-icon-pop-in" /> : <Moon key="moon" size={16} strokeWidth={1.75} className="sq-icon-pop-in" />}</span>
-</button>
+
 <button onClick={() => setActiveTab('settings')} aria-label="Settings">
 <Avatar photoURL={photoURL} username={username} size={32} c={c} />
 </button>
@@ -5085,7 +5749,7 @@ LV {level}
 </div>
 </div>
 
-<div className="flex-1 sq-scroll overflow-y-auto px-4 pt-2 space-y-4" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
+<div className="flex-1 sq-scroll overflow-hidden px-4 pt-2 space-y-4" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
 <div style={{ ...glassStyle(c), borderRadius: 20, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14 }} className="sq-anim-in">
 <ProgressRing pct={dailyPct} c={c} size={44} />
 <div className="flex-1" style={{ minWidth: 0 }}>
@@ -5100,19 +5764,28 @@ LV {level}
 )}
 </div>
 
+{allResolved ? (
+<AllQuestsDoneScreen dark={dark} onToggleTheme={() => setDark(d => !d)} lastReset={lastReset} c={c} completedCount={completedCount} skippedCount={skippedCount} />
+) : (
+<>
 <div>
 <p style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: c.labelSecondary, marginBottom: 8, paddingLeft: 2 }}>
 Today
 </p>
-<div className="flex flex-col gap-2.5">
-{quests.map((quest, i) => (
+<div className="sq-home-quest-grid">
+{visibleQuests.map((quest, i) => {
+const rowTheme = QUEST_THEME[quest.id] || { cat: 'blue' };
+const rowAccent = c[rowTheme.cat] || c.blue;
+return (
 <button key={quest.id}
 onClick={() => { if (!quest.completed) handleQuestClick(quest); }}
-className="sq-anim-in"
+className="sq-anim-in sq-control sq-home-quest-card"
 style={{
 ...glassStyle(c),
 width: '100%', display: 'flex', alignItems: 'center', gap: 12,
 padding: '14px 14px', textAlign: 'left', borderRadius: 20,
+border: `1px solid ${quest.completed ? c.glassBorder : `${rowAccent}38`}`,
+boxShadow: quest.completed ? undefined : `0 12px 28px -28px ${rowAccent}`,
 opacity: quest.completed ? 0.7 : 1,
 animationDelay: `${Math.min(i, 8) * 0.035}s`,
 }}>
@@ -5143,22 +5816,15 @@ style={{ width: 26, height: 26, borderRadius: 10, overflow: 'hidden', flexShrink
 {!quest.completed && <span className="sq-icon-tap"><ChevronIcon color={c.labelTertiary} /></span>}
 </div>
 </button>
-))}
+);
+})}
 </div>
 </div>
 
-{allDone && (
-<div style={{ ...glassStyle(c), borderRadius: 20, padding: 24, textAlign: 'center' }} className="sq-anim-in">
-<TrophyIcon size={26} style={{ color: c.orange, margin: '0 auto 10px' }} />
-<p style={{ fontSize: 15, fontWeight: 600, color: c.label }}>All quests complete</p>
-<p style={{ fontSize: 13, marginTop: 4, color: c.labelSecondary }}>Rest up. New quests when the timer hits zero.</p>
-</div>
-)}
-
-{quests.length > 0 && (
 <p style={{ fontSize: 11, fontWeight: 500, textAlign: 'center', color: c.labelTertiary, padding: '0 16px 8px' }}>
 Checked on your device — nothing you record ever leaves your phone.
 </p>
+</>
 )}
 </div>
 </div>
