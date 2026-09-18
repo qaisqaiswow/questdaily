@@ -1355,7 +1355,13 @@ html, body, #root {
 }
 html, body { overscroll-behavior-x: none; overscroll-behavior-y: auto; }
 .sq-fit-screen { min-height: 0 !important; height: auto !important; max-height: none !important; overflow: visible !important; }
-.sq-scroll { overflow-y: auto !important; overflow-x: hidden !important; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; }
+.sq-scroll {
+ overflow: hidden !important;
+ overflow-y: hidden !important;
+ overflow-x: hidden !important;
+ -webkit-overflow-scrolling: auto !important;
+ overscroll-behavior: none !important;
+}
 .sq-settings-pager { scrollbar-width: none; }
 .sq-settings-pager::-webkit-scrollbar { display: none; }
 .sq-settings-page-hidden { display: none !important; }
@@ -1367,7 +1373,43 @@ html, body { overscroll-behavior-x: none; overscroll-behavior-y: auto; }
 .sq-settings-pager button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sq-settings-shell[data-page="1"] .sq-settings-page-2, .sq-settings-shell[data-page="1"] .sq-settings-page-3, .sq-settings-shell[data-page="1"] .sq-settings-page-4, .sq-settings-shell[data-page="2"] .sq-settings-page-1, .sq-settings-shell[data-page="2"] .sq-settings-page-3, .sq-settings-shell[data-page="2"] .sq-settings-page-4, .sq-settings-shell[data-page="3"] .sq-settings-page-1, .sq-settings-shell[data-page="3"] .sq-settings-page-2, .sq-settings-shell[data-page="3"] .sq-settings-page-4, .sq-settings-shell[data-page="4"] .sq-settings-page-1, .sq-settings-shell[data-page="4"] .sq-settings-page-2, .sq-settings-shell[data-page="4"] .sq-settings-page-3 { display: none !important; }
 .sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
-.sq-home-screen { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.sq-home-screen {
+ width: 100%;
+ max-width: 100%;
+ min-width: 0;
+ box-sizing: border-box;
+ overflow: hidden !important;
+ overflow-x: hidden !important;
+ overflow-y: hidden !important;
+ -webkit-overflow-scrolling: auto !important;
+}
+.sq-home-screen > .sq-home-scale-stage {
+ flex-shrink: 1 !important;
+}
+.sq-home-screen .sq-home-quest-grid {
+ gap: 6px !important;
+}
+.sq-home-screen .sq-home-quest-card {
+ padding: 9px 12px !important;
+ min-height: 40px !important;
+}
+.sq-home-screen .sq-home-quest-card span {
+ line-height: 1.15 !important;
+}
+@media (max-height: 760px) {
+ .sq-home-screen .sq-home-quest-card { padding: 7px 11px !important; min-height: 36px !important; }
+ .sq-home-screen .sq-home-quest-card svg { transform: scale(.9); }
+ .sq-home-screen .sq-home-quest-card { gap: 9px !important; }
+ .sq-home-screen .sq-home-quest-card span { font-size: 13px !important; }
+ .sq-home-screen .sq-home-scale-stage > .px-4.pb-2 { padding-top: max(env(safe-area-inset-top), 10px) !important; }
+ .sq-home-screen .sq-home-scale-stage > .px-4.pb-2 .mt-3 { margin-top: 6px !important; }
+ .sq-home-screen .sq-home-scale-stage > .px-4.pb-2 .mt-1 { margin-top: 3px !important; }
+ .sq-home-screen .sq-home-scale-stage > .px-4.pb-2 > div > div:last-child { margin-top: 5px !important; }
+ .sq-home-screen .sq-home-scale-stage > .px-4.pb-2 .sq-glass { margin-top: 7px !important; padding: 7px 10px !important; }
+ .sq-home-screen > .px-4 { padding-top: 6px !important; padding-bottom: 58px !important; }
+ .sq-home-screen > .px-4.space-y-4 { row-gap: 8px !important; }
+}
+
 .sq-home-scale-stage { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; overflow: visible; }
 .sq-home-screen .sq-quest-row { border-radius: 999px !important; overflow: hidden; }
 @media (max-height: 760px) { .sq-root h1 { line-height: 1.05; } .sq-welcome-steps > div { padding: 10px !important; gap: 10px !important; } .sq-welcome-steps p { font-size: 11px !important; } .sq-welcome-steps > div > div:first-child { width: 32px !important; height: 32px !important; } }
@@ -1389,7 +1431,13 @@ still crossfade smoothly. */
 transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease;
 }
 svg { transition: stroke 0.2s ease, fill 0.2s ease; }
-.sq-scroll { -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; overflow-y: auto !important; overflow-x: hidden !important; }
+.sq-scroll {
+ -webkit-overflow-scrolling: auto !important;
+ overscroll-behavior: none !important;
+ overflow: hidden !important;
+ overflow-y: hidden !important;
+ overflow-x: hidden !important;
+}
 .sq-root button, .sq-root a { contain: layout style; }
 .sq-root { overflow-x: clip; }
 .sq-heart-rain {
@@ -5735,7 +5783,7 @@ installSupported={installSupported}
  c={c}
 />
 ) : (
-<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-home-screen" style={{ minHeight: 0, height: '100dvh', overflow: 'hidden' }}>
+<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-home-screen" style={{ minHeight: 0, height: '100dvh', maxHeight: '100dvh', overflow: 'hidden' }}>
 <div className="sq-home-scale-stage" style={{ width: '100%', maxWidth: '100%', flexShrink: 0, boxSizing: 'border-box' }}>
 {/* Header */}
 <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
@@ -5771,7 +5819,7 @@ LV {level}
 </div>
 </div>
 
-<div className="px-4 pt-2 space-y-4" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
+<div className="px-4 pt-2 space-y-4" style={{ paddingBottom: 'calc(58px + env(safe-area-inset-bottom))' }}>
 <div style={{ ...glassStyle(c), borderRadius: 20, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14 }} className="sq-anim-in">
 <ProgressRing pct={dailyPct} c={c} size={44} />
 <div className="flex-1" style={{ minWidth: 0 }}>
