@@ -1352,8 +1352,9 @@ html, body { overscroll-behavior-x: none; overscroll-behavior-y: auto; }
 .sq-settings-pager button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sq-settings-shell[data-page="1"] .sq-settings-page-2, .sq-settings-shell[data-page="1"] .sq-settings-page-3, .sq-settings-shell[data-page="1"] .sq-settings-page-4, .sq-settings-shell[data-page="2"] .sq-settings-page-1, .sq-settings-shell[data-page="2"] .sq-settings-page-3, .sq-settings-shell[data-page="2"] .sq-settings-page-4, .sq-settings-shell[data-page="3"] .sq-settings-page-1, .sq-settings-shell[data-page="3"] .sq-settings-page-2, .sq-settings-shell[data-page="3"] .sq-settings-page-4, .sq-settings-shell[data-page="4"] .sq-settings-page-1, .sq-settings-shell[data-page="4"] .sq-settings-page-2, .sq-settings-shell[data-page="4"] .sq-settings-page-3 { display: none !important; }
 .sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
-.sq-home-screen { contain: layout paint; width: 100%; max-width: 100%; overflow: hidden; box-sizing: border-box; }
-.sq-home-scale-stage { transform-origin: top center; width: 100%; max-width: 100%; box-sizing: border-box; overflow: visible; }
+.sq-home-screen { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.sq-home-scale-stage { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; overflow: visible; }
+.sq-home-screen .sq-quest-row { border-radius: 999px !important; overflow: hidden; }
 @media (max-height: 760px) { .sq-root h1 { line-height: 1.05; } .sq-welcome-steps > div { padding: 10px !important; gap: 10px !important; } .sq-welcome-steps p { font-size: 11px !important; } .sq-welcome-steps > div > div:first-child { width: 32px !important; height: 32px !important; } }
 .sq-root {
 -webkit-user-select: none; -moz-user-select: none; user-select: none;
@@ -1689,6 +1690,7 @@ const UPDATE_LOG = [
     date: 'SEP 18, 2026',
     current: true,
     items: [
+      { Icon: Sparkles, title: 'Pill-shaped glass challenges', body: 'Daily challenge cards now use a softer capsule shape that fits the Expo glass theme instead of looking like rectangular panels.' },
       { Icon: ListChecks, title: 'Refresh-safe daily challenges', body: 'Your daily challenge set is now seeded from the day, so refreshing the page keeps the same quests instead of generating a new set.' },
       { Icon: Timer, title: 'Real timed challenges', body: 'Timed quests now support both seconds and minutes. Runs, walks, cycling, mobility, reading, meditation and other longer activities keep their full duration.' },
       { Icon: Sparkles, title: '40 total challenge types', body: 'The challenge pool has expanded with mobility, phone-free walks, stair runs, cycling intervals, balance work, calf raises, sunlight, reading and box breathing.' },
@@ -5364,40 +5366,16 @@ console.error('Data export failed:', err);
 
 const authProviderLabel = getAuthProviderLabel(authUser);
 
-// Home keeps the original one-column layout, but scales the complete
-// composition on short viewports so all eight daily quests fit above the
-// floating tab bar. Other screens retain normal scrolling.
-// These modal/detail states must be declared before the scaling effect because
-// the effect closes over them during render. Keeping them above the effect
-// prevents a production-build Temporal Dead Zone (TDZ) crash after minification.
+// Home uses the full available viewport width and normal vertical scrolling.
+// We deliberately do not transform/zoom the whole composition: shrinking the
+// entire Home stage made mobile cards and the floating tab bar appear far too
+// small and visually detached from the screen edges.
 const [proofModalId, setProofModalId] = useState(null);
 const [viewingProof, setViewingProof] = useState(null);
 const [detailQuestId, setDetailQuestId] = useState(null);
 const [completionQuest, setCompletionQuest] = useState(null);
-const homeScaleRef = useRef(null);
-const [homeScale, setHomeScale] = useState(1);
 const proofModal = quests.find(q => q.id === proofModalId) || null;
 const detailQuest = quests.find(q => q.id === detailQuestId) || null;
-useEffect(() => {
-  if (activeTab !== 'quests' || completionQuest || detailQuest || proofModalId) {
-    setHomeScale(1);
-    return undefined;
-  }
-  const measure = () => {
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 800;
-    // Approximate the original Home composition height. This intentionally
-    // scales only the Home screen; lists/settings elsewhere remain scrollable.
-    const next = Math.min(1, Math.max(0.70, (viewportHeight - 72) / 980));
-    setHomeScale(prev => Math.abs(prev - next) > 0.008 ? next : prev);
-  };
-  measure();
-  window.addEventListener('resize', measure, { passive: true });
-  window.addEventListener('orientationchange', measure, { passive: true });
-  return () => {
-    window.removeEventListener('resize', measure);
-    window.removeEventListener('orientationchange', measure);
-  };
-}, [activeTab, completionQuest, detailQuest, proofModalId]);
 
 useEffect(() => {
 if (uid && username) {
@@ -5743,7 +5721,7 @@ installSupported={installSupported}
 />
 ) : (
 <div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-home-screen" style={{ minHeight: 0, height: '100dvh', overflow: 'hidden' }}>
-<div ref={homeScaleRef} className="sq-home-scale-stage" style={{ width: '100%', maxWidth: '100%', transform: `scale(${homeScale})`, transformOrigin: 'top center', flexShrink: 0, boxSizing: 'border-box' }}>
+<div className="sq-home-scale-stage" style={{ width: '100%', maxWidth: '100%', flexShrink: 0, boxSizing: 'border-box' }}>
 {/* Header */}
 <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
 <div className="flex items-center justify-between">
@@ -5810,7 +5788,7 @@ className="sq-anim-in sq-control sq-home-quest-card"
 style={{
 ...glassStyle(c),
 width: '100%', display: 'flex', alignItems: 'center', gap: 12,
-padding: '14px 14px', textAlign: 'left', borderRadius: 16,
+padding: '14px 14px', textAlign: 'left', borderRadius: 999,
 border: `1px solid ${c.glassBorder}`,
 boxShadow: undefined,
 opacity: quest.completed ? 0.7 : 1,
