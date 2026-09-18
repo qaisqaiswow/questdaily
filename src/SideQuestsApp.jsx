@@ -1072,8 +1072,8 @@ const QUEST_POOL = [
 { id: 'q24', textTemplate: 'Go to bed earlier tonight', xp: 50 },
 ];
 
-const QUEST_SCHEMA_VERSION = 'timed-v4';
-const DAILY_QUEST_COUNT = 8;
+const QUEST_SCHEMA_VERSION = 'timed-v5-6-daily';
+const DAILY_QUEST_COUNT = 6;
 
 function hashSeed(input) {
   let h = 2166136261;
@@ -1152,8 +1152,8 @@ function createDailyQuests(dayKey = localDayKey(Date.now())) {
   let selected = [
     ...reps.slice(0, 2),
     ...timedMinutes.slice(0, 2),
-    ...timedSeconds.slice(0, 2),
-    ...proof.slice(0, 2),
+    ...timedSeconds.slice(0, 1),
+    ...proof.slice(0, 1),
   ];
 
   if (selected.length < DAILY_QUEST_COUNT) {
@@ -1831,6 +1831,7 @@ const UPDATE_LOG = [
     current: true,
     items: [
       { Icon: Sparkles, title: 'Pill-shaped glass challenges', body: 'Daily challenge cards now use a softer capsule shape that fits the Expo glass theme instead of looking like rectangular panels.' },
+      { Icon: ListChecks, title: '6 daily challenges', body: 'Each day now gives you exactly 6 daily challenges instead of 8, keeping the Home screen compact while preserving a varied mix of exercise, timed, and lifestyle quests.' },
       { Icon: ListChecks, title: 'Refresh-safe daily challenges', body: 'Your daily challenge set is now seeded from the day, so refreshing the page keeps the same quests instead of generating a new set.' },
       { Icon: Timer, title: 'Real timed challenges', body: 'Timed quests now support both seconds and minutes. Runs, walks, cycling, mobility, reading, meditation and other longer activities keep their full duration.' },
       { Icon: Sparkles, title: '40 total challenge types', body: 'The challenge pool has expanded with mobility, phone-free walks, stair runs, cycling intervals, balance work, calf raises, sunlight, reading and box breathing.' },
@@ -1842,7 +1843,6 @@ const UPDATE_LOG = [
       { Icon: Check, title: 'Animated quest completion', body: 'Completing a quest now opens a richer completion scene with a pulsing checkmark, animated XP reveal, celebratory particles and level-up treatment.' },
       { Icon: TrophyIcon, title: 'All quests done home screen', body: 'When every daily quest is completed or cleared, the Home screen replaces the quest list with a dedicated animated finish state and the next reset countdown.' },
       { Icon: Trash2, title: 'Skip quest', body: 'You can now skip a quest directly from its detail screen. It disappears for the rest of the day and awards no XP.' },
-      { Icon: ChevronRight, title: 'Swipe through Settings', body: 'Swipe left or right on the Settings area to move between Account, Alerts, App, and Library pages without scrolling.' },
       { Icon: Sparkles, title: 'Theme-matched quest actions', body: 'Quest action buttons now use the challenge category color and shared styling, so the quest controls stay consistent with the active theme across detail and verification screens.' },
     ],
   },
