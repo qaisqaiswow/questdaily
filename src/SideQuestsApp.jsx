@@ -1072,8 +1072,8 @@ const QUEST_POOL = [
 { id: 'q24', textTemplate: 'Go to bed earlier tonight', xp: 50 },
 ];
 
-const QUEST_SCHEMA_VERSION = 'timed-v5-6-daily';
-const DAILY_QUEST_COUNT = 6;
+const QUEST_SCHEMA_VERSION = 'timed-v4';
+const DAILY_QUEST_COUNT = 8;
 
 function hashSeed(input) {
   let h = 2166136261;
@@ -1152,8 +1152,8 @@ function createDailyQuests(dayKey = localDayKey(Date.now())) {
   let selected = [
     ...reps.slice(0, 2),
     ...timedMinutes.slice(0, 2),
-    ...timedSeconds.slice(0, 1),
-    ...proof.slice(0, 1),
+    ...timedSeconds.slice(0, 2),
+    ...proof.slice(0, 2),
   ];
 
   if (selected.length < DAILY_QUEST_COUNT) {
@@ -1343,7 +1343,7 @@ html, body, #root {
  min-height: 100%;
  margin: 0;
  overflow-x: hidden !important;
- overflow-y: hidden !important;
+ overflow-y: auto !important;
  background: #000;
 }
 html, body, #root {
@@ -1362,32 +1362,9 @@ html, body { overscroll-behavior: none; }
  -webkit-overflow-scrolling: auto !important;
  overscroll-behavior: none !important;
 }
-/* Settings is the one intentional scroll viewport. */
-.sq-root .sq-settings-continuous {
- display: block !important;
- flex: 1 1 0% !important;
- min-height: 0 !important;
- height: 0 !important;
- max-height: none !important;
- overflow-y: auto !important;
- overflow-x: hidden !important;
- -webkit-overflow-scrolling: touch !important;
- overscroll-behavior-y: contain !important;
- overscroll-behavior-x: none !important;
- touch-action: pan-y !important;
- scrollbar-width: none;
-}
-.sq-root .sq-settings-continuous::-webkit-scrollbar { display: none !important; width: 0 !important; }
-.sq-root .sq-settings-continuous .sq-settings-section {
- display: block !important;
- height: auto !important;
- max-height: none !important;
- overflow: visible !important;
- flex: none !important;
-}
-
-
-
+.sq-settings-pager { scrollbar-width: none; }
+.sq-settings-pager::-webkit-scrollbar { display: none; }
+.sq-settings-page-hidden { display: none !important; }
 .sq-settings-section { min-width: 0; }
 .sq-settings-continuous {
  overflow-y: auto !important;
@@ -1405,7 +1382,7 @@ html, body { overscroll-behavior: none; }
 .sq-settings-swipe-next { animation: sqSettingsSwipeNext 180ms cubic-bezier(.22,1,.36,1); }
 .sq-settings-swipe-prev { animation: sqSettingsSwipePrev 180ms cubic-bezier(.22,1,.36,1); }
 .sq-settings-pager button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
+.sq-settings-shell .sq-settings-section { display: block !important; }
 .sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
 .sq-home-screen {
  width: 100%;
@@ -1445,48 +1422,80 @@ html, body { overscroll-behavior: none; }
 }
 
 .sq-home-scale-stage { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; overflow: visible; }
+
 @media (max-height: 900px) {
- .sq-home-screen > .sq-home-scale-stage > .px-4.pb-2 { padding-top: max(env(safe-area-inset-top), 10px) !important; padding-bottom: 4px !important; }
- .sq-home-screen .sq-large-title { font-size: 28px !important; }
+ .sq-home-screen > .sq-home-scale-stage > .px-4.pb-2 {
+   padding-top: max(env(safe-area-inset-top), 10px) !important;
+   padding-bottom: 4px !important;
+ }
+ .sq-home-screen .sq-large-title { font-size: 29px !important; }
  .sq-home-screen .sq-home-scale-stage .mt-3 { margin-top: 7px !important; }
  .sq-home-screen .sq-home-scale-stage .mt-1 { margin-top: 3px !important; }
- .sq-home-screen .sq-home-scale-stage .sq-glass { margin-top: 7px !important; padding: 7px 11px !important; }
- .sq-home-screen > .px-4.pt-2.space-y-4 { padding-top: 5px !important; padding-bottom: 92px !important; row-gap: 7px !important; }
- .sq-home-screen > .px-4.pt-2.space-y-4 > div:first-child { padding: 8px 12px !important; gap: 10px !important; }
- .sq-home-screen > .px-4.pt-2.space-y-4 .sq-home-quest-grid { gap: 4px !important; }
+ .sq-home-screen .sq-home-scale-stage .sq-glass {
+   margin-top: 7px !important;
+   padding: 8px 11px !important;
+ }
+ .sq-home-screen > .px-4.pt-2.space-y-4 {
+   padding-top: 6px !important;
+   padding-bottom: 96px !important;
+   row-gap: 8px !important;
+ }
+ .sq-home-screen > .px-4.pt-2.space-y-4 > div:first-child {
+   padding: 9px 12px !important;
+   gap: 10px !important;
+ }
+ .sq-home-screen .sq-home-quest-grid {
+   gap: 5px !important;
+ }
  .sq-home-screen .sq-home-quest-card {
    min-height: 0 !important;
-   padding: 5px 9px !important;
-   gap: 7px !important;
-   line-height: 1.05 !important;
+   padding: 6px 10px !important;
+   gap: 8px !important;
+   line-height: 1.08 !important;
  }
  .sq-home-screen .sq-home-quest-card > .relative.flex-shrink-0 > div:first-child {
-   width: 28px !important;
-   height: 28px !important;
+   width: 30px !important;
+   height: 30px !important;
    border-radius: 10px !important;
  }
  .sq-home-screen .sq-home-quest-card > .relative.flex-shrink-0 > div:first-child svg {
-   width: 14px !important;
-   height: 14px !important;
+   width: 15px !important;
+   height: 15px !important;
  }
  .sq-home-screen .sq-home-quest-card > span {
-   font-size: 12.5px !important;
-   line-height: 1.05 !important;
+   font-size: 13px !important;
+   line-height: 1.08 !important;
  }
- .sq-home-screen .sq-home-quest-card .sq-mono { font-size: 10px !important; }
- .sq-home-screen .sq-home-quest-card .sq-icon-tap svg { width: 16px !important; height: 16px !important; }
+ .sq-home-screen .sq-home-quest-card .sq-mono { font-size: 10.5px !important; }
+ .sq-home-screen .sq-home-quest-card .sq-icon-tap svg {
+   width: 17px !important;
+   height: 17px !important;
+ }
  .sq-home-screen > .px-4.pt-2.space-y-4 > div:last-child > p:last-child {
-   font-size: 9px !important;
+   font-size: 9.5px !important;
    padding: 0 10px 2px !important;
  }
 }
 @media (max-height: 780px) {
- .sq-home-screen > .px-4.pt-2.space-y-4 > div:first-child { padding: 6px 10px !important; }
- .sq-home-screen .sq-home-quest-card { padding: 4px 8px !important; }
- .sq-home-screen .sq-home-quest-card > .relative.flex-shrink-0 > div:first-child { width: 26px !important; height: 26px !important; }
- .sq-home-screen .sq-home-quest-card > span { font-size: 12px !important; }
- .sq-home-screen > .px-4.pt-2.space-y-4 { padding-bottom: 88px !important; row-gap: 5px !important; }
+ .sq-home-screen > .px-4.pt-2.space-y-4 {
+   padding-bottom: 92px !important;
+   row-gap: 6px !important;
+ }
+ .sq-home-screen > .px-4.pt-2.space-y-4 > div:first-child {
+   padding: 7px 10px !important;
+ }
+ .sq-home-screen .sq-home-quest-card {
+   padding: 5px 9px !important;
+ }
+ .sq-home-screen .sq-home-quest-card > .relative.flex-shrink-0 > div:first-child {
+   width: 28px !important;
+   height: 28px !important;
+ }
+ .sq-home-screen .sq-home-quest-card > span {
+   font-size: 12.5px !important;
+ }
 }
+
 
 .sq-home-screen .sq-quest-row { border-radius: 999px !important; overflow: hidden; }
 @media (max-height: 760px) { .sq-root h1 { line-height: 1.05; } .sq-welcome-steps > div { padding: 10px !important; gap: 10px !important; } .sq-welcome-steps p { font-size: 11px !important; } .sq-welcome-steps > div > div:first-child { width: 32px !important; height: 32px !important; } }
@@ -1831,7 +1840,6 @@ const UPDATE_LOG = [
     current: true,
     items: [
       { Icon: Sparkles, title: 'Pill-shaped glass challenges', body: 'Daily challenge cards now use a softer capsule shape that fits the Expo glass theme instead of looking like rectangular panels.' },
-      { Icon: ListChecks, title: '6 daily challenges', body: 'Each day now gives you exactly 6 daily challenges instead of 8, keeping the Home screen compact while preserving a varied mix of exercise, timed, and lifestyle quests.' },
       { Icon: ListChecks, title: 'Refresh-safe daily challenges', body: 'Your daily challenge set is now seeded from the day, so refreshing the page keeps the same quests instead of generating a new set.' },
       { Icon: Timer, title: 'Real timed challenges', body: 'Timed quests now support both seconds and minutes. Runs, walks, cycling, mobility, reading, meditation and other longer activities keep their full duration.' },
       { Icon: Sparkles, title: '40 total challenge types', body: 'The challenge pool has expanded with mobility, phone-free walks, stair runs, cycling intervals, balance work, calf raises, sunlight, reading and box breathing.' },
@@ -1843,6 +1851,7 @@ const UPDATE_LOG = [
       { Icon: Check, title: 'Animated quest completion', body: 'Completing a quest now opens a richer completion scene with a pulsing checkmark, animated XP reveal, celebratory particles and level-up treatment.' },
       { Icon: TrophyIcon, title: 'All quests done home screen', body: 'When every daily quest is completed or cleared, the Home screen replaces the quest list with a dedicated animated finish state and the next reset countdown.' },
       { Icon: Trash2, title: 'Skip quest', body: 'You can now skip a quest directly from its detail screen. It disappears for the rest of the day and awards no XP.' },
+      { Icon: ChevronRight, title: 'Swipe through Settings', body: 'Swipe left or right on the Settings area to move between Account, Alerts, App, and Library pages without scrolling.' },
       { Icon: Sparkles, title: 'Theme-matched quest actions', body: 'Quest action buttons now use the challenge category color and shared styling, so the quest controls stay consistent with the active theme across detail and verification screens.' },
     ],
   },
@@ -2357,7 +2366,7 @@ const groups = useMemo(() => {
 }, [pageEntries]);
 
 return (
-<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-fit-screen" style={{ minHeight: 0, height: 0 }}>
+<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-fit-screen">
 <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
 <div className="flex items-center justify-between">
 <h1 className="sq-large-title" style={{ fontSize: 30, fontWeight: 700, color: c.label }}>History</h1>
@@ -2565,7 +2574,7 @@ if (res && !res.ok) { setDeleting(false); setDeleteError(res.error); }
 const usesPassword = authProviderLabel === 'password';
 
 return (
-<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-fit-screen" style={{ minHeight: 0, height: 0 }}>
+<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-fit-screen">
 <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 12px)' }}>
 <div className="flex items-center justify-between">
 <h1 className="sq-large-title" style={{ fontSize: 28, fontWeight: 700, color: c.label }}>Account & Settings</h1>
@@ -2575,7 +2584,7 @@ return (
 
 <div
 className="flex-1 sq-scroll sq-settings-continuous px-4 pt-2 space-y-4 sq-settings-shell"
-style={{ paddingBottom: 'calc(112px + env(safe-area-inset-bottom))', touchAction: 'pan-y' }}
+style={{ paddingBottom: 'calc(104px + env(safe-area-inset-bottom))', touchAction: 'pan-y' }}
 >
 {/* Profile */}
 <div style={{ ...glassStyle(c), borderRadius: 20, padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
@@ -3007,17 +3016,17 @@ const items = [
 { key: 'settings', label: 'Account', Icon: UserCog },
 ];
 return (
-<div style={{ position: 'fixed', left: '50%', bottom: 'max(env(safe-area-inset-bottom), 8px)', transform: 'translateX(-50%)', zIndex: 50 }}>
+<div style={{ position: 'fixed', left: '50%', bottom: 'max(env(safe-area-inset-bottom), 10px)', transform: 'translateX(-50%)', zIndex: 50 }}>
 <div
 className="backdrop-blur-2xl"
-style={{ ...glassStyle(c, true), borderRadius: 999, padding: '6px 6px', display: 'flex', width: 360, maxWidth: 'calc(100vw - 24px)' }}
+style={{ ...glassStyle(c, true), borderRadius: 999, padding: '5px 5px', display: 'flex', width: 360, maxWidth: 'calc(100vw - 24px)' }}
 >
 {items.map(({ key, label, Icon }) => {
 const active = activeTab === key;
 const color = active ? c.blue : c.gray;
 return (
 <button type="button" key={key} onClick={() => onChange(key)} className="sq-control"
-style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, padding: '8px 0 7px', borderRadius: 999, color, background: active ? c.fill : 'transparent' }}>
+style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, padding: '7px 0 6px', borderRadius: 999, color, background: active ? c.fill : 'transparent' }}>
 <span className={`sq-tab-icon ${active ? 'sq-tab-icon-active' : ''}`}><Icon size={21} strokeWidth={active ? 2.1 : 1.75} color={color} /></span>
 <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: -0.1, color }}>{label}</span>
 </button>
@@ -5854,7 +5863,7 @@ installSupported={installSupported}
  c={c}
 />
 ) : (
-<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-home-screen" style={{ minHeight: 0, height: '100dvh', maxHeight: '100dvh', overflow: 'hidden' }}>
+<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-home-screen" style={{ minHeight: 0, height: '100dvh', maxHeight: '100dvh', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
 <div className="sq-home-scale-stage" style={{ width: '100%', maxWidth: '100%', flexShrink: 0, boxSizing: 'border-box' }}>
 {/* Header */}
 <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
@@ -5985,4 +5994,3 @@ export default function QuestDailyApp() {
     </QuestDailyErrorBoundary>
   );
 }
-
