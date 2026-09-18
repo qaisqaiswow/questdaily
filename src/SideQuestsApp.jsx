@@ -1072,8 +1072,8 @@ const QUEST_POOL = [
 { id: 'q24', textTemplate: 'Go to bed earlier tonight', xp: 50 },
 ];
 
-const QUEST_SCHEMA_VERSION = 'timed-v4';
-const DAILY_QUEST_COUNT = 8;
+const QUEST_SCHEMA_VERSION = 'timed-v5';
+const DAILY_QUEST_COUNT = 6;
 
 function hashSeed(input) {
   let h = 2166136261;
@@ -1148,11 +1148,11 @@ function createDailyQuests(dayKey = localDayKey(Date.now())) {
   const timedSeconds = shuffleSeeded(QUEST_POOL.filter(q => q.durationOptions?.length && q.durationDisplay === 'seconds'), rng);
   const proof = shuffleSeeded(QUEST_POOL.filter(q => !q.reps && !q.durationOptions?.length), rng);
 
-  // Guaranteed daily mix: reps + minute-scale activities + short timed work + a couple of proof/lifestyle quests.
+  // Guaranteed daily mix: 2 rep quests + 1 minute-scale activity + 1 short timed quest + 2 proof/lifestyle quests.
   let selected = [
     ...reps.slice(0, 2),
-    ...timedMinutes.slice(0, 2),
-    ...timedSeconds.slice(0, 2),
+    ...timedMinutes.slice(0, 1),
+    ...timedSeconds.slice(0, 1),
     ...proof.slice(0, 2),
   ];
 
@@ -1383,7 +1383,7 @@ html, body { overscroll-behavior: none; }
 .sq-settings-swipe-prev { animation: sqSettingsSwipePrev 180ms cubic-bezier(.22,1,.36,1); }
 .sq-settings-pager button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sq-settings-shell .sq-settings-section { display: block !important; }
-.sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
+ .sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
 .sq-home-screen {
  width: 100%;
  max-width: 100%;
@@ -1398,20 +1398,20 @@ html, body { overscroll-behavior: none; }
  flex-shrink: 1 !important;
 }
 .sq-home-screen .sq-home-quest-grid {
- gap: 6px !important;
+ gap: 10px !important;
 }
 .sq-home-screen .sq-home-quest-card {
- padding: 9px 12px !important;
- min-height: 40px !important;
+ padding: 13px 14px !important;
+ min-height: 52px !important;
 }
 .sq-home-screen .sq-home-quest-card span {
- line-height: 1.15 !important;
+ line-height: 1.2 !important;
 }
-@media (max-height: 760px) {
- .sq-home-screen .sq-home-quest-card { padding: 7px 11px !important; min-height: 36px !important; }
- .sq-home-screen .sq-home-quest-card svg { transform: scale(.9); }
- .sq-home-screen .sq-home-quest-card { gap: 9px !important; }
- .sq-home-screen .sq-home-quest-card span { font-size: 13px !important; }
+@media (max-height: 700px) {
+ .sq-home-screen .sq-home-quest-card { padding: 11px 13px !important; min-height: 46px !important; }
+ .sq-home-screen .sq-home-quest-card svg { transform: none; }
+ .sq-home-screen .sq-home-quest-card { gap: 10px !important; }
+ .sq-home-screen .sq-home-quest-card span { font-size: 14px !important; }
  .sq-home-screen .sq-home-scale-stage > .px-4.pb-2 { padding-top: max(env(safe-area-inset-top), 10px) !important; }
  .sq-home-screen .sq-home-scale-stage > .px-4.pb-2 .mt-3 { margin-top: 6px !important; }
  .sq-home-screen .sq-home-scale-stage > .px-4.pb-2 .mt-1 { margin-top: 3px !important; }
@@ -1445,26 +1445,26 @@ html, body { overscroll-behavior: none; }
    gap: 10px !important;
  }
  .sq-home-screen .sq-home-quest-grid {
-   gap: 5px !important;
+   gap: 10px !important;
  }
  .sq-home-screen .sq-home-quest-card {
-   min-height: 0 !important;
-   padding: 6px 10px !important;
-   gap: 8px !important;
-   line-height: 1.08 !important;
+   min-height: 52px !important;
+   padding: 13px 14px !important;
+   gap: 10px !important;
+   line-height: 1.15 !important;
  }
  .sq-home-screen .sq-home-quest-card > .relative.flex-shrink-0 > div:first-child {
-   width: 30px !important;
-   height: 30px !important;
-   border-radius: 10px !important;
+   width: 32px !important;
+   height: 32px !important;
+   border-radius: 11px !important;
  }
  .sq-home-screen .sq-home-quest-card > .relative.flex-shrink-0 > div:first-child svg {
-   width: 15px !important;
-   height: 15px !important;
+   width: 16px !important;
+   height: 16px !important;
  }
  .sq-home-screen .sq-home-quest-card > span {
-   font-size: 13px !important;
-   line-height: 1.08 !important;
+   font-size: 14px !important;
+   line-height: 1.15 !important;
  }
  .sq-home-screen .sq-home-quest-card .sq-mono { font-size: 10.5px !important; }
  .sq-home-screen .sq-home-quest-card .sq-icon-tap svg {
@@ -1485,14 +1485,15 @@ html, body { overscroll-behavior: none; }
    padding: 7px 10px !important;
  }
  .sq-home-screen .sq-home-quest-card {
-   padding: 5px 9px !important;
+   padding: 11px 13px !important;
+   min-height: 46px !important;
  }
  .sq-home-screen .sq-home-quest-card > .relative.flex-shrink-0 > div:first-child {
-   width: 28px !important;
-   height: 28px !important;
+   width: 30px !important;
+   height: 30px !important;
  }
  .sq-home-screen .sq-home-quest-card > span {
-   font-size: 12.5px !important;
+   font-size: 13.5px !important;
  }
 }
 
@@ -3443,7 +3444,7 @@ style={{ ...questButtonStyle(c, accent, 'primary') }} className="sq-quest-cta">
 );
 }
 
-function AllQuestsDoneScreen({ dark, onToggleTheme, lastReset, c, completedCount = 0, skippedCount = 0 }) {
+function AllQuestsDoneScreen({ dark, onToggleTheme, lastReset, c, completedCount = 0, skippedCount = 0, total = 0 }) {
 const particles = useMemo(() => Array.from({ length: 16 }, (_, i) => ({
   dx: `${((i * 43) % 150) - 75}px`,
   dy: `${-44 - ((i * 29) % 84)}px`,
@@ -3498,7 +3499,7 @@ return (
       <Check size={16} color={c.green} strokeWidth={2} />
       <span style={{ fontSize: 13, fontWeight: 650, color: c.label }}>Today’s board is clear</span>
     </div>
-    <span className="sq-mono" style={{ fontSize: 12, fontWeight: 800, color: c.green }}>{completedCount + skippedCount}/8</span>
+    <span className="sq-mono" style={{ fontSize: 12, fontWeight: 800, color: c.green }}>{completedCount + skippedCount}/{total}</span>
   </div>
   <div style={{ marginTop: 11, height: 7, borderRadius: 999, background: c.fill, overflow: 'hidden' }}>
     <div style={{ width: '100%', height: '100%', borderRadius: 999, background: c.green, animation: 'sq-pulse-soft 1.8s ease-in-out infinite' }} />
@@ -5915,7 +5916,7 @@ LV {level}
 </div>
 
 {allResolved ? (
-<AllQuestsDoneScreen dark={dark} onToggleTheme={() => setDark(d => !d)} lastReset={lastReset} c={c} completedCount={completedCount} skippedCount={skippedCount} />
+<AllQuestsDoneScreen dark={dark} onToggleTheme={() => setDark(d => !d)} lastReset={lastReset} c={c} completedCount={completedCount} skippedCount={skippedCount} total={quests.length} />
 ) : (
 <>
 <div>
