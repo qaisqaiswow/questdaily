@@ -1300,11 +1300,13 @@ useEffect(() => {
   body.style.backgroundColor = bg;
   body.style.backgroundImage = 'none';
   body.style.color = c?.label || '#000';
-  root.style.overflow = 'hidden';
-  root.style.height = '100dvh';
-  body.style.overflow = 'hidden';
-  body.style.height = '100dvh';
-  if (appRoot) { appRoot.style.backgroundColor = bg; appRoot.style.height = '100dvh'; appRoot.style.overflow = 'hidden'; }
+  root.style.overflowX = 'hidden';
+  root.style.overflowY = 'auto';
+  root.style.minHeight = '100%';
+  body.style.overflowX = 'hidden';
+  body.style.overflowY = 'auto';
+  body.style.minHeight = '100%';
+  if (appRoot) { appRoot.style.backgroundColor = bg; appRoot.style.height = 'auto'; appRoot.style.minHeight = '100%'; appRoot.style.overflow = 'visible'; }
 
   let themeMeta = document.querySelector('meta[name="theme-color"]');
   if (!themeMeta) {
@@ -1335,10 +1337,10 @@ scrolling (pan-y); it only blocks the pinch/double-tap zoom gestures —
 the viewport meta tag in index.html should also set
 maximum-scale=1, user-scalable=no as the primary safeguard, since
 some browsers only respect that and ignore touch-action for zoom. */
-html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden !important; }
-html, body { overscroll-behavior: none; }
-.sq-fit-screen { min-height: 0 !important; height: 100% !important; max-height: 100dvh !important; overflow: hidden !important; }
-.sq-scroll { overflow: hidden !important; -webkit-overflow-scrolling: auto; overscroll-behavior: none; }
+html, body, #root { width: 100%; min-height: 100%; margin: 0; overflow-x: hidden !important; overflow-y: auto !important; }
+html, body { overscroll-behavior-x: none; overscroll-behavior-y: auto; }
+.sq-fit-screen { min-height: 0 !important; height: auto !important; max-height: none !important; overflow: visible !important; }
+.sq-scroll { overflow-y: auto !important; overflow-x: hidden !important; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; }
 .sq-settings-pager { scrollbar-width: none; }
 .sq-settings-pager::-webkit-scrollbar { display: none; }
 .sq-settings-page-hidden { display: none !important; }
@@ -1350,13 +1352,11 @@ html, body { overscroll-behavior: none; }
 .sq-settings-pager button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sq-settings-shell[data-page="1"] .sq-settings-page-2, .sq-settings-shell[data-page="1"] .sq-settings-page-3, .sq-settings-shell[data-page="1"] .sq-settings-page-4, .sq-settings-shell[data-page="2"] .sq-settings-page-1, .sq-settings-shell[data-page="2"] .sq-settings-page-3, .sq-settings-shell[data-page="2"] .sq-settings-page-4, .sq-settings-shell[data-page="3"] .sq-settings-page-1, .sq-settings-shell[data-page="3"] .sq-settings-page-2, .sq-settings-shell[data-page="3"] .sq-settings-page-4, .sq-settings-shell[data-page="4"] .sq-settings-page-1, .sq-settings-shell[data-page="4"] .sq-settings-page-2, .sq-settings-shell[data-page="4"] .sq-settings-page-3 { display: none !important; }
 .sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
-@media (max-height: 920px) { .sq-home-quest-grid { gap: 6px; } .sq-home-quest-card { padding: 10px 12px !important; border-radius: 16px !important; } .sq-home-quest-card > span { font-size: 13.5px !important; } }
-@media (max-height: 900px) and (max-width: 700px) { .sq-home-quest-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; } .sq-home-quest-card { min-height: 62px; padding: 9px !important; gap: 8px !important; } .sq-home-quest-card .sq-mono { font-size: 9px !important; } .sq-home-quest-card > span { font-size: 11.5px !important; line-height: 1.15 !important; } .sq-home-quest-card .sq-icon-tap { display: none; } }
 @media (max-height: 760px) { .sq-root h1 { line-height: 1.05; } .sq-welcome-steps > div { padding: 10px !important; gap: 10px !important; } .sq-welcome-steps p { font-size: 11px !important; } .sq-welcome-steps > div > div:first-child { width: 32px !important; height: 32px !important; } }
 .sq-root {
 -webkit-user-select: none; -moz-user-select: none; user-select: none;
 -webkit-touch-callout: none;
-touch-action: none;
+touch-action: pan-x pan-y;
 }
 .sq-root input, .sq-root textarea {
 -webkit-user-select: text; -moz-user-select: text; user-select: text;
@@ -1371,7 +1371,7 @@ still crossfade smoothly. */
 transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease;
 }
 svg { transition: stroke 0.2s ease, fill 0.2s ease; }
-.sq-scroll { -webkit-overflow-scrolling: auto; overscroll-behavior: none; overflow: hidden !important; }
+.sq-scroll { -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; overflow-y: auto !important; overflow-x: hidden !important; }
 .sq-root button, .sq-root a { contain: layout style; }
 .sq-root { overflow-x: clip; }
 .sq-heart-rain {
@@ -2432,12 +2432,12 @@ return (
 </div>
 
 <div
-className={`flex-1 sq-scroll overflow-hidden px-4 pt-2 space-y-4 sq-settings-shell ${settingsSwipeDirection === 'next' ? 'sq-settings-swipe-next' : 'sq-settings-swipe-prev'}`}
+className={`flex-1 sq-scroll overflow-y-auto px-4 pt-2 space-y-4 sq-settings-shell ${settingsSwipeDirection === 'next' ? 'sq-settings-swipe-next' : 'sq-settings-swipe-prev'}`}
 key={settingsPage}
 onTouchStart={handleSettingsTouchStart}
 onTouchEnd={handleSettingsTouchEnd}
 data-page={settingsPage}
-style={{ paddingBottom: 'calc(94px + env(safe-area-inset-bottom))' }}
+style={{ paddingBottom: 'calc(94px + env(safe-area-inset-bottom))', touchAction: 'pan-y' }}
 >
 {/* Profile */}
 <div style={{ ...glassStyle(c), borderRadius: 20, padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
@@ -5632,9 +5632,9 @@ const allDone = allResolved;
 const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
 return (
-<div className={`sq-root${LOW_END_DEVICE ? ' sq-low-end' : ''}`} style={{ background: c.bg, height: '100dvh', minHeight: '100dvh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflow: 'hidden', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
+<div className={`sq-root${LOW_END_DEVICE ? ' sq-low-end' : ''}`} style={{ background: c.bg, minHeight: '100vh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
 <SystemType c={c} />
-<div className="relative w-full flex flex-col sq-fit-screen" style={{ background: c.bg, zIndex: 2 }}>
+<div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg, zIndex: 2 }}>
 <AmbientBackground c={c} disabled={Boolean(proofModal)} />
 
 {isSaqoom && !proofModal && (
@@ -5749,7 +5749,7 @@ LV {level}
 </div>
 </div>
 
-<div className="flex-1 sq-scroll overflow-hidden px-4 pt-2 space-y-4" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
+<div className="flex-1 sq-scroll overflow-y-auto px-4 pt-2 space-y-4" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
 <div style={{ ...glassStyle(c), borderRadius: 20, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14 }} className="sq-anim-in">
 <ProgressRing pct={dailyPct} c={c} size={44} />
 <div className="flex-1" style={{ minWidth: 0 }}>
