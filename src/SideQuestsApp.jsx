@@ -1353,7 +1353,7 @@ html, body, #root {
 @supports (height: 100svh) {
  html, body, #root { min-height: 100svh; }
 }
-html, body { overscroll-behavior-x: none; overscroll-behavior-y: auto; }
+html, body { overscroll-behavior: none; }
 .sq-fit-screen { min-height: 0 !important; height: auto !important; max-height: none !important; overflow: visible !important; }
 .sq-scroll {
  overflow: hidden !important;
@@ -1366,12 +1366,23 @@ html, body { overscroll-behavior-x: none; overscroll-behavior-y: auto; }
 .sq-settings-pager::-webkit-scrollbar { display: none; }
 .sq-settings-page-hidden { display: none !important; }
 .sq-settings-section { min-width: 0; }
+.sq-settings-continuous {
+ overflow-y: auto !important;
+ overflow-x: hidden !important;
+ -webkit-overflow-scrolling: touch !important;
+ overscroll-behavior-y: contain !important;
+ min-height: 0 !important;
+}
+.sq-settings-continuous .sq-settings-section {
+ display: block !important;
+}
+
 @keyframes sqSettingsSwipeNext { from { opacity: 0; transform: translate3d(34px,0,0) scale(.995); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } }
 @keyframes sqSettingsSwipePrev { from { opacity: 0; transform: translate3d(-34px,0,0) scale(.995); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } }
 .sq-settings-swipe-next { animation: sqSettingsSwipeNext 180ms cubic-bezier(.22,1,.36,1); }
 .sq-settings-swipe-prev { animation: sqSettingsSwipePrev 180ms cubic-bezier(.22,1,.36,1); }
 .sq-settings-pager button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sq-settings-shell[data-page="1"] .sq-settings-page-2, .sq-settings-shell[data-page="1"] .sq-settings-page-3, .sq-settings-shell[data-page="1"] .sq-settings-page-4, .sq-settings-shell[data-page="2"] .sq-settings-page-1, .sq-settings-shell[data-page="2"] .sq-settings-page-3, .sq-settings-shell[data-page="2"] .sq-settings-page-4, .sq-settings-shell[data-page="3"] .sq-settings-page-1, .sq-settings-shell[data-page="3"] .sq-settings-page-2, .sq-settings-shell[data-page="3"] .sq-settings-page-4, .sq-settings-shell[data-page="4"] .sq-settings-page-1, .sq-settings-shell[data-page="4"] .sq-settings-page-2, .sq-settings-shell[data-page="4"] .sq-settings-page-3 { display: none !important; }
+.sq-settings-shell .sq-settings-section { display: block !important; }
 .sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
 .sq-home-screen {
  width: 100%;
@@ -1411,6 +1422,49 @@ html, body { overscroll-behavior-x: none; overscroll-behavior-y: auto; }
 }
 
 .sq-home-scale-stage { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; overflow: visible; }
+@media (max-height: 900px) {
+ .sq-home-screen > .sq-home-scale-stage > .px-4.pb-2 { padding-top: max(env(safe-area-inset-top), 10px) !important; padding-bottom: 4px !important; }
+ .sq-home-screen .sq-large-title { font-size: 28px !important; }
+ .sq-home-screen .sq-home-scale-stage .mt-3 { margin-top: 7px !important; }
+ .sq-home-screen .sq-home-scale-stage .mt-1 { margin-top: 3px !important; }
+ .sq-home-screen .sq-home-scale-stage .sq-glass { margin-top: 7px !important; padding: 7px 11px !important; }
+ .sq-home-screen > .px-4.pt-2.space-y-4 { padding-top: 5px !important; padding-bottom: 92px !important; row-gap: 7px !important; }
+ .sq-home-screen > .px-4.pt-2.space-y-4 > div:first-child { padding: 8px 12px !important; gap: 10px !important; }
+ .sq-home-screen > .px-4.pt-2.space-y-4 .sq-home-quest-grid { gap: 4px !important; }
+ .sq-home-screen .sq-home-quest-card {
+   min-height: 0 !important;
+   padding: 5px 9px !important;
+   gap: 7px !important;
+   line-height: 1.05 !important;
+ }
+ .sq-home-screen .sq-home-quest-card > .relative.flex-shrink-0 > div:first-child {
+   width: 28px !important;
+   height: 28px !important;
+   border-radius: 10px !important;
+ }
+ .sq-home-screen .sq-home-quest-card > .relative.flex-shrink-0 > div:first-child svg {
+   width: 14px !important;
+   height: 14px !important;
+ }
+ .sq-home-screen .sq-home-quest-card > span {
+   font-size: 12.5px !important;
+   line-height: 1.05 !important;
+ }
+ .sq-home-screen .sq-home-quest-card .sq-mono { font-size: 10px !important; }
+ .sq-home-screen .sq-home-quest-card .sq-icon-tap svg { width: 16px !important; height: 16px !important; }
+ .sq-home-screen > .px-4.pt-2.space-y-4 > div:last-child > p:last-child {
+   font-size: 9px !important;
+   padding: 0 10px 2px !important;
+ }
+}
+@media (max-height: 780px) {
+ .sq-home-screen > .px-4.pt-2.space-y-4 > div:first-child { padding: 6px 10px !important; }
+ .sq-home-screen .sq-home-quest-card { padding: 4px 8px !important; }
+ .sq-home-screen .sq-home-quest-card > .relative.flex-shrink-0 > div:first-child { width: 26px !important; height: 26px !important; }
+ .sq-home-screen .sq-home-quest-card > span { font-size: 12px !important; }
+ .sq-home-screen > .px-4.pt-2.space-y-4 { padding-bottom: 88px !important; row-gap: 5px !important; }
+}
+
 .sq-home-screen .sq-quest-row { border-radius: 999px !important; overflow: hidden; }
 @media (max-height: 760px) { .sq-root h1 { line-height: 1.05; } .sq-welcome-steps > div { padding: 10px !important; gap: 10px !important; } .sq-welcome-steps p { font-size: 11px !important; } .sq-welcome-steps > div > div:first-child { width: 32px !important; height: 32px !important; } }
 .sq-root {
@@ -2493,18 +2547,12 @@ return (
 <div className="flex items-center justify-between">
 <h1 className="sq-large-title" style={{ fontSize: 28, fontWeight: 700, color: c.label }}>Account & Settings</h1>
 </div>
-<div className="sq-settings-pager" style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 5, padding: 4, borderRadius: 14, background: c.fill }}>
-{['Account','Alerts','App','Library'].map((label, i) => { const p = i + 1; const active = settingsPage === p; return <button key={label} type="button" onClick={() => switchSettingsPage(p, p > settingsPage ? 'next' : 'prev')} style={{ minWidth: 0, padding: '7px 4px', borderRadius: 10, background: active ? c.bgElevated : 'transparent', color: active ? c.label : c.labelTertiary, fontSize: 10.5, fontWeight: active ? 800 : 600 }}>{label}</button>; })}
-</div>
+
 </div>
 
 <div
-className={`flex-1 sq-scroll overflow-y-auto px-4 pt-2 space-y-4 sq-settings-shell ${settingsSwipeDirection === 'next' ? 'sq-settings-swipe-next' : 'sq-settings-swipe-prev'}`}
-key={settingsPage}
-onTouchStart={handleSettingsTouchStart}
-onTouchEnd={handleSettingsTouchEnd}
-data-page={settingsPage}
-style={{ paddingBottom: 'calc(94px + env(safe-area-inset-bottom))', touchAction: 'pan-y' }}
+className="flex-1 sq-scroll sq-settings-continuous px-4 pt-2 space-y-4 sq-settings-shell"
+style={{ paddingBottom: 'calc(104px + env(safe-area-inset-bottom))', touchAction: 'pan-y' }}
 >
 {/* Profile */}
 <div style={{ ...glassStyle(c), borderRadius: 20, padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
@@ -2936,7 +2984,7 @@ const items = [
 { key: 'settings', label: 'Account', Icon: UserCog },
 ];
 return (
-<div style={{ position: 'fixed', left: '50%', bottom: 'max(env(safe-area-inset-bottom), 16px)', transform: 'translateX(-50%)', zIndex: 50 }}>
+<div style={{ position: 'fixed', left: '50%', bottom: 'max(env(safe-area-inset-bottom), 8px)', transform: 'translateX(-50%)', zIndex: 50 }}>
 <div
 className="backdrop-blur-2xl"
 style={{ ...glassStyle(c, true), borderRadius: 999, padding: '6px 6px', display: 'flex', width: 360, maxWidth: 'calc(100vw - 24px)' }}
