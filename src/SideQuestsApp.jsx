@@ -1352,6 +1352,8 @@ html, body { overscroll-behavior-x: none; overscroll-behavior-y: auto; }
 .sq-settings-pager button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sq-settings-shell[data-page="1"] .sq-settings-page-2, .sq-settings-shell[data-page="1"] .sq-settings-page-3, .sq-settings-shell[data-page="1"] .sq-settings-page-4, .sq-settings-shell[data-page="2"] .sq-settings-page-1, .sq-settings-shell[data-page="2"] .sq-settings-page-3, .sq-settings-shell[data-page="2"] .sq-settings-page-4, .sq-settings-shell[data-page="3"] .sq-settings-page-1, .sq-settings-shell[data-page="3"] .sq-settings-page-2, .sq-settings-shell[data-page="3"] .sq-settings-page-4, .sq-settings-shell[data-page="4"] .sq-settings-page-1, .sq-settings-shell[data-page="4"] .sq-settings-page-2, .sq-settings-shell[data-page="4"] .sq-settings-page-3 { display: none !important; }
 .sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
+.sq-home-screen { contain: layout paint; }
+.sq-home-scale-stage { transform-origin: top center; }
 @media (max-height: 760px) { .sq-root h1 { line-height: 1.05; } .sq-welcome-steps > div { padding: 10px !important; gap: 10px !important; } .sq-welcome-steps p { font-size: 11px !important; } .sq-welcome-steps > div > div:first-child { width: 32px !important; height: 32px !important; } }
 .sq-root {
 -webkit-user-select: none; -moz-user-select: none; user-select: none;
@@ -4914,7 +4916,7 @@ class QuestDailyErrorBoundary extends React.Component {
   render() {
     if (this.state.error) {
       return (
-        <div style={{ minHeight: '100vh', width: '100vw', background: '#000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, boxSizing: 'border-box', fontFamily: '-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif' }}>
+        <div style={{ minHeight: '100dvh', width: '100vw', background: '#000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, boxSizing: 'border-box', fontFamily: '-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif' }}>
           <div style={{ width: '100%', maxWidth: 520 }}>
             <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>QuestDaily hit an error</div>
             <div style={{ fontSize: 14, lineHeight: 1.5, opacity: .75, marginBottom: 16 }}>The app crashed while starting instead of hiding the error behind a white screen.</div>
@@ -5362,6 +5364,30 @@ console.error('Data export failed:', err);
 
 const authProviderLabel = getAuthProviderLabel(authUser);
 
+// Home keeps the original one-column layout, but scales the complete
+// composition on short viewports so all eight daily quests fit above the
+// floating tab bar. Other screens retain normal scrolling.
+const [homeScale, setHomeScale] = useState(1);
+useEffect(() => {
+  if (activeTab !== 'quests' || completionQuest || detailQuest || proofModalId) {
+    setHomeScale(1);
+    return undefined;
+  }
+  const measure = () => {
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 800;
+    // Approximate the original Home composition height. This intentionally
+    // scales only the Home screen; lists/settings elsewhere remain scrollable.
+    const next = Math.min(1, Math.max(0.70, (viewportHeight - 72) / 980));
+    setHomeScale(prev => Math.abs(prev - next) > 0.008 ? next : prev);
+  };
+  measure();
+  window.addEventListener('resize', measure, { passive: true });
+  window.addEventListener('orientationchange', measure, { passive: true });
+  return () => {
+    window.removeEventListener('resize', measure);
+    window.removeEventListener('orientationchange', measure);
+  };
+}, [activeTab, completionQuest, detailQuest, proofModalId]);
 
 useEffect(() => {
 if (uid && username) {
@@ -5632,9 +5658,9 @@ const allDone = allResolved;
 const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
 return (
-<div className={`sq-root${LOW_END_DEVICE ? ' sq-low-end' : ''}`} style={{ background: c.bg, minHeight: '100vh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
+<div className={`sq-root${LOW_END_DEVICE ? ' sq-low-end' : ''}`} style={{ background: c.bg, minHeight: '100dvh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
 <SystemType c={c} />
-<div className="relative w-full flex flex-col min-h-screen" style={{ background: c.bg, zIndex: 2 }}>
+<div className="relative w-full flex flex-col" style={{ background: c.bg, zIndex: 2, minHeight: '100dvh' }}>
 <AmbientBackground c={c} disabled={Boolean(proofModal)} />
 
 {isSaqoom && !proofModal && (
@@ -5714,7 +5740,8 @@ installSupported={installSupported}
  c={c}
 />
 ) : (
-<div className="relative z-10 flex flex-col flex-1 sq-anim-in">
+<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-home-screen" style={{ minHeight: 0, height: '100dvh', overflow: 'hidden' }}>
+<div ref={homeScaleRef} className="sq-home-scale-stage" style={{ width: `${100 / homeScale}%`, zoom: homeScale, transformOrigin: 'top center', flexShrink: 0 }}>
 {/* Header */}
 <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
 <div className="flex items-center justify-between">
@@ -5749,7 +5776,7 @@ LV {level}
 </div>
 </div>
 
-<div className="flex-1 sq-scroll overflow-y-auto px-4 pt-2 space-y-4" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
+<div className="px-4 pt-2 space-y-4" style={{ paddingBottom: 'calc(100px + env(safe-area-inset-bottom))' }}>
 <div style={{ ...glassStyle(c), borderRadius: 20, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 14 }} className="sq-anim-in">
 <ProgressRing pct={dailyPct} c={c} size={44} />
 <div className="flex-1" style={{ minWidth: 0 }}>
@@ -5826,6 +5853,7 @@ Checked on your device — nothing you record ever leaves your phone.
 </p>
 </>
 )}
+</div>
 </div>
 </div>
 )}
