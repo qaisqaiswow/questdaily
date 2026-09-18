@@ -2334,7 +2334,7 @@ const groups = useMemo(() => {
 }, [pageEntries]);
 
 return (
-<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-fit-screen">
+<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-fit-screen" style={{ minHeight: 0, height: 0 }}>
 <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
 <div className="flex items-center justify-between">
 <h1 className="sq-large-title" style={{ fontSize: 30, fontWeight: 700, color: c.label }}>History</h1>
@@ -5962,3 +5962,37 @@ export default function QuestDailyApp() {
     </QuestDailyErrorBoundary>
   );
 }
+
+/* FINAL SETTINGS SCROLL FIX
+   The app shell is intentionally non-scrollable. Account & Settings gets
+   its own real scroll viewport, with the other settings sections stacked
+   continuously inside it. */
+.sq-root .sq-settings-continuous {
+  display: block !important;
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  height: 0 !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  -webkit-overflow-scrolling: touch !important;
+  overscroll-behavior-y: contain !important;
+  overscroll-behavior-x: none !important;
+  touch-action: pan-y !important;
+  scrollbar-width: none;
+}
+.sq-root .sq-settings-continuous::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+}
+.sq-root .sq-settings-continuous .sq-settings-section {
+  display: block !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  flex: none !important;
+}
+.sq-root .sq-settings-shell {
+  overflow-y: auto !important;
+}
+
