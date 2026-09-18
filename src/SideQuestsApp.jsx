@@ -1343,7 +1343,7 @@ html, body, #root {
  min-height: 100%;
  margin: 0;
  overflow-x: hidden !important;
- overflow-y: auto !important;
+ overflow-y: hidden !important;
  background: #000;
 }
 html, body, #root {
@@ -1362,9 +1362,32 @@ html, body { overscroll-behavior: none; }
  -webkit-overflow-scrolling: auto !important;
  overscroll-behavior: none !important;
 }
-.sq-settings-pager { scrollbar-width: none; }
-.sq-settings-pager::-webkit-scrollbar { display: none; }
-.sq-settings-page-hidden { display: none !important; }
+/* Settings is the one intentional scroll viewport. */
+.sq-root .sq-settings-continuous {
+ display: block !important;
+ flex: 1 1 0% !important;
+ min-height: 0 !important;
+ height: 0 !important;
+ max-height: none !important;
+ overflow-y: auto !important;
+ overflow-x: hidden !important;
+ -webkit-overflow-scrolling: touch !important;
+ overscroll-behavior-y: contain !important;
+ overscroll-behavior-x: none !important;
+ touch-action: pan-y !important;
+ scrollbar-width: none;
+}
+.sq-root .sq-settings-continuous::-webkit-scrollbar { display: none !important; width: 0 !important; }
+.sq-root .sq-settings-continuous .sq-settings-section {
+ display: block !important;
+ height: auto !important;
+ max-height: none !important;
+ overflow: visible !important;
+ flex: none !important;
+}
+
+
+
 .sq-settings-section { min-width: 0; }
 .sq-settings-continuous {
  overflow-y: auto !important;
@@ -1382,7 +1405,7 @@ html, body { overscroll-behavior: none; }
 .sq-settings-swipe-next { animation: sqSettingsSwipeNext 180ms cubic-bezier(.22,1,.36,1); }
 .sq-settings-swipe-prev { animation: sqSettingsSwipePrev 180ms cubic-bezier(.22,1,.36,1); }
 .sq-settings-pager button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sq-settings-shell .sq-settings-section { display: block !important; }
+
 .sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
 .sq-home-screen {
  width: 100%;
@@ -2542,7 +2565,7 @@ if (res && !res.ok) { setDeleting(false); setDeleteError(res.error); }
 const usesPassword = authProviderLabel === 'password';
 
 return (
-<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-fit-screen">
+<div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-fit-screen" style={{ minHeight: 0, height: 0 }}>
 <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 12px)' }}>
 <div className="flex items-center justify-between">
 <h1 className="sq-large-title" style={{ fontSize: 28, fontWeight: 700, color: c.label }}>Account & Settings</h1>
@@ -2552,7 +2575,7 @@ return (
 
 <div
 className="flex-1 sq-scroll sq-settings-continuous px-4 pt-2 space-y-4 sq-settings-shell"
-style={{ paddingBottom: 'calc(104px + env(safe-area-inset-bottom))', touchAction: 'pan-y' }}
+style={{ paddingBottom: 'calc(112px + env(safe-area-inset-bottom))', touchAction: 'pan-y' }}
 >
 {/* Profile */}
 <div style={{ ...glassStyle(c), borderRadius: 20, padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
@@ -5961,38 +5984,5 @@ export default function QuestDailyApp() {
       <QuestDailyAppInner />
     </QuestDailyErrorBoundary>
   );
-}
-
-/* FINAL SETTINGS SCROLL FIX
-   The app shell is intentionally non-scrollable. Account & Settings gets
-   its own real scroll viewport, with the other settings sections stacked
-   continuously inside it. */
-.sq-root .sq-settings-continuous {
-  display: block !important;
-  flex: 1 1 0% !important;
-  min-height: 0 !important;
-  height: 0 !important;
-  max-height: none !important;
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
-  -webkit-overflow-scrolling: touch !important;
-  overscroll-behavior-y: contain !important;
-  overscroll-behavior-x: none !important;
-  touch-action: pan-y !important;
-  scrollbar-width: none;
-}
-.sq-root .sq-settings-continuous::-webkit-scrollbar {
-  display: none !important;
-  width: 0 !important;
-}
-.sq-root .sq-settings-continuous .sq-settings-section {
-  display: block !important;
-  height: auto !important;
-  max-height: none !important;
-  overflow: visible !important;
-  flex: none !important;
-}
-.sq-root .sq-settings-shell {
-  overflow-y: auto !important;
 }
 
