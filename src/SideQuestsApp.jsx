@@ -1352,8 +1352,8 @@ html, body { overscroll-behavior-x: none; overscroll-behavior-y: auto; }
 .sq-settings-pager button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sq-settings-shell[data-page="1"] .sq-settings-page-2, .sq-settings-shell[data-page="1"] .sq-settings-page-3, .sq-settings-shell[data-page="1"] .sq-settings-page-4, .sq-settings-shell[data-page="2"] .sq-settings-page-1, .sq-settings-shell[data-page="2"] .sq-settings-page-3, .sq-settings-shell[data-page="2"] .sq-settings-page-4, .sq-settings-shell[data-page="3"] .sq-settings-page-1, .sq-settings-shell[data-page="3"] .sq-settings-page-2, .sq-settings-shell[data-page="3"] .sq-settings-page-4, .sq-settings-shell[data-page="4"] .sq-settings-page-1, .sq-settings-shell[data-page="4"] .sq-settings-page-2, .sq-settings-shell[data-page="4"] .sq-settings-page-3 { display: none !important; }
 .sq-home-quest-grid { display: flex; flex-direction: column; gap: 10px; }
-.sq-home-screen { contain: layout paint; }
-.sq-home-scale-stage { transform-origin: top center; }
+.sq-home-screen { contain: layout paint; width: 100%; max-width: 100%; overflow: hidden; box-sizing: border-box; }
+.sq-home-scale-stage { transform-origin: top center; width: 100%; max-width: 100%; box-sizing: border-box; overflow: visible; }
 @media (max-height: 760px) { .sq-root h1 { line-height: 1.05; } .sq-welcome-steps > div { padding: 10px !important; gap: 10px !important; } .sq-welcome-steps p { font-size: 11px !important; } .sq-welcome-steps > div > div:first-child { width: 32px !important; height: 32px !important; } }
 .sq-root {
 -webkit-user-select: none; -moz-user-select: none; user-select: none;
@@ -5367,7 +5367,17 @@ const authProviderLabel = getAuthProviderLabel(authUser);
 // Home keeps the original one-column layout, but scales the complete
 // composition on short viewports so all eight daily quests fit above the
 // floating tab bar. Other screens retain normal scrolling.
+// These modal/detail states must be declared before the scaling effect because
+// the effect closes over them during render. Keeping them above the effect
+// prevents a production-build Temporal Dead Zone (TDZ) crash after minification.
+const [proofModalId, setProofModalId] = useState(null);
+const [viewingProof, setViewingProof] = useState(null);
+const [detailQuestId, setDetailQuestId] = useState(null);
+const [completionQuest, setCompletionQuest] = useState(null);
+const homeScaleRef = useRef(null);
 const [homeScale, setHomeScale] = useState(1);
+const proofModal = quests.find(q => q.id === proofModalId) || null;
+const detailQuest = quests.find(q => q.id === detailQuestId) || null;
 useEffect(() => {
   if (activeTab !== 'quests' || completionQuest || detailQuest || proofModalId) {
     setHomeScale(1);
@@ -5399,14 +5409,6 @@ syncLeaderboardEntry(uid, { username, level, xp, totalXpEarned, streak })
 }
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [uid, username]);
-
-const [proofModalId, setProofModalId] = useState(null);
-const [viewingProof, setViewingProof] = useState(null);
-const [detailQuestId, setDetailQuestId] = useState(null);
-const [completionQuest, setCompletionQuest] = useState(null);
-
-const proofModal = quests.find(q => q.id === proofModalId) || null;
-const detailQuest = quests.find(q => q.id === detailQuestId) || null;
 
 const xpRef = useRef(xp);
 const levelRef = useRef(level);
@@ -5741,7 +5743,7 @@ installSupported={installSupported}
 />
 ) : (
 <div className="relative z-10 flex flex-col flex-1 sq-anim-in sq-home-screen" style={{ minHeight: 0, height: '100dvh', overflow: 'hidden' }}>
-<div ref={homeScaleRef} className="sq-home-scale-stage" style={{ width: `${100 / homeScale}%`, zoom: homeScale, transformOrigin: 'top center', flexShrink: 0 }}>
+<div ref={homeScaleRef} className="sq-home-scale-stage" style={{ width: '100%', maxWidth: '100%', transform: `scale(${homeScale})`, transformOrigin: 'top center', flexShrink: 0, boxSizing: 'border-box' }}>
 {/* Header */}
 <div className="px-4 pb-2" style={{ paddingTop: 'max(env(safe-area-inset-top), 16px)' }}>
 <div className="flex items-center justify-between">
@@ -5801,8 +5803,6 @@ Today
 </p>
 <div className="sq-home-quest-grid">
 {visibleQuests.map((quest, i) => {
-const rowTheme = QUEST_THEME[quest.id] || { cat: 'blue' };
-const rowAccent = c[rowTheme.cat] || c.blue;
 return (
 <button key={quest.id}
 onClick={() => { if (!quest.completed) handleQuestClick(quest); }}
@@ -5810,9 +5810,9 @@ className="sq-anim-in sq-control sq-home-quest-card"
 style={{
 ...glassStyle(c),
 width: '100%', display: 'flex', alignItems: 'center', gap: 12,
-padding: '14px 14px', textAlign: 'left', borderRadius: 20,
-border: `1px solid ${quest.completed ? c.glassBorder : `${rowAccent}38`}`,
-boxShadow: quest.completed ? undefined : `0 12px 28px -28px ${rowAccent}`,
+padding: '14px 14px', textAlign: 'left', borderRadius: 16,
+border: `1px solid ${c.glassBorder}`,
+boxShadow: undefined,
 opacity: quest.completed ? 0.7 : 1,
 animationDelay: `${Math.min(i, 8) * 0.035}s`,
 }}>
