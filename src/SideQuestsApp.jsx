@@ -1302,11 +1302,11 @@ useEffect(() => {
   body.style.color = c?.label || '#000';
   root.style.overflowX = 'hidden';
   root.style.overflowY = 'auto';
-  root.style.minHeight = '100%';
+  root.style.minHeight = 'calc(100dvh + env(safe-area-inset-bottom))';
   body.style.overflowX = 'hidden';
   body.style.overflowY = 'auto';
-  body.style.minHeight = '100%';
-  if (appRoot) { appRoot.style.backgroundColor = bg; appRoot.style.height = 'auto'; appRoot.style.minHeight = '100%'; appRoot.style.overflow = 'visible'; }
+  body.style.minHeight = 'calc(100dvh + env(safe-area-inset-bottom))';
+  if (appRoot) { appRoot.style.backgroundColor = bg; appRoot.style.height = '100%'; appRoot.style.minHeight = 'calc(100dvh + env(safe-area-inset-bottom))'; appRoot.style.overflow = 'visible'; }
 
   let themeMeta = document.querySelector('meta[name="theme-color"]');
   if (!themeMeta) {
@@ -1337,7 +1337,22 @@ scrolling (pan-y); it only blocks the pinch/double-tap zoom gestures —
 the viewport meta tag in index.html should also set
 maximum-scale=1, user-scalable=no as the primary safeguard, since
 some browsers only respect that and ignore touch-action for zoom. */
-html, body, #root { width: 100%; min-height: 100%; margin: 0; overflow-x: hidden !important; overflow-y: auto !important; }
+html, body, #root {
+ width: 100%;
+ height: 100%;
+ min-height: 100%;
+ margin: 0;
+ overflow-x: hidden !important;
+ overflow-y: auto !important;
+ background: #000;
+}
+html, body, #root {
+ min-height: 100vh;
+ min-height: 100dvh;
+}
+@supports (height: 100svh) {
+ html, body, #root { min-height: 100svh; }
+}
 html, body { overscroll-behavior-x: none; overscroll-behavior-y: auto; }
 .sq-fit-screen { min-height: 0 !important; height: auto !important; max-height: none !important; overflow: visible !important; }
 .sq-scroll { overflow-y: auto !important; overflow-x: hidden !important; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; }
@@ -1993,7 +2008,7 @@ setSubmitting(false);
 const inputStyle = { width: '100%', borderRadius: 14, border: `1px solid ${c.separator}`, background: c.bgSecondary, color: c.label, padding: '11px 40px 11px 40px', fontSize: 15, fontWeight: 500, outline: 'none' };
 
 return (
-<div className="fixed inset-0 z-[100] flex items-center justify-center p-5 sq-anim-in" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
+<div className="fixed z-[100] flex items-center justify-center p-5 sq-anim-in" style={{ top: 0, right: 0, bottom: 'calc(-1 * env(safe-area-inset-bottom))', left: 0, minHeight: 'calc(100dvh + env(safe-area-inset-bottom))', boxSizing: 'border-box', background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)' }}>
 <div style={{ ...glassStyle(c, true), borderRadius: 26, width: '100%', maxWidth: 360, padding: '28px 24px 22px', textAlign: 'center' }}>
 <div style={{ width: 52, height: 52, borderRadius: 26, background: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
 <BrandLogo size={28} />
@@ -5638,7 +5653,7 @@ const allDone = allResolved;
 const dailyPct = quests.length ? (completedCount / quests.length) * 100 : 0;
 
 return (
-<div className={`sq-root${LOW_END_DEVICE ? ' sq-low-end' : ''}`} style={{ background: c.bg, minHeight: '100dvh', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', transition: 'background-color 0.3s ease' }}>
+<div className={`sq-root${LOW_END_DEVICE ? ' sq-low-end' : ''}`} style={{ background: c.bg, minHeight: 'calc(100dvh + env(safe-area-inset-bottom))', height: '100%', width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', overflowX: 'clip', boxSizing: 'border-box', paddingBottom: 'env(safe-area-inset-bottom)', transition: 'background-color 0.3s ease' }}>
 <SystemType c={c} />
 <div className="relative w-full flex flex-col" style={{ background: c.bg, zIndex: 2, minHeight: '100dvh' }}>
 <AmbientBackground c={c} disabled={Boolean(proofModal)} />
