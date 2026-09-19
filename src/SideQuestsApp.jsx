@@ -1356,11 +1356,11 @@ html, body, #root {
 html, body { overscroll-behavior: none; }
 .sq-fit-screen { min-height: 0 !important; height: auto !important; max-height: none !important; overflow: visible !important; }
 .sq-scroll {
- overflow: hidden !important;
- overflow-y: hidden !important;
+ overflow-y: auto !important;
  overflow-x: hidden !important;
- -webkit-overflow-scrolling: auto !important;
- overscroll-behavior: none !important;
+ -webkit-overflow-scrolling: touch !important;
+ overscroll-behavior-y: contain !important;
+ min-height: 0 !important;
 }
 .sq-settings-pager { scrollbar-width: none; }
 .sq-settings-pager::-webkit-scrollbar { display: none; }
@@ -1519,11 +1519,11 @@ transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease
 }
 svg { transition: stroke 0.2s ease, fill 0.2s ease; }
 .sq-scroll {
- -webkit-overflow-scrolling: auto !important;
- overscroll-behavior: none !important;
- overflow: hidden !important;
- overflow-y: hidden !important;
+ -webkit-overflow-scrolling: touch !important;
+ overscroll-behavior-y: contain !important;
+ overflow-y: auto !important;
  overflow-x: hidden !important;
+ min-height: 0 !important;
 }
 .sq-root button, .sq-root a { contain: layout style; }
 .sq-root { overflow-x: clip; }
