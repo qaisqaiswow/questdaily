@@ -2445,9 +2445,6 @@ devMode = false, onDevCompleteAll, onDevResetDay, onDevAddXp, c,
 const [editing, setEditing] = useState(null);
 const [showUpdates, setShowUpdates] = useState(false);
 const [showChallengeLibrary, setShowChallengeLibrary] = useState(false);
-const [settingsPage, setSettingsPage] = useState(1);
-const [settingsSwipeDirection, setSettingsSwipeDirection] = useState('next');
-const settingsTouchRef = useRef({ x: 0, y: 0 });
 const [challengeLibraryPage, setChallengeLibraryPage] = useState(0);
 const [settingsUpdatesPage, setSettingsUpdatesPage] = useState(0);
 const SETTINGS_CHALLENGES_PER_PAGE = 8;
@@ -2459,32 +2456,6 @@ const visibleChallenges = QUEST_POOL.slice(challengeLibraryPage * SETTINGS_CHALL
 const visibleSettingsUpdates = flatUpdateItems.slice(settingsUpdatesPage * SETTINGS_UPDATES_PER_PAGE, settingsUpdatesPage * SETTINGS_UPDATES_PER_PAGE + SETTINGS_UPDATES_PER_PAGE);
 useEffect(() => { setChallengeLibraryPage(p => Math.min(p, challengePageCount - 1)); }, [challengePageCount]);
 useEffect(() => { setSettingsUpdatesPage(p => Math.min(p, settingsUpdatePageCount - 1)); }, [settingsUpdatePageCount]);
-
-const switchSettingsPage = useCallback((nextPage, direction = 'next') => {
-  const clamped = Math.max(1, Math.min(4, nextPage));
-  if (clamped === settingsPage) return;
-  haptic(4);
-  setSettingsSwipeDirection(direction);
-  setSettingsPage(clamped);
-}, [settingsPage]);
-
-const handleSettingsTouchStart = useCallback((event) => {
-  const touch = event.touches?.[0];
-  if (!touch) return;
-  settingsTouchRef.current = { x: touch.clientX, y: touch.clientY };
-}, []);
-
-const handleSettingsTouchEnd = useCallback((event) => {
-  const touch = event.changedTouches?.[0];
-  if (!touch) return;
-  const { x, y } = settingsTouchRef.current;
-  const dx = touch.clientX - x;
-  const dy = touch.clientY - y;
-  const horizontal = Math.abs(dx) >= 45 && Math.abs(dx) > Math.abs(dy) * 1.2;
-  if (!horizontal) return;
-  if (dx < 0 && settingsPage < 4) switchSettingsPage(settingsPage + 1, 'next');
-  if (dx > 0 && settingsPage > 1) switchSettingsPage(settingsPage - 1, 'prev');
-}, [settingsPage, switchSettingsPage]);
 
 const [usernameInput, setUsernameInput] = useState(username || '');
 const [usernameReauthPassword, setUsernameReauthPassword] = useState('');
@@ -5083,11 +5054,6 @@ function NewUpdateScreen({ c, onDone }) {
 const release = UPDATE_LOG[0];
 const items = release?.items || [];
 const releaseDate = release?.date || 'SEP 18, 2026';
-const PAGE_SIZE = 5;
-const [page, setPage] = useState(0);
-const pageCount = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
-const pageItems = items.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
-const handleNext = () => { haptic(6); setPage(p => Math.min(pageCount - 1, p + 1)); };
 const handleDone = () => { haptic([8, 18, 8]); onDone(); };
 return (
 <div className="fixed inset-0 z-[110] flex flex-col sq-new-update-overlay sq-anim-in sq-fit-screen" style={{ background: c.bg }}>
@@ -5099,9 +5065,9 @@ return (
 .sq-new-update-spark { position:absolute; left:50%; top:50%; width:6px; height:6px; border-radius:50%; background:#fff; opacity:0; animation:sq-new-update-spark 1.8s cubic-bezier(.22,1,.36,1) infinite; animation-delay:var(--d); }
 .sq-new-update-card { will-change:transform,opacity; }
 `}</style>
-<div className="flex-1 px-4" style={{ minHeight: 0, paddingTop: 'max(env(safe-area-inset-top), 18px)', paddingBottom: 8, display: 'flex', flexDirection: 'column' }}>
-  <div style={{ width: '100%', maxWidth: 620, margin: '0 auto', minHeight: 0, display: 'flex', flexDirection: 'column', flex: 1 }}>
-    <div className="text-center" style={{ paddingTop: 0, marginBottom: 10 }}>
+<div className="flex-1 sq-scroll px-4" style={{ minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', paddingTop: 'max(env(safe-area-inset-top), 18px)', paddingBottom: 24 }}>
+  <div style={{ width: '100%', maxWidth: 620, margin: '0 auto' }}>
+    <div className="text-center" style={{ paddingTop: 0, marginBottom: 14 }}>
       <div className="sq-new-update-orbit" style={{ width: 72, height: 72, borderRadius: 24, margin: '0 auto 9px', background: c.blue, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', boxShadow: `0 18px 48px -18px ${c.blue}` }}>
         <div className="sq-new-update-ring" aria-hidden="true" />
         <Sparkles size={30} strokeWidth={1.65} />
@@ -5112,42 +5078,40 @@ return (
       </div>
       <div className="sq-mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 999, background: c.fill, color: c.blue, fontSize: 9.5, fontWeight: 850, letterSpacing: .55, textTransform: 'uppercase' }}><Sparkles size={12} /> New update</div>
       <h1 className="sq-large-title" style={{ fontSize: 26, fontWeight: 850, color: c.label, marginTop: 8 }}>What’s new in QuestDaily</h1>
-      <p className="sq-mono" style={{ marginTop: 4, fontSize: 11, fontWeight: 750, color: c.labelSecondary, letterSpacing: .4 }}>{releaseDate} · {page + 1}/{pageCount}</p>
-      <p style={{ margin: '5px auto 0', maxWidth: 430, fontSize: 12.5, lineHeight: 1.38, color: c.labelSecondary }}>Everything in this release, shown a few changes at a time so it fits every screen.</p>
+      <p className="sq-mono" style={{ marginTop: 4, fontSize: 11, fontWeight: 750, color: c.labelSecondary, letterSpacing: .4 }}>{releaseDate}</p>
+      <p style={{ margin: '5px auto 0', maxWidth: 430, fontSize: 12.5, lineHeight: 1.38, color: c.labelSecondary }}>Everything in this release is here in one page. Just scroll through the changes.</p>
     </div>
 
-    <div className="flex flex-col gap-1.5" style={{ minHeight: 0, flex: 1 }}>
-      {pageItems.map(({ Icon, title, body }, localIndex) => {
-        const i = page * PAGE_SIZE + localIndex;
-        return (
-          <div key={`${title}-${i}`} className="sq-new-update-card sq-anim-in" style={{ ...glassStyle(c), flex: 1, minHeight: 0, borderRadius: 16, padding: '10px 11px', display: 'flex', gap: 10, alignItems: 'center', animationDelay: `${localIndex * 40}ms` }}>
-            <div className="sq-icon-fff" style={{ width: 34, height: 34, borderRadius: 11, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon size={15} strokeWidth={2} /></div>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <p style={{ fontSize: 12.4, fontWeight: 750, color: c.label, lineHeight: 1.25 }}>{title}</p>
-              <p style={{ fontSize: 10.7, color: c.labelSecondary, marginTop: 3, lineHeight: 1.35 }}>{body}</p>
+    <div className="flex flex-col gap-2.5" style={{ paddingBottom: 8 }}>
+      {items.map(({ Icon, title, body }, i) => (
+        <div key={`${title}-${i}`} className="sq-new-update-card sq-anim-in" style={{ ...glassStyle(c), borderRadius: 18, padding: '13px 14px', display: 'flex', gap: 11, alignItems: 'flex-start', animationDelay: `${Math.min(i, 8) * 35}ms` }}>
+          <div className="sq-icon-fff" style={{ width: 36, height: 36, borderRadius: 12, background: c.fillStrong || c.fill, color: c.blue, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon size={16} strokeWidth={2} /></div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <p style={{ fontSize: 13, fontWeight: 750, color: c.label, lineHeight: 1.28 }}>{title}</p>
+              <span className="sq-mono" style={{ flexShrink: 0, fontSize: 8, fontWeight: 800, color: c.blue, background: `${c.blue}12`, borderRadius: 999, padding: '3px 5px' }}>{String(i + 1).padStart(2, '0')}</span>
             </div>
-            <span className="sq-mono" style={{ flexShrink: 0, fontSize: 8.5, fontWeight: 800, color: c.blue, background: `${c.blue}12`, borderRadius: 999, padding: '3px 5px' }}>{String(i + 1).padStart(2, '0')}</span>
+            <p style={{ fontSize: 11.2, color: c.labelSecondary, marginTop: 3, lineHeight: 1.42 }}>{body}</p>
           </div>
-        );
-      })}
+        </div>
+      ))}
     </div>
 
-    <div className="sq-new-update-footer-card" style={{ ...glassStyle(c), borderRadius: 16, padding: '9px 11px', marginTop: 6 }}>
-      <div className="flex items-center gap-2"><Check size={14} color={c.green} strokeWidth={2.2} /><span style={{ fontSize: 11.5, fontWeight: 700, color: c.label }}>{page === pageCount - 1 ? 'You’re up to date' : 'More changes below'}</span></div>
+    <div className="sq-new-update-footer-card" style={{ ...glassStyle(c), borderRadius: 18, padding: '12px 13px', marginTop: 4, marginBottom: 10 }}>
+      <div className="flex items-center gap-2"><Check size={15} color={c.green} strokeWidth={2.2} /><span style={{ fontSize: 12, fontWeight: 700, color: c.label }}>You’re all caught up</span></div>
+      <p style={{ fontSize: 10.5, color: c.labelSecondary, marginTop: 3, lineHeight: 1.35 }}>That’s everything included in this release.</p>
     </div>
   </div>
 </div>
 
 <div style={{ padding: '8px 16px max(env(safe-area-inset-bottom), 12px)', background: `linear-gradient(to top, ${c.bg} 72%, transparent)`, flexShrink: 0 }}>
-  <div style={{ width: '100%', maxWidth: 620, margin: '0 auto', display: 'flex', gap: 8 }}>
-    {page > 0 && <button type="button" onClick={() => { haptic(4); setPage(p => Math.max(0, p - 1)); }} style={{ flex: 1, minHeight: 48, borderRadius: 999, border: 0, background: c.fill, color: c.label, fontSize: 14, fontWeight: 800 }}>Back</button>}
-    <button type="button" onClick={page === pageCount - 1 ? handleDone : handleNext} style={{ flex: page > 0 ? 1.5 : 1, minHeight: 48, borderRadius: 999, border: 0, background: c.blue, color: '#fff', fontSize: 14, fontWeight: 800, boxShadow: `0 12px 30px -18px ${c.blue}` }}>{page === pageCount - 1 ? 'Continue to QuestDaily' : 'Next changes'}</button>
+  <div style={{ width: '100%', maxWidth: 620, margin: '0 auto' }}>
+    <button type="button" onClick={handleDone} style={{ width: '100%', minHeight: 50, borderRadius: 999, border: 0, background: c.blue, color: '#fff', fontSize: 14, fontWeight: 800, boxShadow: `0 12px 30px -18px ${c.blue}` }}>Continue to QuestDaily</button>
   </div>
 </div>
 </div>
 );
 }
-
 
 
 // main app
