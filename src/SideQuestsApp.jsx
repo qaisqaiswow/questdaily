@@ -1018,8 +1018,6 @@ const ANTI_SPOOF_LABELS = [
 'a printed photograph being held up to the camera',
 'a picture of a picture',
 ];
-const SPOOF_BLOCK_THRESHOLD = 0.30;
-const PASS_MARGIN = 0.12; // how much the activity score must clear the negative/spoof score by
 
 const getNegativeLabels = (type) => {
 const base = ['person sitting doing nothing', 'person standing still straight', 'random everyday object', ...ANTI_SPOOF_LABELS];
@@ -1177,8 +1175,6 @@ const normalizeTimedQuest = (quest) => {
 };
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const REQUIRED_PASSES = 4;
-const PASS_THRESHOLD = 0.42;
 // SigLIP scores are not calibrated percentages. A real match can be well below
 // the strict verification threshold, especially for static actions like meditation.
 // Timed quests use a lighter start gate, but still require the correct activity label
